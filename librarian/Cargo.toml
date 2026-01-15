@@ -13,6 +13,7 @@ categories = ["command-line-utilities", "text-processing"]
 default = ["local-embed"]
 local-embed = ["fastembed"]
 pdf = ["pdf-extract"]
+js-rendering = ["chromiumoxide"]
 
 [dependencies]
 # CLI
@@ -84,6 +85,9 @@ dirs = "5.0"
 
 # PDF (optional)
 pdf-extract = { version = "0.7", optional = true }
+
+# Headless browser for JS rendering (optional)
+chromiumoxide = { version = "0.7", optional = true, default-features = false, features = ["tokio-runtime"] }
 
 # Async utilities
 futures = "0.3"

@@ -117,6 +117,22 @@ pub struct CrawlConfig {
     /// Whether to respect robots.txt
     #[serde(default = "default_respect_robots")]
     pub respect_robots_txt: bool,
+
+    /// Auto-detect SPAs and use JavaScript rendering when needed
+    #[serde(default = "default_auto_js_rendering")]
+    pub auto_js_rendering: bool,
+
+    /// Time to wait for page load when JS rendering (milliseconds)
+    #[serde(default = "default_js_page_load_timeout")]
+    pub js_page_load_timeout_ms: u64,
+
+    /// Time to wait after load for dynamic content (milliseconds)
+    #[serde(default = "default_js_render_wait")]
+    pub js_render_wait_ms: u64,
+
+    /// Disable browser sandbox (required in some Docker/CI environments)
+    #[serde(default)]
+    pub js_no_sandbox: bool,
 }
 
 /// Query configuration
@@ -219,6 +235,10 @@ impl Default for CrawlConfig {
             user_agent: default_crawl_user_agent(),
             timeout_secs: default_crawl_timeout(),
             respect_robots_txt: default_respect_robots(),
+            auto_js_rendering: default_auto_js_rendering(),
+            js_page_load_timeout_ms: default_js_page_load_timeout(),
+            js_render_wait_ms: default_js_render_wait(),
+            js_no_sandbox: false,
         }
     }
 }

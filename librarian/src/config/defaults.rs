@@ -114,3 +114,18 @@ pub fn default_reranker_enabled() -> bool {
 pub fn default_reranker_top_k() -> usize {
     10
 }
+
+/// Default: enable automatic JS rendering for SPAs
+pub fn default_auto_js_rendering() -> bool {
+    true
+}
+
+/// Default page load timeout for JS rendering (30 seconds)
+pub fn default_js_page_load_timeout() -> u64 {
+    30000
+}
+
+/// Default wait time after page load for dynamic content (2 seconds)
+pub fn default_js_render_wait() -> u64 {
+    2000
+}

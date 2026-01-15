@@ -6,14 +6,19 @@
 //! - Per-host rate limiting
 //! - Crawl depth and page limits
 //! - Sitemap XML parsing
+//! - SPA detection and JavaScript rendering
 
 mod robots;
 mod rate_limit;
 mod sitemap;
+mod detection;
+mod renderer;
 
 pub use robots::*;
 pub use rate_limit::*;
 pub use sitemap::*;
+pub use detection::*;
+pub use renderer::*;
 
 use crate::config::CrawlConfig;
 use crate::error::{Error, Result};
@@ -44,6 +49,7 @@ pub struct Crawler {
     robots_cache: Arc<RwLock<HashMap<String, RobotsRules>>>,
     rate_limiters: Arc<RwLock<HashMap<String, HostRateLimiter>>>,
     visited: Arc<RwLock<HashSet<String>>>,
+    renderer: Option<Arc<tokio::sync::Mutex<HeadlessRenderer>>>,
 }
 
 impl Crawler {
@@ -58,16 +64,31 @@ impl Crawler {
             .build()
             .map_err(|e| Error::Crawl(format!("Failed to create HTTP client: {}", e)))?;
 
+        // Initialize renderer if auto JS rendering is enabled and feature is available
+        let renderer = if config.auto_js_rendering && is_js_rendering_available() {
+            let renderer_config = RendererConfig {
+                page_load_timeout_ms: config.js_page_load_timeout_ms,
+                render_wait_ms: config.js_render_wait_ms,
+                headless: true,
+                wait_for_selector: None,
+                sandbox: !config.js_no_sandbox,
+            };
+            Some(Arc::new(tokio::sync::Mutex::new(HeadlessRenderer::new(renderer_config))))
+        } else {
+            None
+        };
+
         Ok(Self {
             client,
             config,
             robots_cache: Arc::new(RwLock::new(HashMap::new())),
             rate_limiters: Arc::new(RwLock::new(HashMap::new())),
             visited: Arc::new(RwLock::new(HashSet::new())),
+            renderer,
         })
     }
 
-    /// Fetch a single URL
+    /// Fetch a single URL with automatic SPA detection and JS rendering fallback
     pub async fn fetch(&self, url: &str) -> Result<CrawledPage> {
         let parsed_url = Url::parse(url)?;
         let host = parsed_url.host_str()
@@ -90,6 +111,7 @@ impl Crawler {
 
         debug!("Fetching: {}", url);
 
+        // Initial fetch with plain HTTP
         let response = self.client.get(url).send().await?;
         
         let status = response.status();
@@ -110,7 +132,67 @@ impl Crawler {
             content_type_header.as_deref(),
         );
 
-        // Parse if HTML
+        // For HTML pages, check if SPA rendering is needed
+        if ct == ContentType::Html && self.config.auto_js_rendering {
+            let analysis = analyze_page(&content, url);
+            
+            if analysis.needs_js_rendering {
+                info!(
+                    "SPA detected ({}, confidence: {:.0}%): {}",
+                    match &analysis.technology {
+                        PageTechnology::Spa(fw) => fw.to_string(),
+                        _ => "Dynamic".to_string(),
+                    },
+                    analysis.confidence * 100.0,
+                    url
+                );
+                
+                for indicator in &analysis.indicators {
+                    debug!("  - {}", indicator);
+                }
+
+                // Try JS rendering if available
+                if let Some(renderer) = &self.renderer {
+                    info!("Rendering with headless browser...");
+                    let renderer_guard = renderer.lock().await;
+                    match renderer_guard.render(url).await {
+                        Ok(rendered) => {
+                            info!(
+                                "Rendered in {}ms: {} ({} bytes)",
+                                rendered.render_time_ms,
+                                url,
+                                rendered.html.len()
+                            );
+                            
+                            // Parse the rendered HTML
+                            let parsed = parse_html(&rendered.html, Some(&rendered.url))?;
+                            
+                            return Ok(CrawledPage {
+                                url: rendered.url,
+                                content: rendered.html,
+                                content_type: ContentType::Html,
+                                title: rendered.title.or(parsed.title),
+                                links: parsed.links,
+                                depth: 0,
+                            });
+                        }
+                        Err(e) => {
+                            warn!("JS rendering failed, using static content: {}", e);
+                            // Fall through to use static content
+                        }
+                    }
+                } else {
+                    warn!(
+                        "SPA detected but JS rendering not available. \
+                         Compile with --features js-rendering or disable auto_js_rendering. \
+                         URL: {}",
+                        url
+                    );
+                }
+            }
+        }
+
+        // Parse HTML (either static content or non-SPA)
         let (title, links) = if ct == ContentType::Html {
             let parsed = parse_html(&content, Some(url))?;
             (parsed.title, parsed.links)
@@ -126,6 +208,15 @@ impl Crawler {
             links,
             depth: 0,
         })
+    }
+
+    /// Close the renderer (call this when done crawling)
+    pub async fn close(&self) -> Result<()> {
+        if let Some(renderer) = &self.renderer {
+            let renderer_guard = renderer.lock().await;
+            renderer_guard.close().await?;
+        }
+        Ok(())
     }
 
     /// Crawl from a seed URL
