@@ -1,0 +1,102 @@
+[package]
+name = "ragctl"
+version = "0.1.0"
+edition = "2021"
+authors = ["RAGctl Contributors"]
+description = "A CLI tool for local RAG (Retrieval-Augmented Generation) with MCP server support"
+license = "MIT"
+repository = "https://github.com/sealad886/librarian"
+keywords = ["rag", "retrieval", "mcp", "qdrant", "embedding"]
+categories = ["command-line-utilities", "text-processing"]
+
+[features]
+default = ["local-embed"]
+local-embed = ["fastembed"]
+pdf = ["pdf-extract"]
+
+[dependencies]
+# CLI
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Async runtime
+tokio = { version = "1.43", features = ["full"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "gzip", "brotli"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "2.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
+
+# Vector database
+qdrant-client = "1.12"
+
+# Embeddings
+fastembed = { version = "4", optional = true }
+
+# HTML/Markdown parsing
+scraper = "0.22"
+pulldown-cmark = "0.12"
+html2text = "0.13"
+
+# Hashing
+blake3 = "1.5"
+
+# UUIDs
+uuid = { version = "1.11", features = ["v4", "v5", "serde"] }
+
+# URL handling
+url = "2.5"
+
+# Robots.txt
+robotstxt = "0.3"
+
+# Rate limiting
+governor = "0.8"
+nonzero_ext = "0.3"
+
+# File system
+walkdir = "2.5"
+ignore = "0.4"
+
+# Text processing
+unicode-segmentation = "1.12"
+regex = "1.11"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Directories
+dirs = "5.0"
+
+# PDF (optional)
+pdf-extract = { version = "0.7", optional = true }
+
+# Async utilities
+futures = "0.3"
+async-trait = "0.1"
+
+# MIME type detection
+mime_guess = "2.0"
+
+[dev-dependencies]
+tempfile = "3.14"
+tokio-test = "0.4"
+wiremock = "0.6"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
