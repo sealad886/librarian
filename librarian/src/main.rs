@@ -446,46 +446,46 @@ fn print_completion_extras(shell: Shell) {
     match shell {
         Shell::Bash => {
             println!();
-            println!("{}", r#"# Dynamic completion for 'librarian remove' source IDs"#);
-            println!("{}", r#"_librarian_dynamic() {"#);
-            println!("{}", r#"    local cur prev words cword"#);
-            println!("{}", r#"    if declare -F _init_completion >/dev/null; then"#);
-            println!("{}", r#"        _init_completion -n : || return"#);
-            println!("{}", r#"    else"#);
-            println!("{}", "        cur=\"${COMP_WORDS[COMP_CWORD]}\"");
-            println!("{}", r#"        words=("${COMP_WORDS[@]}")"#);
-            println!("{}", r#"        cword=$COMP_CWORD"#);
-            println!("{}", r#"    fi"#);
-            println!("{}", r#"    local remove_index=-1"#);
-            println!("{}", r#"    for i in "${!words[@]}"; do"#);
-            println!("{}", r#"        if [[ "${words[i]}" == "remove" ]]; then"#);
-            println!("{}", r#"            remove_index=$i"#);
-            println!("{}", r#"            break"#);
-            println!("{}", r#"        fi"#);
-            println!("{}", r#"    done"#);
-            println!("{}", r#"    if [[ $remove_index -ge 0 && $cword -eq $((remove_index + 1)) ]]; then"#);
+            println!("{raw}", raw = r#"# Dynamic completion for 'librarian remove' source IDs"#);
+            println!("{raw}", raw = r#"_librarian_dynamic() {"#);
+            println!("{raw}", raw = r#"    local cur prev words cword"#);
+            println!("{raw}", raw = r#"    if declare -F _init_completion >/dev/null; then"#);
+            println!("{raw}", raw = r#"        _init_completion -n : || return"#);
+            println!("{raw}", raw = r#"    else"#);
+            println!("{raw}", raw = r#"        cur="${COMP_WORDS[COMP_CWORD]}""#);
+            println!("{raw}", raw = r#"        words=("${COMP_WORDS[@]}")"#);
+            println!("{raw}", raw = r#"        cword=$COMP_CWORD"#);
+            println!("{raw}", raw = r#"    fi"#);
+            println!("{raw}", raw = r#"    local remove_index=-1"#);
+            println!("{raw}", raw = r#"    for i in "${!words[@]}"; do"#);
+            println!("{raw}", raw = r#"        if [[ "${words[i]}" == "remove" ]]; then"#);
+            println!("{raw}", raw = r#"            remove_index=$i"#);
+            println!("{raw}", raw = r#"            break"#);
+            println!("{raw}", raw = r#"        fi"#);
+            println!("{raw}", raw = r#"    done"#);
+            println!("{raw}", raw = r#"    if [[ $remove_index -ge 0 && $cword -eq $((remove_index + 1)) ]]; then"#);
             println!(
-                "{}",
-                r#"        COMPREPLY=( $(compgen -W "$(librarian sources --completion bash 2>/dev/null)" -- "$cur") )"#
+                "{raw}",
+                raw = r#"        COMPREPLY=( $(compgen -W "$(librarian sources --completion bash 2>/dev/null)" -- "$cur") )"#
             );
-            println!("{}", r#"        return 0"#);
-            println!("{}", r#"    fi"#);
-            println!("    _librarian \"$@\"");
-            println!("{}", r#"}"#);
+            println!("{raw}", raw = r#"        return 0"#);
+            println!("{raw}", raw = r#"    fi"#);
+            println!("{raw}", raw = r#"    _librarian "$@""#);
+            println!("{raw}", raw = r#"}"#);
             println!(
-                "{}",
-                r#"if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then"#
+                "{raw}",
+                raw = r#"if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then"#
             );
             println!(
-                "{}",
-                r#"    complete -F _librarian_dynamic -o nosort -o bashdefault -o default librarian"#
+                "{raw}",
+                raw = r#"    complete -F _librarian_dynamic -o nosort -o bashdefault -o default librarian"#
             );
-            println!("{}", r#"else"#);
+            println!("{raw}", raw = r#"else"#);
             println!(
-                "{}",
-                r#"    complete -F _librarian_dynamic -o bashdefault -o default librarian"#
+                "{raw}",
+                raw = r#"    complete -F _librarian_dynamic -o bashdefault -o default librarian"#
             );
-            println!("{}", r#"fi"#);
+            println!("{raw}", raw = r#"fi"#);
         }
         Shell::Zsh => {
             println!();
