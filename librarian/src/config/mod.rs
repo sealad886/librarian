@@ -146,7 +146,7 @@ pub struct QueryConfig {
 /// Reranker configuration (cross-encoder model for result reranking)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RerankerConfig {
-    /// Enable reranking
+    /// Enable reranking (all retrieved results are reranked)
     #[serde(default = "default_reranker_enabled")]
     pub enabled: bool,
 
@@ -154,7 +154,7 @@ pub struct RerankerConfig {
     #[serde(default = "default_reranker_model")]
     pub model: String,
 
-    /// Number of top results to rerank from initial retrieval
+    /// Number of results to return after reranking
     #[serde(default = "default_reranker_top_k")]
     pub top_k: usize,
 }

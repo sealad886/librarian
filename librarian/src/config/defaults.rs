@@ -110,7 +110,7 @@ pub fn default_reranker_enabled() -> bool {
     false
 }
 
-/// Default top-k to rerank (rerank top N results from initial retrieval)
+/// Default number of results to return after reranking
 pub fn default_reranker_top_k() -> usize {
-    20
+    10
 }
