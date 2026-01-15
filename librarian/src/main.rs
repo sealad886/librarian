@@ -5,15 +5,17 @@ use clap_complete::{generate, Shell};
 use librarian::{
     commands::{
         cmd_ingest_dir, cmd_ingest_sitemap, cmd_ingest_url, cmd_init, cmd_list_sources, cmd_prune,
-        cmd_query, cmd_reindex, cmd_remove_source, cmd_status, print_prune_stats,
-        print_query_results, print_reindex_stats, print_sources, print_status, PruneOptions,
-        QueryOptions, ReindexOptions,
+        cmd_query, cmd_reindex, cmd_remove_source, cmd_rename_source, cmd_status, cmd_update,
+        print_prune_stats, print_query_results, print_reindex_stats, print_source_completions,
+        print_sources, print_status, print_update_stats, PruneOptions, QueryOptions,
+        ReindexOptions, UpdateOptions,
     },
     config::Config,
     embed::FastEmbedder,
     error::Result,
     mcp::McpServer,
     meta::MetaDb,
+    progress::LogWriterFactory,
     store::QdrantStore,
 };
 use std::path::PathBuf;
@@ -85,6 +87,10 @@ enum Commands {
         /// Output only source IDs (one per line, for scripting)
         #[arg(long)]
         ids_only: bool,
+
+        /// Output source IDs with descriptions for shell completions
+        #[arg(long, value_enum, hide = true)]
+        completion: Option<Shell>,
     },
 
     /// Remove stale documents and orphan points
@@ -113,12 +119,31 @@ enum Commands {
         batch_size: usize,
     },
 
+    /// Incrementally update sources and prune embeddings
+    Update {
+        /// Only update specific source IDs
+        #[arg(long)]
+        source: Option<Vec<String>>,
+
+        /// Skip pruning orphan vectors after updating
+        #[arg(long)]
+        skip_prune: bool,
+    },
+
     /// Remove a source and all its data
-    /// 
+    ///
     /// Use 'librarian sources --ids-only' to list available source IDs
     Remove {
         /// Source ID to remove (use 'librarian sources' to list)
         source_id: String,
+    },
+
+    /// Rename an existing source
+    Rename {
+        /// Source ID to rename
+        source_id: String,
+        /// New name to set
+        name: String,
     },
 
     /// Start MCP server on stdio
@@ -232,7 +257,7 @@ async fn run() -> Result<()> {
     };
 
     tracing_subscriber::registry()
-        .with(fmt::layer().with_writer(std::io::stderr))
+        .with(fmt::layer().with_writer(LogWriterFactory::default()))
         .with(filter)
         .init();
 
@@ -245,42 +270,7 @@ async fn run() -> Result<()> {
     if let Commands::Completions { shell } = cli.command {
         let mut cmd = Cli::command();
         generate(shell, &mut cmd, "librarian", &mut std::io::stdout());
-        // Print instructions for dynamic source_id completions
-        eprintln!();
-        eprintln!("Note: For dynamic source ID completion, add this to your shell config:");
-        match shell {
-            Shell::Bash => {
-                eprintln!();
-                eprintln!(r#"# Dynamic completion for 'librarian remove' source IDs"#);
-                eprintln!(r#"_librarian_source_ids() {{"#);
-                eprintln!(r#"    local cur="${{COMP_WORDS[COMP_CWORD]}}""#);
-                eprintln!(r#"    if [[ ${{COMP_WORDS[1]}} == "remove" && $COMP_CWORD -eq 2 ]]; then"#);
-                eprintln!(r#"        COMPREPLY=( $(compgen -W "$(librarian sources --ids-only 2>/dev/null)" -- "$cur") )"#);
-                eprintln!(r#"    fi"#);
-                eprintln!(r#"}}"#);
-                eprintln!(r#"complete -F _librarian_source_ids -o default librarian"#);
-            }
-            Shell::Zsh => {
-                eprintln!();
-                eprintln!(r#"# Dynamic completion for 'librarian remove' source IDs"#);
-                eprintln!(r#"_librarian_source_ids() {{"#);
-                eprintln!(r#"    local -a sources"#);
-                eprintln!(r#"    sources=(${{(f)"$(librarian sources --ids-only 2>/dev/null)"}})"#);
-                eprintln!(r#"    compadd -a sources"#);
-                eprintln!(r#"}}"#);
-                eprintln!(r#"compdef '_librarian_source_ids' librarian remove"#);
-            }
-            Shell::Fish => {
-                eprintln!();
-                eprintln!(r#"# Dynamic completion for 'librarian remove' source IDs"#);
-                eprintln!(r#"complete -c librarian -n '__fish_seen_subcommand_from remove' -xa '(librarian sources --ids-only 2>/dev/null)'"#);
-            }
-            _ => {
-                eprintln!();
-                eprintln!("Dynamic completions for this shell are not yet documented.");
-                eprintln!("Use 'librarian sources --ids-only' to list available source IDs.");
-            }
-        }
+        print_completion_extras(shell);
         return Ok(());
     }
 
@@ -289,7 +279,12 @@ async fn run() -> Result<()> {
 
     // Initialize components
     let db = MetaDb::new(&config.paths.db_file).await?;
-    let store = QdrantStore::new(&config.qdrant_url, &config.collection_name).await?;
+    let store = QdrantStore::new(
+        &config.qdrant_url,
+        &config.collection_name,
+        config.embedding.resolved_dimension(),
+    )
+    .await?;
 
     // Handle commands
     match cli.command {
@@ -333,10 +328,15 @@ async fn run() -> Result<()> {
             }
         }
 
-        Commands::Sources { ids_only } => {
+        Commands::Sources {
+            ids_only,
+            completion,
+        } => {
             let sources = cmd_list_sources(&db).await?;
 
-            if ids_only {
+            if let Some(shell) = completion {
+                print_source_completions(&sources, shell);
+            } else if ids_only {
                 // Output only IDs for scripting/completions
                 for source in &sources {
                     println!("{}", source.id);
@@ -385,6 +385,21 @@ async fn run() -> Result<()> {
             }
         }
 
+        Commands::Update { source, skip_prune } => {
+            let options = UpdateOptions {
+                source_ids: source,
+                prune_orphans: !skip_prune,
+            };
+
+            let stats = cmd_update(&config, &db, &store, options).await?;
+
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&stats)?);
+            } else {
+                print_update_stats(&stats);
+            }
+        }
+
         Commands::Remove { source_id } => {
             let stats = cmd_remove_source(&db, &store, &source_id).await?;
 
@@ -396,19 +411,105 @@ async fn run() -> Result<()> {
             }
         }
 
+        Commands::Rename { source_id, name } => {
+            let updated = cmd_rename_source(&db, &source_id, name).await?;
+            if cli.json {
+                println!("{}", serde_json::to_string_pretty(&updated)?);
+            } else {
+                println!(
+                    "✓ Renamed source '{}': {}",
+                    updated.id,
+                    updated.name.as_deref().unwrap_or(&updated.uri)
+                );
+            }
+        }
+
         Commands::Db { action } => {
             handle_db_action(&config, action, cli.json).await?;
         }
 
         Commands::Mcp => {
             let server = McpServer::new(config, db, store);
-            server.run().await.map_err(|e| librarian::error::Error::McpProtocol(e.to_string()))?;
+            server
+                .run()
+                .await
+                .map_err(|e| librarian::error::Error::McpProtocol(e.to_string()))?;
         }
 
         Commands::Completions { .. } => unreachable!(),
     }
 
     Ok(())
+}
+
+fn print_completion_extras(shell: Shell) {
+    match shell {
+        Shell::Bash => {
+            println!();
+            println!("{}", r#"# Dynamic completion for 'librarian remove' source IDs"#);
+            println!("{}", r#"_librarian_dynamic() {"#);
+            println!("{}", r#"    local cur prev words cword"#);
+            println!("{}", r#"    if declare -F _init_completion >/dev/null; then"#);
+            println!("{}", r#"        _init_completion -n : || return"#);
+            println!("{}", r#"    else"#);
+            println!("{}", "        cur=\"${COMP_WORDS[COMP_CWORD]}\"");
+            println!("{}", r#"        words=("${COMP_WORDS[@]}")"#);
+            println!("{}", r#"        cword=$COMP_CWORD"#);
+            println!("{}", r#"    fi"#);
+            println!("{}", r#"    local remove_index=-1"#);
+            println!("{}", r#"    for i in "${!words[@]}"; do"#);
+            println!("{}", r#"        if [[ "${words[i]}" == "remove" ]]; then"#);
+            println!("{}", r#"            remove_index=$i"#);
+            println!("{}", r#"            break"#);
+            println!("{}", r#"        fi"#);
+            println!("{}", r#"    done"#);
+            println!("{}", r#"    if [[ $remove_index -ge 0 && $cword -eq $((remove_index + 1)) ]]; then"#);
+            println!(
+                "{}",
+                r#"        COMPREPLY=( $(compgen -W "$(librarian sources --completion bash 2>/dev/null)" -- "$cur") )"#
+            );
+            println!("{}", r#"        return 0"#);
+            println!("{}", r#"    fi"#);
+            println!("    _librarian \"$@\"");
+            println!("{}", r#"}"#);
+            println!(
+                "{}",
+                r#"if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then"#
+            );
+            println!(
+                "{}",
+                r#"    complete -F _librarian_dynamic -o nosort -o bashdefault -o default librarian"#
+            );
+            println!("{}", r#"else"#);
+            println!(
+                "{}",
+                r#"    complete -F _librarian_dynamic -o bashdefault -o default librarian"#
+            );
+            println!("{}", r#"fi"#);
+        }
+        Shell::Zsh => {
+            println!();
+            println!("{}", r#"# Dynamic completion for 'librarian remove' source IDs"#);
+            println!("{}", r#"_librarian_source_ids() {"#);
+            println!("{}", r#"    local -a entries"#);
+            println!(
+                "{}",
+                r#"    entries=("${(@f)$(librarian sources --completion zsh 2>/dev/null)}")"#
+            );
+            println!("{}", r#"    _describe -t sources 'source ids' entries"#);
+            println!("{}", r#"}"#);
+            println!("{}", r#"compdef _librarian_source_ids 'librarian remove'"#);
+        }
+        Shell::Fish => {
+            println!();
+            println!("{}", r#"# Dynamic completion for 'librarian remove' source IDs"#);
+            println!(
+                "{}",
+                r#"complete -c librarian -n '__fish_seen_subcommand_from remove' -a '(librarian sources --completion fish 2>/dev/null)'"#
+            );
+        }
+        _ => {}
+    }
 }
 
 async fn handle_init(cli: Cli) -> Result<()> {
@@ -419,11 +520,14 @@ async fn handle_init(cli: Cli) -> Result<()> {
     // Get the base directory: if user specifies config file, use its parent dir
     // Otherwise use default base dir
     let (base_dir, config_path) = if let Some(path) = cli.config {
-        let base = path.parent().map(PathBuf::from).unwrap_or_else(Config::default_base_dir);
+        let base = path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(Config::default_base_dir);
         let config = if path.extension().map_or(false, |e| e == "toml") {
-            path  // User specified a .toml file
+            path // User specified a .toml file
         } else {
-            path.join("config.toml")  // User specified a directory
+            path.join("config.toml") // User specified a directory
         };
         (base, config)
     } else {
@@ -463,30 +567,28 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
                 println!("✓ Qdrant collection initialized");
             }
         }
-        DbAction::Status => {
-            match store.get_collection_info().await? {
-                Some(info) => {
-                    if json {
-                        println!(
-                            r#"{{"exists": true, "points_count": {}, "indexed_vectors_count": {}, "status": "{}"}}"#,
-                            info.points_count, info.indexed_vectors_count, info.status
-                        );
-                    } else {
-                        println!("Qdrant Collection Status:");
-                        println!("  Status: {}", info.status);
-                        println!("  Points: {}", info.points_count);
-                        println!("  Indexed Vectors: {}", info.indexed_vectors_count);
-                    }
-                }
-                None => {
-                    if json {
-                        println!(r#"{{"exists": false}}"#);
-                    } else {
-                        println!("Collection does not exist. Run 'librarian db init' to create it.");
-                    }
+        DbAction::Status => match store.get_collection_info().await? {
+            Some(info) => {
+                if json {
+                    println!(
+                        r#"{{"exists": true, "points_count": {}, "indexed_vectors_count": {}, "status": "{}"}}"#,
+                        info.points_count, info.indexed_vectors_count, info.status
+                    );
+                } else {
+                    println!("Qdrant Collection Status:");
+                    println!("  Status: {}", info.status);
+                    println!("  Points: {}", info.points_count);
+                    println!("  Indexed Vectors: {}", info.indexed_vectors_count);
                 }
             }
-        }
+            None => {
+                if json {
+                    println!(r#"{{"exists": false}}"#);
+                } else {
+                    println!("Collection does not exist. Run 'librarian db init' to create it.");
+                }
+            }
+        },
         DbAction::Reset { yes } => {
             if !yes {
                 eprintln!("⚠️  This will delete ALL indexed data!");
@@ -534,10 +636,7 @@ async fn handle_ingest(
             extensions: _,
             exclude: _,
         } => {
-            let stats = cmd_ingest_dir(
-                config, db, store, &path, name,
-            )
-            .await?;
+            let stats = cmd_ingest_dir(config, db, store, &path, name).await?;
 
             // Display overlap warnings
             for warning in &stats.overlap_warnings {
@@ -564,10 +663,7 @@ async fn handle_ingest(
                 max_depth: Some(max_depth),
                 path_prefix,
             };
-            let stats = cmd_ingest_url(
-                config, db, store, &url, name, overrides,
-            )
-            .await?;
+            let stats = cmd_ingest_url(config, db, store, &url, name, overrides).await?;
 
             // Display overlap warnings
             for warning in &stats.overlap_warnings {
@@ -585,15 +681,7 @@ async fn handle_ingest(
             name,
             max_pages,
         } => {
-            let stats = cmd_ingest_sitemap(
-                config,
-                db,
-                store,
-                &url,
-                name,
-                max_pages,
-            )
-            .await?;
+            let stats = cmd_ingest_sitemap(config, db, store, &url, name, max_pages).await?;
 
             // Display overlap warnings
             for warning in &stats.overlap_warnings {

@@ -4,6 +4,7 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::meta::{GlobalStats, MetaDb, SourceStats};
 use crate::store::QdrantStore;
+use clap_complete::Shell;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -26,9 +27,10 @@ pub async fn cmd_status(config: &Config, db: &MetaDb, store: &QdrantStore) -> Re
     info!("Getting status");
 
     let db_stats = db.get_global_stats().await?;
-    
+
     // Check if we can connect to Qdrant and if collection exists
-    let (qdrant_connected, collection_exists, qdrant_points) = match store.collection_exists().await {
+    let (qdrant_connected, collection_exists, qdrant_points) = match store.collection_exists().await
+    {
         Ok(true) => {
             // Collection exists, get stats
             match store.get_stats().await {
@@ -102,7 +104,7 @@ pub fn print_status(status: &StatusInfo) {
     println!("\nQdrant:");
     println!("  URL: {}", status.qdrant_url);
     println!("  Collection: {}", status.collection_name);
-    
+
     let connection_status = if status.qdrant_connected {
         if status.collection_exists {
             "✓ Connected"
@@ -131,11 +133,44 @@ pub fn print_sources(sources: &[SourceInfo]) {
     }
 
     for source in sources {
-        println!("• {} [{}]", source.name.as_deref().unwrap_or(&source.uri), source.source_type);
+        println!(
+            "• {} [{}]",
+            source.name.as_deref().unwrap_or(&source.uri),
+            source.source_type
+        );
         println!("  ID: {}", source.id);
         println!("  URI: {}", source.uri);
-        println!("  Documents: {}, Chunks: {}", source.stats.document_count, source.stats.chunk_count);
+        println!(
+            "  Documents: {}, Chunks: {}",
+            source.stats.document_count, source.stats.chunk_count
+        );
         println!("  Created: {}", source.created_at);
         println!();
+    }
+}
+
+/// Print source IDs with descriptions for shell completions
+pub fn print_source_completions(sources: &[SourceInfo], shell: Shell) {
+    for source in sources {
+        let display_name = source.name.as_deref().unwrap_or(&source.uri);
+        let mut description = format!(
+            "{} (at {}), Created {}",
+            display_name, source.uri, source.created_at
+        );
+        description = description.replace('\n', " ");
+
+        match shell {
+            Shell::Zsh => {
+                let sanitized = description.replace(':', "\\:");
+                println!("{}:{}", source.id, sanitized);
+            }
+            Shell::Fish => {
+                let sanitized = description.replace('\t', " ");
+                println!("{}\t{}", source.id, sanitized);
+            }
+            _ => {
+                println!("{}", source.id);
+            }
+        }
     }
 }

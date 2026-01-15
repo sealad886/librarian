@@ -9,7 +9,7 @@ pub use defaults::*;
 use crate::error::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +65,34 @@ pub struct EmbeddingConfig {
     /// Batch size for embedding
     #[serde(default = "default_embedding_batch_size")]
     pub batch_size: usize,
+}
+
+/// Lookup the expected embedding dimension for a known model
+pub fn embedding_dimension_for_model(model: &str) -> Option<usize> {
+    match model {
+        "BAAI/bge-small-en-v1.5" => Some(384),
+        "BAAI/bge-base-en-v1.5" => Some(768),
+        "BAAI/bge-large-en-v1.5" => Some(1024),
+        "sentence-transformers/all-MiniLM-L6-v2" => Some(384),
+        _ => None,
+    }
+}
+
+impl EmbeddingConfig {
+    /// Resolve the effective embedding dimension based on the configured model
+    pub fn resolved_dimension(&self) -> usize {
+        if let Some(expected) = embedding_dimension_for_model(&self.model) {
+            if expected != self.dimension {
+                warn!(
+                    "Embedding dimension {} does not match model '{}' ({}); using {}",
+                    self.dimension, self.model, expected, expected
+                );
+            }
+            expected
+        } else {
+            self.dimension
+        }
+    }
 }
 
 /// Chunking configuration
@@ -297,7 +325,7 @@ impl Config {
     /// Load configuration from a specific file path
     pub fn load(config_path: &Path) -> Result<Self> {
         debug!("Loading config from {:?}", config_path);
-        
+
         if !config_path.exists() {
             return Err(Error::Config(format!(
                 "Config file not found: {}",
@@ -307,12 +335,9 @@ impl Config {
 
         let content = std::fs::read_to_string(config_path)?;
         let mut config: Config = toml::from_str(&content)?;
-        
+
         // Set up paths based on config file location
-        let base = config_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf();
+        let base = config_path.parent().unwrap_or(Path::new(".")).to_path_buf();
         config.paths = PathsConfig {
             config_file: config_path.to_path_buf(),
             db_file: base.join("metadata.db"),
@@ -452,5 +477,24 @@ mod tests {
         // Invalid: min > max
         config.chunk.min_chars = config.chunk.max_chars + 1;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_resolved_dimension_matches_model() {
+        let mut config = Config::default();
+        config.embedding.model = "BAAI/bge-base-en-v1.5".to_string();
+        // Intentionally wrong dimension to ensure resolver corrects it
+        config.embedding.dimension = 384;
+
+        assert_eq!(config.embedding.resolved_dimension(), 768);
+    }
+
+    #[test]
+    fn test_resolved_dimension_unknown_model_falls_back() {
+        let mut config = Config::default();
+        config.embedding.model = "custom-model".to_string();
+        config.embedding.dimension = 512;
+
+        assert_eq!(config.embedding.resolved_dimension(), 512);
     }
 }

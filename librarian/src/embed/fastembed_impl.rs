@@ -20,7 +20,7 @@ impl FastEmbedder {
     /// Create a new FastEmbed embedder
     pub fn new(config: &EmbeddingConfig) -> Result<Self> {
         info!("Initializing FastEmbed with model: {}", config.model);
-        
+
         // Map model name to fastembed model enum
         let model_enum = match config.model.as_str() {
             "BAAI/bge-small-en-v1.5" => EmbeddingModel::BGESmallENV15,
@@ -29,13 +29,15 @@ impl FastEmbedder {
             "sentence-transformers/all-MiniLM-L6-v2" => EmbeddingModel::AllMiniLML6V2,
             _ => {
                 // Try to use default model
-                debug!("Unknown model '{}', using default BGESmallENV15", config.model);
+                debug!(
+                    "Unknown model '{}', using default BGESmallENV15",
+                    config.model
+                );
                 EmbeddingModel::BGESmallENV15
             }
         };
 
-        let options = InitOptions::new(model_enum)
-            .with_show_download_progress(true);
+        let options = InitOptions::new(model_enum).with_show_download_progress(true);
 
         let model = TextEmbedding::try_new(options)
             .map_err(|e| Error::Embedding(format!("Failed to initialize model: {}", e)))?;
@@ -45,7 +47,7 @@ impl FastEmbedder {
         Ok(Self {
             model: Arc::new(Mutex::new(model)),
             model_name: config.model.clone(),
-            dimension: config.dimension,
+            dimension: config.resolved_dimension(),
         })
     }
 }
@@ -81,31 +83,27 @@ impl Embedder for FastEmbedder {
     }
 }
 
-/// Get the expected dimension for a known model
-pub fn get_model_dimension(model_name: &str) -> Option<usize> {
-    match model_name {
-        "BAAI/bge-small-en-v1.5" => Some(384),
-        "BAAI/bge-base-en-v1.5" => Some(768),
-        "BAAI/bge-large-en-v1.5" => Some(1024),
-        "sentence-transformers/all-MiniLM-L6-v2" => Some(384),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::embedding_dimension_for_model;
 
     #[test]
     fn test_model_dimensions() {
-        assert_eq!(get_model_dimension("BAAI/bge-small-en-v1.5"), Some(384));
-        assert_eq!(get_model_dimension("BAAI/bge-base-en-v1.5"), Some(768));
-        assert_eq!(get_model_dimension("unknown-model"), None);
+        assert_eq!(
+            embedding_dimension_for_model("BAAI/bge-small-en-v1.5"),
+            Some(384)
+        );
+        assert_eq!(
+            embedding_dimension_for_model("BAAI/bge-base-en-v1.5"),
+            Some(768)
+        );
+        assert_eq!(embedding_dimension_for_model("unknown-model"), None);
     }
 
     // Integration test - requires model download
     #[tokio::test]
-    #[ignore]  // Run manually with: cargo test -- --ignored
+    #[ignore] // Run manually with: cargo test -- --ignored
     async fn test_fastembed_integration() {
         let config = EmbeddingConfig {
             model: "BAAI/bge-small-en-v1.5".to_string(),
@@ -115,9 +113,9 @@ mod tests {
 
         let embedder = FastEmbedder::new(&config).unwrap();
         let texts = vec!["Hello world".to_string(), "Test embedding".to_string()];
-        
+
         let embeddings = embedder.embed(texts).await.unwrap();
-        
+
         assert_eq!(embeddings.len(), 2);
         assert_eq!(embeddings[0].len(), 384);
     }

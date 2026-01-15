@@ -38,11 +38,16 @@ pub struct QdrantStore {
 impl QdrantStore {
     /// Connect to Qdrant using config
     pub async fn connect(config: &Config) -> Result<Self> {
-        Self::new(&config.qdrant_url, &config.collection_name).await
+        Self::new(
+            &config.qdrant_url,
+            &config.collection_name,
+            config.embedding.resolved_dimension(),
+        )
+        .await
     }
 
     /// Create a new store connection directly with URL and collection name
-    pub async fn new(url: &str, collection: &str) -> Result<Self> {
+    pub async fn new(url: &str, collection: &str, dimension: usize) -> Result<Self> {
         debug!("Connecting to Qdrant at {}", url);
 
         let client = Qdrant::from_url(url)
@@ -53,7 +58,7 @@ impl QdrantStore {
         let store = Self {
             client,
             collection: collection.to_string(),
-            dimension: 384, // Default for bge-small
+            dimension,
         };
 
         Ok(store)
@@ -97,7 +102,7 @@ impl QdrantStore {
     /// Delete the collection if it exists
     pub async fn delete_collection(&self) -> Result<bool> {
         let exists = self.client.collection_exists(&self.collection).await?;
-        
+
         if !exists {
             return Ok(false);
         }
@@ -150,10 +155,8 @@ impl QdrantStore {
             self.collection
         );
 
-        let point_structs: Vec<PointStruct> = points
-            .into_iter()
-            .map(|p| p.to_point_struct())
-            .collect();
+        let point_structs: Vec<PointStruct> =
+            points.into_iter().map(|p| p.to_point_struct()).collect();
 
         self.client
             .upsert_points(qdrant_client::qdrant::UpsertPointsBuilder::new(
@@ -202,7 +205,8 @@ impl QdrantStore {
         );
 
         let mut search_builder =
-            SearchPointsBuilder::new(&self.collection, query_vector, limit as u64).with_payload(true);
+            SearchPointsBuilder::new(&self.collection, query_vector, limit as u64)
+                .with_payload(true);
 
         if let Some(f) = filter {
             if let Some(qdrant_filter) = f.to_qdrant_filter() {
@@ -350,8 +354,7 @@ pub struct CollectionStats {
 fn point_id_to_string(id: Option<PointId>) -> String {
     match id {
         Some(PointId {
-            point_id_options:
-                Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(uuid)),
+            point_id_options: Some(qdrant_client::qdrant::point_id::PointIdOptions::Uuid(uuid)),
         }) => uuid,
         Some(PointId {
             point_id_options: Some(qdrant_client::qdrant::point_id::PointIdOptions::Num(num)),
@@ -382,9 +385,12 @@ fn json_from_qdrant_value(v: qdrant_client::qdrant::Value) -> Value {
             .map(Value::Number)
             .unwrap_or(Value::Null),
         Some(Kind::StringValue(s)) => Value::String(s),
-        Some(Kind::ListValue(list)) => {
-            Value::Array(list.values.into_iter().map(json_from_qdrant_value).collect())
-        }
+        Some(Kind::ListValue(list)) => Value::Array(
+            list.values
+                .into_iter()
+                .map(json_from_qdrant_value)
+                .collect(),
+        ),
         Some(Kind::StructValue(s)) => Value::Object(
             s.fields
                 .into_iter()

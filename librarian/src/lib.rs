@@ -15,6 +15,7 @@ pub mod mcp;
 pub mod meta;
 pub mod parse;
 pub mod rank;
+pub mod progress;
 pub mod store;
 
 pub use config::Config;

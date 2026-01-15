@@ -6,20 +6,22 @@ use crate::crawl::{CrawledPage, Crawler};
 use crate::embed::{create_embedder, embed_in_batches, Embedder};
 use crate::error::{Error, Result};
 use crate::meta::{Chunk, Document, MetaDb, RunStatus, Source, SourceType};
-use crate::parse::{
-    is_binary_content, parse_content, should_skip_file, ContentType,
-};
+use crate::parse::{is_binary_content, parse_content, should_skip_file, ContentType};
+use crate::progress::add_progress_bar;
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
 use chrono::Utc;
 use ignore::WalkBuilder;
+use indicatif::{ProgressBar, ProgressStyle};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::Path;
+use std::time::Duration;
 use tracing::{debug, info, warn};
 use url::Url;
 use uuid::Uuid;
 
 /// Statistics from an ingestion run
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IngestStats {
     pub docs_processed: i32,
     pub docs_skipped: i32,
@@ -61,15 +63,15 @@ pub enum OverlapType {
 pub async fn check_dir_overlap(db: &MetaDb, new_path: &Path) -> Result<Vec<SourceOverlap>> {
     let sources = db.list_sources().await?;
     let mut overlaps = Vec::new();
-    
+
     for source in sources {
         // Only check Dir sources
         if source.get_type().ok() != Some(SourceType::Dir) {
             continue;
         }
-        
+
         let existing_path = Path::new(&source.uri);
-        
+
         // Check if paths overlap - determine overlap type first
         let overlap_type = if new_path == existing_path {
             Some(OverlapType::Identical)
@@ -80,7 +82,7 @@ pub async fn check_dir_overlap(db: &MetaDb, new_path: &Path) -> Result<Vec<Sourc
         } else {
             None
         };
-        
+
         if let Some(ot) = overlap_type {
             overlaps.push(SourceOverlap {
                 existing_source: source,
@@ -88,7 +90,7 @@ pub async fn check_dir_overlap(db: &MetaDb, new_path: &Path) -> Result<Vec<Sourc
             });
         }
     }
-    
+
     Ok(overlaps)
 }
 
@@ -96,35 +98,35 @@ pub async fn check_dir_overlap(db: &MetaDb, new_path: &Path) -> Result<Vec<Sourc
 pub async fn check_url_overlap(db: &MetaDb, new_url: &str) -> Result<Vec<SourceOverlap>> {
     let sources = db.list_sources().await?;
     let mut overlaps = Vec::new();
-    
+
     let new_parsed = match Url::parse(new_url) {
         Ok(u) => u,
         Err(_) => return Ok(overlaps),
     };
-    
+
     let new_host = new_parsed.host_str().unwrap_or("");
     let new_path = new_parsed.path();
-    
+
     for source in sources {
         // Check Url and Sitemap sources
         let source_type = source.get_type().ok();
         if source_type != Some(SourceType::Url) && source_type != Some(SourceType::Sitemap) {
             continue;
         }
-        
+
         let existing_parsed = match Url::parse(&source.uri) {
             Ok(u) => u,
             Err(_) => continue,
         };
-        
+
         let existing_host = existing_parsed.host_str().unwrap_or("");
         let existing_path = existing_parsed.path();
-        
+
         // Only check overlaps for same domain
         if new_host != existing_host {
             continue;
         }
-        
+
         // Determine overlap type
         let overlap_type = if new_path == existing_path {
             Some(OverlapType::Identical)
@@ -135,7 +137,7 @@ pub async fn check_url_overlap(db: &MetaDb, new_url: &str) -> Result<Vec<SourceO
         } else {
             None
         };
-        
+
         if let Some(ot) = overlap_type {
             overlaps.push(SourceOverlap {
                 existing_source: source,
@@ -143,7 +145,7 @@ pub async fn check_url_overlap(db: &MetaDb, new_url: &str) -> Result<Vec<SourceO
             });
         }
     }
-    
+
     Ok(overlaps)
 }
 
@@ -186,9 +188,9 @@ pub async fn cmd_ingest_dir(
     path: &Path,
     name: Option<String>,
 ) -> Result<IngestStats> {
-    let canonical_path = path.canonicalize().map_err(|e| {
-        Error::InvalidPath(format!("{}: {}", path.display(), e))
-    })?;
+    let canonical_path = path
+        .canonicalize()
+        .map_err(|e| Error::InvalidPath(format!("{}: {}", path.display(), e)))?;
 
     let uri = canonical_path.display().to_string();
     info!("Ingesting directory: {}", uri);
@@ -204,19 +206,8 @@ pub async fn cmd_ingest_dir(
         }
     }
 
-    // Get or create source
-    let source = match db.get_source_by_uri(&uri).await? {
-        Some(s) => {
-            info!("Found existing source: {}", s.id);
-            s
-        }
-        None => {
-            let s = Source::new(SourceType::Dir, uri.clone(), name.or(Some(uri.clone())));
-            db.insert_source(&s).await?;
-            info!("Created new source: {}", s.id);
-            s
-        }
-    };
+    // Resolve source interactively on conflicts
+    let source = resolve_source_interactive(db, SourceType::Dir, &uri, name.clone()).await?;
 
     // Start ingestion run
     let run = db.start_ingestion_run(&source.id).await?;
@@ -247,21 +238,13 @@ pub async fn cmd_ingest_dir(
     info!("Found {} files to process", files.len());
 
     let mut current_uris: Vec<String> = Vec::new();
+    let file_progress = start_progress_bar(files.len(), "Processing files");
 
     for file_path in files {
         let file_uri = file_path.display().to_string();
         current_uris.push(file_uri.clone());
 
-        match process_file(
-            config,
-            db,
-            store,
-            embedder.as_ref(),
-            &source,
-            &file_path,
-        )
-        .await
-        {
+        match process_file(config, db, store, embedder.as_ref(), &source, &file_path).await {
             Ok((created, updated)) => {
                 stats.docs_processed += 1;
                 stats.chunks_created += created;
@@ -274,7 +257,11 @@ pub async fn cmd_ingest_dir(
                 stats.docs_skipped += 1;
             }
         }
+
+        advance_progress(&file_progress);
     }
+
+    finish_progress(file_progress, "Files processed");
 
     // Delete stale documents
     let stale_ids = db.delete_stale_documents(&source.id, &current_uris).await?;
@@ -305,7 +292,11 @@ pub async fn cmd_ingest_dir(
 
     db.complete_ingestion_run(
         &run.id,
-        if stats.errors.is_empty() { RunStatus::Completed } else { RunStatus::Failed },
+        if stats.errors.is_empty() {
+            RunStatus::Completed
+        } else {
+            RunStatus::Failed
+        },
         stats.docs_processed,
         stats.chunks_created,
         stats.chunks_updated,
@@ -374,10 +365,8 @@ async fn process_file(
     }
 
     // Process chunks
-    let (created, updated) = process_chunks(
-        config, db, store, embedder, source, &doc, &file_uri, chunks,
-    )
-    .await?;
+    let (created, updated) =
+        process_chunks(config, db, store, embedder, source, &doc, &file_uri, chunks).await?;
 
     Ok((created, updated))
 }
@@ -397,7 +386,10 @@ async fn process_chunks(
     let mut updated = 0i32;
     let mut chunks_to_embed: Vec<(usize, TextChunk)> = Vec::new();
     let existing_chunks = db.get_chunks(&doc.id).await?;
-    let existing_hashes: HashSet<String> = existing_chunks.iter().map(|c| c.chunk_hash.clone()).collect();
+    let existing_hashes: HashSet<String> = existing_chunks
+        .iter()
+        .map(|c| c.chunk_hash.clone())
+        .collect();
 
     // Find chunks that need embedding
     for (i, chunk) in chunks.iter().enumerate() {
@@ -418,7 +410,10 @@ async fn process_chunks(
     );
 
     // Embed in batches
-    let texts: Vec<String> = chunks_to_embed.iter().map(|(_, c)| c.text.clone()).collect();
+    let texts: Vec<String> = chunks_to_embed
+        .iter()
+        .map(|(_, c)| c.text.clone())
+        .collect();
     let embeddings = embed_in_batches(embedder, texts, config.embedding.batch_size).await?;
 
     // Prepare points for Qdrant
@@ -432,7 +427,11 @@ async fn process_chunks(
             chunk.text.clone(),
             chunk.char_start as i32,
             chunk.char_end as i32,
-            if chunk.headings.is_empty() { None } else { Some(chunk.headings.clone()) },
+            if chunk.headings.is_empty() {
+                None
+            } else {
+                Some(chunk.headings.clone())
+            },
         );
 
         // Save chunk to SQLite
@@ -446,15 +445,20 @@ async fn process_chunks(
             doc_id: doc.id.clone(),
             doc_uri: doc_uri.to_string(),
             title: doc.title.clone(),
-            headings: if chunk.headings.is_empty() { None } else { Some(chunk.headings.clone()) },
+            headings: if chunk.headings.is_empty() {
+                None
+            } else {
+                Some(chunk.headings.clone())
+            },
             chunk_index: *chunk_index as i32,
             chunk_hash: chunk.hash.clone(),
             updated_at: Utc::now().to_rfc3339(),
         };
 
         // Parse qdrant_point_id string to Uuid
-        let point_id = Uuid::try_parse(&meta_chunk.qdrant_point_id)
-            .unwrap_or_else(|_| Uuid::new_v5(&Uuid::NAMESPACE_OID, meta_chunk.qdrant_point_id.as_bytes()));
+        let point_id = Uuid::try_parse(&meta_chunk.qdrant_point_id).unwrap_or_else(|_| {
+            Uuid::new_v5(&Uuid::NAMESPACE_OID, meta_chunk.qdrant_point_id.as_bytes())
+        });
 
         points.push(ChunkPoint {
             id: point_id,
@@ -473,7 +477,9 @@ async fn process_chunks(
     store.upsert_points(points).await?;
 
     // Delete extra chunks if document shrunk
-    let deleted_point_strings = db.delete_chunks_from_index(&doc.id, chunks.len() as i32).await?;
+    let deleted_point_strings = db
+        .delete_chunks_from_index(&doc.id, chunks.len() as i32)
+        .await?;
     if !deleted_point_strings.is_empty() {
         let deleted_uuids: Vec<Uuid> = deleted_point_strings
             .iter()
@@ -509,19 +515,8 @@ pub async fn cmd_ingest_url(
         }
     }
 
-    // Get or create source
-    let source = match db.get_source_by_uri(url).await? {
-        Some(s) => {
-            info!("Found existing source: {}", s.id);
-            s
-        }
-        None => {
-            let s = Source::new(SourceType::Url, url.to_string(), name.or(Some(url.to_string())));
-            db.insert_source(&s).await?;
-            info!("Created new source: {}", s.id);
-            s
-        }
-    };
+    // Resolve source interactively on conflicts
+    let source = resolve_source_interactive(db, SourceType::Url, url, name.clone()).await?;
 
     // Start ingestion run
     let run = db.start_ingestion_run(&source.id).await?;
@@ -547,24 +542,19 @@ pub async fn cmd_ingest_url(
     let mut current_uris: Vec<String> = Vec::new();
 
     // Crawl and process pages
-    let pages = crawler.crawl(url, |_page| {
-        // Continue callback - return true to keep crawling
-        true
-    }).await?;
+    let pages = crawler
+        .crawl(url, |_page| {
+            // Continue callback - return true to keep crawling
+            true
+        })
+        .await?;
+
+    let page_progress = start_progress_bar(pages.len(), "Processing pages");
 
     for page in pages {
         current_uris.push(page.url.clone());
 
-        match process_page(
-            config,
-            db,
-            store,
-            embedder.as_ref(),
-            &source,
-            &page,
-        )
-        .await
-        {
+        match process_page(config, db, store, embedder.as_ref(), &source, &page).await {
             Ok((created, updated)) => {
                 stats.docs_processed += 1;
                 stats.chunks_created += created;
@@ -577,7 +567,11 @@ pub async fn cmd_ingest_url(
                 stats.docs_skipped += 1;
             }
         }
+
+        advance_progress(&page_progress);
     }
+
+    finish_progress(page_progress, "Pages processed");
 
     // Delete stale documents
     let stale_ids = db.delete_stale_documents(&source.id, &current_uris).await?;
@@ -607,7 +601,11 @@ pub async fn cmd_ingest_url(
 
     db.complete_ingestion_run(
         &run.id,
-        if stats.errors.is_empty() { RunStatus::Completed } else { RunStatus::Failed },
+        if stats.errors.is_empty() {
+            RunStatus::Completed
+        } else {
+            RunStatus::Failed
+        },
         stats.docs_processed,
         stats.chunks_created,
         stats.chunks_updated,
@@ -642,7 +640,7 @@ pub async fn cmd_ingest_sitemap(
     // Parse sitemap to get URLs
     let parser = SitemapParser::new(&config.crawl.user_agent)?;
     let entries = parser.parse(sitemap_url).await?;
-    
+
     if entries.is_empty() {
         warn!("No URLs found in sitemap: {}", sitemap_url);
         return Ok(stats);
@@ -650,7 +648,11 @@ pub async fn cmd_ingest_sitemap(
 
     let max = max_pages.unwrap_or(config.crawl.max_pages);
     let entries: Vec<_> = entries.into_iter().take(max as usize).collect();
-    info!("Found {} URLs in sitemap (limited to {})", entries.len(), max);
+    info!(
+        "Found {} URLs in sitemap (limited to {})",
+        entries.len(),
+        max
+    );
 
     // Check for overlaps - use the first entry URL as representative for the sitemap domain
     if let Some(first_entry) = entries.first() {
@@ -663,23 +665,9 @@ pub async fn cmd_ingest_sitemap(
         }
     }
 
-    // Get or create source
-    let source = match db.get_source_by_uri(sitemap_url).await? {
-        Some(s) => {
-            info!("Found existing source: {}", s.id);
-            s
-        }
-        None => {
-            let s = Source::new(
-                SourceType::Sitemap, 
-                sitemap_url.to_string(), 
-                name.or(Some(sitemap_url.to_string()))
-            );
-            db.insert_source(&s).await?;
-            info!("Created new source: {}", s.id);
-            s
-        }
-    };
+    // Resolve source interactively on conflicts
+    let source =
+        resolve_source_interactive(db, SourceType::Sitemap, sitemap_url, name.clone()).await?;
 
     // Start ingestion run
     let run = db.start_ingestion_run(&source.id).await?;
@@ -689,6 +677,7 @@ pub async fn cmd_ingest_sitemap(
     let crawler = Crawler::new(config.crawl.clone())?;
 
     let mut current_uris: Vec<String> = Vec::new();
+    let url_progress = start_progress_bar(entries.len(), "Processing URLs");
 
     // Process each URL from sitemap
     for entry in entries {
@@ -697,16 +686,7 @@ pub async fn cmd_ingest_sitemap(
         // Fetch the page
         match crawler.fetch(&entry.loc).await {
             Ok(page) => {
-                match process_page(
-                    config,
-                    db,
-                    store,
-                    embedder.as_ref(),
-                    &source,
-                    &page,
-                )
-                .await
-                {
+                match process_page(config, db, store, embedder.as_ref(), &source, &page).await {
                     Ok((created, updated)) => {
                         stats.docs_processed += 1;
                         stats.chunks_created += created;
@@ -727,7 +707,11 @@ pub async fn cmd_ingest_sitemap(
                 stats.docs_skipped += 1;
             }
         }
+
+        advance_progress(&url_progress);
     }
+
+    finish_progress(url_progress, "URLs processed");
 
     // Delete stale documents
     let stale_ids = db.delete_stale_documents(&source.id, &current_uris).await?;
@@ -757,7 +741,11 @@ pub async fn cmd_ingest_sitemap(
 
     db.complete_ingestion_run(
         &run.id,
-        if stats.errors.is_empty() { RunStatus::Completed } else { RunStatus::Failed },
+        if stats.errors.is_empty() {
+            RunStatus::Completed
+        } else {
+            RunStatus::Failed
+        },
         stats.docs_processed,
         stats.chunks_created,
         stats.chunks_updated,
@@ -813,10 +801,165 @@ async fn process_page(
     }
 
     // Process chunks
-    let (created, updated) = process_chunks(
-        config, db, store, embedder, source, &doc, &page.url, chunks,
-    )
-    .await?;
+    let (created, updated) =
+        process_chunks(config, db, store, embedder, source, &doc, &page.url, chunks).await?;
 
     Ok((created, updated))
+}
+
+fn start_progress_bar(len: usize, message: &str) -> Option<ProgressBar> {
+    if len == 0 {
+        return None;
+    }
+
+    let pb = add_progress_bar(len as u64);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} {msg}",
+        )
+        .unwrap()
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"),
+    );
+    pb.set_message(message.to_string());
+    pb.enable_steady_tick(Duration::from_millis(100));
+    Some(pb)
+}
+
+fn advance_progress(pb: &Option<ProgressBar>) {
+    if let Some(pb) = pb {
+        pb.inc(1);
+    }
+}
+
+fn finish_progress(pb: Option<ProgressBar>, message: &str) {
+    if let Some(pb) = pb {
+        pb.finish_with_message(message.to_string());
+    }
+}
+
+async fn resolve_source_interactive(
+    db: &MetaDb,
+    source_type: SourceType,
+    uri: &str,
+    desired_name: Option<String>,
+) -> Result<Source> {
+    // Case 1: Source with same URI already exists
+    if let Some(existing) = db.get_source_by_uri(uri).await? {
+        println!(
+            "A source with this URI already exists: {} (name: {})",
+            existing.id,
+            existing.name.as_deref().unwrap_or(&existing.uri)
+        );
+        println!("Choose an action:");
+        println!("  [1] Use existing source");
+        println!("  [2] Rename existing source");
+        println!("  [3] Abort");
+        let choice = prompt_choice(1, 3);
+        match choice {
+            1 => {
+                return Ok(existing);
+            }
+            2 => {
+                let new_name = prompt_string(
+                    "Enter new name for existing source",
+                    existing.name.as_deref(),
+                );
+                db.update_source_name(&existing.id, Some(new_name)).await?;
+                let updated = db.get_source(&existing.id).await?.unwrap();
+                return Ok(updated);
+            }
+            _ => {
+                return Err(Error::Config("Ingestion aborted".to_string()));
+            }
+        }
+    }
+
+    // Case 2: Name collision with another source
+    let mut final_name = desired_name.clone();
+    if let Some(ref name) = desired_name {
+        if let Some(named) = db.get_source_by_name(name).await? {
+            println!(
+                "Another source already uses the name '{}': {} (URI: {})",
+                name, named.id, named.uri
+            );
+            println!("Choose an action:");
+            println!("  [1] Keep duplicate name");
+            println!("  [2] Enter a new name for this source");
+            println!("  [3] Rename the existing source");
+            println!("  [4] Abort");
+            let choice = prompt_choice(1, 4);
+            match choice {
+                1 => {}
+                2 => {
+                    let new_name = prompt_string("Enter new name", None);
+                    final_name = Some(new_name);
+                }
+                3 => {
+                    let new_name = prompt_string("Enter new name for existing source", None);
+                    db.update_source_name(&named.id, Some(new_name)).await?;
+                }
+                _ => return Err(Error::Config("Ingestion aborted".to_string())),
+            }
+        }
+    }
+
+    let s = Source::new(
+        source_type,
+        uri.to_string(),
+        final_name.or(Some(uri.to_string())),
+    );
+    db.insert_source(&s).await?;
+    info!("Created new source: {}", s.id);
+    Ok(s)
+}
+
+fn prompt_choice(default: usize, max: usize) -> usize {
+    use std::io::{self, Write};
+    loop {
+        print!("Enter choice [{}-{}] (default {}): ", 1, max, default);
+        let _ = io::stdout().flush();
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_ok() {
+            let trimmed = input.trim();
+            if trimmed.is_empty() {
+                return default;
+            }
+            if let Ok(n) = trimmed.parse::<usize>() {
+                if n >= 1 && n <= max {
+                    return n;
+                }
+            }
+        }
+        println!(
+            "Invalid input. Please enter a number between {} and {}.",
+            1, max
+        );
+    }
+}
+
+fn prompt_string(prompt: &str, default: Option<&str>) -> String {
+    use std::io::{self, Write};
+    loop {
+        match default {
+            Some(d) => {
+                print!("{} [{}]: ", prompt, d);
+            }
+            None => {
+                print!("{}: ", prompt);
+            }
+        }
+        let _ = io::stdout().flush();
+        let mut input = String::new();
+        if io::stdin().read_line(&mut input).is_ok() {
+            let trimmed = input.trim();
+            if trimmed.is_empty() {
+                if let Some(d) = default {
+                    return d.to_string();
+                }
+            } else {
+                return trimmed.to_string();
+            }
+        }
+        println!("Invalid input. Please try again.");
+    }
 }

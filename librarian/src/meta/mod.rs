@@ -270,11 +270,10 @@ impl MetaDb {
 
     /// Check if database is initialized
     pub async fn is_initialized(&self) -> Result<bool> {
-        let result: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sources'",
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+        let result: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sources'")
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(result.is_some())
     }
 
@@ -318,6 +317,15 @@ impl MetaDb {
         Ok(source)
     }
 
+    /// Get source by name (case-sensitive match)
+    pub async fn get_source_by_name(&self, name: &str) -> Result<Option<Source>> {
+        let source = sqlx::query_as::<_, Source>("SELECT * FROM sources WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(source)
+    }
+
     /// List all sources
     pub async fn list_sources(&self) -> Result<Vec<Source>> {
         let sources = sqlx::query_as::<_, Source>("SELECT * FROM sources ORDER BY created_at DESC")
@@ -329,10 +337,12 @@ impl MetaDb {
     /// Delete a source and all its documents/chunks
     pub async fn delete_source(&self, id: &str) -> Result<()> {
         // Delete chunks first (cascade)
-        sqlx::query("DELETE FROM chunks WHERE doc_id IN (SELECT id FROM documents WHERE source_id = ?)")
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "DELETE FROM chunks WHERE doc_id IN (SELECT id FROM documents WHERE source_id = ?)",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
 
         // Delete documents
         sqlx::query("DELETE FROM documents WHERE source_id = ?")
@@ -352,6 +362,21 @@ impl MetaDb {
             .execute(&self.pool)
             .await?;
 
+        Ok(())
+    }
+
+    /// Update source name
+    pub async fn update_source_name(&self, id: &str, new_name: Option<String>) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE sources SET name = ?, updated_at = ? WHERE id = ?
+            "#,
+        )
+        .bind(new_name)
+        .bind(Utc::now().to_rfc3339())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -393,7 +418,11 @@ impl MetaDb {
     }
 
     /// Get document by source and URI
-    pub async fn get_document_by_uri(&self, source_id: &str, uri: &str) -> Result<Option<Document>> {
+    pub async fn get_document_by_uri(
+        &self,
+        source_id: &str,
+        uri: &str,
+    ) -> Result<Option<Document>> {
         let doc = sqlx::query_as::<_, Document>(
             "SELECT * FROM documents WHERE source_id = ? AND uri = ?",
         )
@@ -416,9 +445,17 @@ impl MetaDb {
     }
 
     /// Delete documents not in the given URI list
-    pub async fn delete_stale_documents(&self, source_id: &str, current_uris: &[String]) -> Result<Vec<String>> {
+    pub async fn delete_stale_documents(
+        &self,
+        source_id: &str,
+        current_uris: &[String],
+    ) -> Result<Vec<String>> {
         // Get stale doc IDs first
-        let placeholders = current_uris.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let placeholders = current_uris
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
         let query = if current_uris.is_empty() {
             "SELECT id FROM documents WHERE source_id = ?".to_string()
         } else {
@@ -496,17 +533,19 @@ impl MetaDb {
 
     /// Get chunk by Qdrant point ID
     pub async fn get_chunk_by_point_id(&self, point_id: &str) -> Result<Option<Chunk>> {
-        let chunk = sqlx::query_as::<_, Chunk>(
-            "SELECT * FROM chunks WHERE qdrant_point_id = ?",
-        )
-        .bind(point_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let chunk = sqlx::query_as::<_, Chunk>("SELECT * FROM chunks WHERE qdrant_point_id = ?")
+            .bind(point_id)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(chunk)
     }
 
     /// Delete chunks with index >= given value
-    pub async fn delete_chunks_from_index(&self, doc_id: &str, from_index: i32) -> Result<Vec<String>> {
+    pub async fn delete_chunks_from_index(
+        &self,
+        doc_id: &str,
+        from_index: i32,
+    ) -> Result<Vec<String>> {
         let point_ids: Vec<String> = sqlx::query_scalar(
             "SELECT qdrant_point_id FROM chunks WHERE doc_id = ? AND chunk_index >= ?",
         )
@@ -617,12 +656,11 @@ impl MetaDb {
 
     /// Get source statistics
     pub async fn get_source_stats(&self, source_id: &str) -> Result<SourceStats> {
-        let doc_count: i32 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM documents WHERE source_id = ?",
-        )
-        .bind(source_id)
-        .fetch_one(&self.pool)
-        .await?;
+        let doc_count: i32 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM documents WHERE source_id = ?")
+                .bind(source_id)
+                .fetch_one(&self.pool)
+                .await?;
 
         let chunk_count: i32 = sqlx::query_scalar(
             r#"
@@ -643,20 +681,17 @@ impl MetaDb {
 
     /// Get global statistics
     pub async fn get_global_stats(&self) -> Result<GlobalStats> {
-        let source_count: i32 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM sources")
-                .fetch_one(&self.pool)
-                .await?;
+        let source_count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM sources")
+            .fetch_one(&self.pool)
+            .await?;
 
-        let doc_count: i32 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM documents")
-                .fetch_one(&self.pool)
-                .await?;
+        let doc_count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM documents")
+            .fetch_one(&self.pool)
+            .await?;
 
-        let chunk_count: i32 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM chunks")
-                .fetch_one(&self.pool)
-                .await?;
+        let chunk_count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM chunks")
+            .fetch_one(&self.pool)
+            .await?;
 
         Ok(GlobalStats {
             source_count: source_count as usize,
@@ -686,7 +721,7 @@ impl MetaDb {
             .await?;
 
         let db = Self { pool };
-        
+
         // Auto-initialize schema if needed
         if !db.is_initialized().await? {
             db.init_schema().await?;
@@ -709,13 +744,16 @@ impl MetaDb {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(chunks.into_iter().map(|c| ChunkRecord {
-            id: c.qdrant_point_id,
-            text: c.chunk_text,
-            chunk_index: c.chunk_index,
-            content_hash: c.chunk_hash,
-            headings: c.headings_json,
-        }).collect())
+        Ok(chunks
+            .into_iter()
+            .map(|c| ChunkRecord {
+                id: c.qdrant_point_id,
+                text: c.chunk_text,
+                chunk_index: c.chunk_index,
+                content_hash: c.chunk_hash,
+                headings: c.headings_json,
+            })
+            .collect())
     }
 
     /// Delete a document and its chunks
@@ -786,7 +824,11 @@ mod tests {
     async fn test_source_crud() {
         let (db, _tmp) = setup_test_db().await;
 
-        let source = Source::new(SourceType::Dir, "/path/to/docs".to_string(), Some("Test Docs".to_string()));
+        let source = Source::new(
+            SourceType::Dir,
+            "/path/to/docs".to_string(),
+            Some("Test Docs".to_string()),
+        );
         db.insert_source(&source).await.unwrap();
 
         let loaded = db.get_source(&source.id).await.unwrap().unwrap();
@@ -808,11 +850,19 @@ mod tests {
         let source = Source::new(SourceType::Dir, "/docs".to_string(), None);
         db.insert_source(&source).await.unwrap();
 
-        let mut doc = Document::new(source.id.clone(), "/docs/file.md".to_string(), "hash1".to_string());
+        let mut doc = Document::new(
+            source.id.clone(),
+            "/docs/file.md".to_string(),
+            "hash1".to_string(),
+        );
         doc.title = Some("Test File".to_string());
         db.upsert_document(&doc).await.unwrap();
 
-        let loaded = db.get_document_by_uri(&source.id, "/docs/file.md").await.unwrap().unwrap();
+        let loaded = db
+            .get_document_by_uri(&source.id, "/docs/file.md")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.content_hash, "hash1");
 
         // Update the document
@@ -820,7 +870,11 @@ mod tests {
         doc.updated_at = Utc::now().to_rfc3339();
         db.upsert_document(&doc).await.unwrap();
 
-        let loaded = db.get_document_by_uri(&source.id, "/docs/file.md").await.unwrap().unwrap();
+        let loaded = db
+            .get_document_by_uri(&source.id, "/docs/file.md")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.content_hash, "hash2");
     }
 
@@ -831,7 +885,11 @@ mod tests {
         let source = Source::new(SourceType::Dir, "/docs".to_string(), None);
         db.insert_source(&source).await.unwrap();
 
-        let doc = Document::new(source.id.clone(), "/docs/file.md".to_string(), "hash1".to_string());
+        let doc = Document::new(
+            source.id.clone(),
+            "/docs/file.md".to_string(),
+            "hash1".to_string(),
+        );
         db.upsert_document(&doc).await.unwrap();
 
         let chunk1 = Chunk::new(
