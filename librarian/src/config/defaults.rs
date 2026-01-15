@@ -1,8 +1,8 @@
 //! Default values for configuration
 
-/// Default Qdrant URL for local development
+/// Default Qdrant gRPC URL for local development (port 6334, not 6333 REST)
 pub fn default_qdrant_url() -> String {
-    std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://127.0.0.1:6333".to_string())
+    std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://127.0.0.1:6334".to_string())
 }
 
 /// Default environment variable name for Qdrant API key

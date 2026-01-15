@@ -38,6 +38,7 @@ impl QdrantStore {
         debug!("Connecting to Qdrant at {}", url);
 
         let client = Qdrant::from_url(url)
+            .skip_compatibility_check()
             .build()
             .map_err(|e| Error::Qdrant(e.to_string()))?;
 

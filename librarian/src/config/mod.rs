@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.qdrant_url, "http://127.0.0.1:6333");
+        assert_eq!(config.qdrant_url, "http://127.0.0.1:6334");
         assert_eq!(config.collection_name, "librarian_docs");
         assert!(config.validate().is_ok());
     }

@@ -16,6 +16,7 @@ pub struct StatusInfo {
     pub collection_name: String,
     pub embedding_model: String,
     pub qdrant_connected: bool,
+    pub collection_exists: bool,
     pub qdrant_points: usize,
     pub db_stats: GlobalStats,
 }
@@ -26,9 +27,23 @@ pub async fn cmd_status(config: &Config, db: &MetaDb, store: &QdrantStore) -> Re
 
     let db_stats = db.get_global_stats().await?;
     
-    let (qdrant_connected, qdrant_points) = match store.get_stats().await {
-        Ok(stats) => (true, stats.points_count),
-        Err(_) => (false, 0),
+    // Check if we can connect to Qdrant and if collection exists
+    let (qdrant_connected, collection_exists, qdrant_points) = match store.collection_exists().await {
+        Ok(true) => {
+            // Collection exists, get stats
+            match store.get_stats().await {
+                Ok(stats) => (true, true, stats.points_count),
+                Err(e) => {
+                    tracing::debug!("Qdrant stats error: {:?}", e);
+                    (true, true, 0)
+                }
+            }
+        }
+        Ok(false) => (true, false, 0), // Connected but collection doesn't exist
+        Err(e) => {
+            tracing::debug!("Qdrant connection error: {:?}", e);
+            (false, false, 0)
+        }
     };
 
     Ok(StatusInfo {
@@ -38,6 +53,7 @@ pub async fn cmd_status(config: &Config, db: &MetaDb, store: &QdrantStore) -> Re
         collection_name: config.collection_name.clone(),
         embedding_model: config.embedding.model.clone(),
         qdrant_connected,
+        collection_exists,
         qdrant_points,
         db_stats,
     })
@@ -86,14 +102,17 @@ pub fn print_status(status: &StatusInfo) {
     println!("\nQdrant:");
     println!("  URL: {}", status.qdrant_url);
     println!("  Collection: {}", status.collection_name);
-    println!(
-        "  Status: {}",
-        if status.qdrant_connected {
+    
+    let connection_status = if status.qdrant_connected {
+        if status.collection_exists {
             "✓ Connected"
         } else {
-            "✗ Not connected"
+            "⚠ Connected (collection not created - run 'librarian ingest' to create)"
         }
-    );
+    } else {
+        "✗ Not connected"
+    };
+    println!("  Status: {}", connection_status);
     println!("  Points: {}", status.qdrant_points);
     println!("\nEmbedding Model: {}", status.embedding_model);
     println!("\nDatabase Stats:");
