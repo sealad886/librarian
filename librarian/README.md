@@ -363,8 +363,8 @@ librarian reindex
 ## Environment Variables
 
 ```bash
-librarian_CONFIG=/path/to/config.toml  # Custom config path
-librarian_LOG=debug                    # Log level (trace/debug/info/warn/error)
+LIBRARIAN_CONFIG=/path/to/config.toml  # Custom config path
+LIBRARIAN_LOG=debug                    # Log level (trace/debug/info/warn/error)
 QDRANT_URL=http://host:6333         # Override Qdrant URL
 ```
 

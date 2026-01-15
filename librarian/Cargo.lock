@@ -2100,6 +2100,47 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9fbbcab51052fe104eb5e5d351cf728d30a5be1fe14d9be8a3b097481fb97de"
 
 [[package]]
+name = "librarian"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "blake3",
+ "chrono",
+ "clap",
+ "dirs 5.0.1",
+ "fastembed",
+ "futures",
+ "governor",
+ "html2text",
+ "ignore",
+ "mime_guess",
+ "nonzero_ext",
+ "pdf-extract",
+ "pulldown-cmark",
+ "qdrant-client",
+ "regex",
+ "reqwest",
+ "robotstxt",
+ "scraper",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-test",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-segmentation",
+ "url",
+ "uuid",
+ "walkdir",
+ "wiremock",
+]
+
+[[package]]
 name = "libredox"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3122,47 +3163,6 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
-
-[[package]]
-name = "librarian"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "blake3",
- "chrono",
- "clap",
- "dirs 5.0.1",
- "fastembed",
- "futures",
- "governor",
- "html2text",
- "ignore",
- "mime_guess",
- "nonzero_ext",
- "pdf-extract",
- "pulldown-cmark",
- "qdrant-client",
- "regex",
- "reqwest",
- "robotstxt",
- "scraper",
- "serde",
- "serde_json",
- "sqlx",
- "tempfile",
- "thiserror 2.0.17",
- "tokio",
- "tokio-test",
- "toml",
- "tracing",
- "tracing-subscriber",
- "unicode-segmentation",
- "url",
- "uuid",
- "walkdir",
- "wiremock",
-]
 
 [[package]]
 name = "rand"

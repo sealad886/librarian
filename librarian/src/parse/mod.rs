@@ -217,14 +217,22 @@ pub fn normalize_whitespace(text: &str) -> String {
         if c.is_whitespace() {
             if c == '\n' {
                 newline_count += 1;
-                if newline_count <= 2 && !last_was_whitespace {
-                    result.push('\n');
-                }
-            } else if !last_was_whitespace {
-                result.push(' ');
             }
             last_was_whitespace = true;
         } else {
+            // Before adding a non-whitespace char, handle accumulated whitespace
+            if last_was_whitespace && !result.is_empty() {
+                if newline_count >= 2 {
+                    // Multiple newlines = paragraph break, preserve as double newline
+                    result.push_str("\n\n");
+                } else if newline_count == 1 {
+                    // Single newline = line break
+                    result.push('\n');
+                } else {
+                    // Other whitespace = single space
+                    result.push(' ');
+                }
+            }
             newline_count = 0;
             result.push(c);
             last_was_whitespace = false;

@@ -42,32 +42,36 @@ impl RobotsRules {
 
     /// Get crawl delay if specified
     pub fn crawl_delay(&self, user_agent: &str) -> Option<f64> {
-        // Simple parsing for Crawl-delay directive
+        // Parse for Crawl-delay directive, preferring specific user-agent over wildcard
         let ua_lower = user_agent.to_lowercase();
-        let mut in_matching_block = false;
-        let default_delay = None;
+        let mut current_agent: Option<String> = None;
+        let mut default_delay: Option<f64> = None;
+        let mut specific_delay: Option<f64> = None;
 
         for line in self.content.lines() {
             let line = line.trim();
             
             if line.starts_with("User-agent:") {
-                let agent = line.trim_start_matches("User-agent:").trim().to_lowercase();
-                in_matching_block = agent == "*" || ua_lower.contains(&agent);
-                if agent == "*" && default_delay.is_none() {
-                    // We'll capture the default block's delay
-                }
+                current_agent = Some(line.trim_start_matches("User-agent:").trim().to_lowercase());
             }
             
-            if in_matching_block && line.starts_with("Crawl-delay:") {
-                if let Some(delay_str) = line.strip_prefix("Crawl-delay:") {
-                    if let Ok(delay) = delay_str.trim().parse::<f64>() {
-                        return Some(delay);
+            if line.starts_with("Crawl-delay:") {
+                if let Some(ref agent) = current_agent {
+                    if let Some(delay_str) = line.strip_prefix("Crawl-delay:") {
+                        if let Ok(delay) = delay_str.trim().parse::<f64>() {
+                            if agent == "*" {
+                                default_delay = Some(delay);
+                            } else if ua_lower.contains(agent) {
+                                specific_delay = Some(delay);
+                            }
+                        }
                     }
                 }
             }
         }
 
-        default_delay
+        // Prefer specific user-agent match over wildcard
+        specific_delay.or(default_delay)
     }
 }
 

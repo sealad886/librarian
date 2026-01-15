@@ -153,12 +153,12 @@ impl Bm25Scorer {
         total_score
     }
 
-    /// Tokenize query into terms
+    /// Tokenize query into terms (filters words < 3 chars as stop words)
     pub fn tokenize(&self, query: &str) -> Vec<String> {
         query
             .split_whitespace()
             .map(|s| s.to_lowercase())
-            .filter(|s| s.len() >= 2)
+            .filter(|s| s.len() >= 3)
             .collect()
     }
 }
