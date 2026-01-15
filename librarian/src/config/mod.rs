@@ -42,6 +42,10 @@ pub struct Config {
     #[serde(default)]
     pub query: QueryConfig,
 
+    /// Reranker configuration
+    #[serde(default)]
+    pub reranker: RerankerConfig,
+
     /// Paths configuration (internal, not user-editable)
     #[serde(skip)]
     pub paths: PathsConfig,
@@ -139,6 +143,22 @@ pub struct QueryConfig {
     pub bm25_weight: f32,
 }
 
+/// Reranker configuration (cross-encoder model for result reranking)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RerankerConfig {
+    /// Enable reranking
+    #[serde(default = "default_reranker_enabled")]
+    pub enabled: bool,
+
+    /// Model name/identifier for cross-encoder reranker
+    #[serde(default = "default_reranker_model")]
+    pub model: String,
+
+    /// Number of top results to rerank from initial retrieval
+    #[serde(default = "default_reranker_top_k")]
+    pub top_k: usize,
+}
+
 /// Internal paths configuration
 #[derive(Debug, Clone, Default)]
 pub struct PathsConfig {
@@ -162,6 +182,7 @@ impl Default for Config {
             chunk: ChunkConfig::default(),
             crawl: CrawlConfig::default(),
             query: QueryConfig::default(),
+            reranker: RerankerConfig::default(),
             paths: PathsConfig::default(),
         }
     }
@@ -210,6 +231,16 @@ impl Default for QueryConfig {
             min_score: default_query_min_score(),
             hybrid_search: false,
             bm25_weight: default_bm25_weight(),
+        }
+    }
+}
+
+impl Default for RerankerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_reranker_enabled(),
+            model: default_reranker_model(),
+            top_k: default_reranker_top_k(),
         }
     }
 }

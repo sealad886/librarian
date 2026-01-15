@@ -99,3 +99,18 @@ pub fn default_query_min_score() -> f32 {
 pub fn default_bm25_weight() -> f32 {
     0.3
 }
+
+/// Default reranker model (cross-encoder)
+pub fn default_reranker_model() -> String {
+    "BAAI/bge-reranker-base".to_string()
+}
+
+/// Default: reranker disabled
+pub fn default_reranker_enabled() -> bool {
+    false
+}
+
+/// Default top-k to rerank (rerank top N results from initial retrieval)
+pub fn default_reranker_top_k() -> usize {
+    20
+}
