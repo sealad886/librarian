@@ -39,18 +39,12 @@ pub fn find_code_blocks(text: &str) -> Vec<(usize, usize)> {
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             if in_block {
                 // End of block
-                let byte_pos = text.lines()
-                    .take(i + 1)
-                    .map(|l| l.len() + 1)
-                    .sum::<usize>();
+                let byte_pos = text.lines().take(i + 1).map(|l| l.len() + 1).sum::<usize>();
                 blocks.push((block_start, byte_pos));
                 in_block = false;
             } else {
                 // Start of block
-                block_start = text.lines()
-                    .take(i)
-                    .map(|l| l.len() + 1)
-                    .sum::<usize>();
+                block_start = text.lines().take(i).map(|l| l.len() + 1).sum::<usize>();
                 in_block = true;
             }
         }
@@ -61,7 +55,9 @@ pub fn find_code_blocks(text: &str) -> Vec<(usize, usize)> {
 
 /// Check if a position is inside a code block
 pub fn is_in_code_block(position: usize, code_blocks: &[(usize, usize)]) -> bool {
-    code_blocks.iter().any(|(start, end)| position >= *start && position < *end)
+    code_blocks
+        .iter()
+        .any(|(start, end)| position >= *start && position < *end)
 }
 
 #[cfg(test)]
@@ -79,14 +75,14 @@ mod tests {
     fn test_find_code_blocks() {
         let text = "Some text\n```\ncode here\n```\nMore text";
         let blocks = find_code_blocks(text);
-        
+
         assert_eq!(blocks.len(), 1);
     }
 
     #[test]
     fn test_is_in_code_block() {
         let blocks = vec![(10, 30), (50, 70)];
-        
+
         assert!(!is_in_code_block(5, &blocks));
         assert!(is_in_code_block(15, &blocks));
         assert!(!is_in_code_block(35, &blocks));

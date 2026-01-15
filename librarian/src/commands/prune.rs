@@ -64,8 +64,15 @@ pub async fn cmd_prune(
 
         match source_type {
             SourceType::Dir => {
-                prune_directory_source(db, store, &source.id, &source.uri, &mut stats, options.dry_run)
-                    .await?;
+                prune_directory_source(
+                    db,
+                    store,
+                    &source.id,
+                    &source.uri,
+                    &mut stats,
+                    options.dry_run,
+                )
+                .await?;
             }
             SourceType::Url | SourceType::Sitemap => {
                 // For URL sources, we can't easily check if pages still exist
@@ -106,7 +113,7 @@ async fn prune_directory_source(
 
     for doc in documents {
         let file_path = Path::new(&doc.uri);
-        
+
         if !file_path.exists() {
             info!(
                 doc_id = %doc.id,
@@ -209,7 +216,10 @@ pub async fn cmd_remove_source(
 
 /// Print prune stats to console
 pub fn print_prune_stats(stats: &PruneStats, dry_run: bool) {
-    println!("\n🧹 Prune {}\n", if dry_run { "(Dry Run)" } else { "Complete" });
+    println!(
+        "\n🧹 Prune {}\n",
+        if dry_run { "(Dry Run)" } else { "Complete" }
+    );
     println!("Sources checked: {}", stats.sources_checked);
     println!("Documents checked: {}", stats.documents_checked);
     println!(

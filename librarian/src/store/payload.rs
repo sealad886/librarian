@@ -88,11 +88,17 @@ impl ChunkPayload {
         let mut map = HashMap::new();
 
         map.insert("source_id".to_string(), string_to_qdrant(&self.source_id));
-        map.insert("source_type".to_string(), string_to_qdrant(&self.source_type));
+        map.insert(
+            "source_type".to_string(),
+            string_to_qdrant(&self.source_type),
+        );
         map.insert("source_uri".to_string(), string_to_qdrant(&self.source_uri));
         map.insert("doc_id".to_string(), string_to_qdrant(&self.doc_id));
         map.insert("doc_uri".to_string(), string_to_qdrant(&self.doc_uri));
-        map.insert("chunk_index".to_string(), int_to_qdrant(self.chunk_index as i64));
+        map.insert(
+            "chunk_index".to_string(),
+            int_to_qdrant(self.chunk_index as i64),
+        );
         map.insert("chunk_hash".to_string(), string_to_qdrant(&self.chunk_hash));
         map.insert("updated_at".to_string(), string_to_qdrant(&self.updated_at));
 
@@ -118,7 +124,9 @@ impl ChunkPayload {
 
 fn string_to_qdrant(s: &str) -> QdrantValue {
     QdrantValue {
-        kind: Some(qdrant_client::qdrant::value::Kind::StringValue(s.to_string())),
+        kind: Some(qdrant_client::qdrant::value::Kind::StringValue(
+            s.to_string(),
+        )),
     }
 }
 

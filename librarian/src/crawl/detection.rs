@@ -88,7 +88,12 @@ impl PageAnalysis {
     }
 
     /// Create analysis for SPA
-    pub fn spa(framework: SpaFramework, confidence: f32, indicators: Vec<String>, content_ratio: f32) -> Self {
+    pub fn spa(
+        framework: SpaFramework,
+        confidence: f32,
+        indicators: Vec<String>,
+        content_ratio: f32,
+    ) -> Self {
         Self {
             technology: PageTechnology::Spa(framework),
             confidence,
@@ -102,9 +107,9 @@ impl PageAnalysis {
 
     /// Create analysis for SPA with hash routing
     pub fn spa_with_hash_routes(
-        framework: SpaFramework, 
-        confidence: f32, 
-        indicators: Vec<String>, 
+        framework: SpaFramework,
+        confidence: f32,
+        indicators: Vec<String>,
         content_ratio: f32,
         hash_routes: Vec<String>,
     ) -> Self {
@@ -134,7 +139,10 @@ pub fn analyze_page(html: &str, url: &str) -> PageAnalysis {
     // Very low content ratio is a strong SPA indicator
     if content_ratio < 0.05 {
         spa_score += 0.4;
-        indicators.push(format!("Very low content ratio: {:.1}%", content_ratio * 100.0));
+        indicators.push(format!(
+            "Very low content ratio: {:.1}%",
+            content_ratio * 100.0
+        ));
     } else if content_ratio < 0.15 {
         spa_score += 0.2;
         indicators.push(format!("Low content ratio: {:.1}%", content_ratio * 100.0));
@@ -158,8 +166,10 @@ pub fn analyze_page(html: &str, url: &str) -> PageAnalysis {
     let script_analysis = analyze_scripts(html, &html_lower);
     if script_analysis.heavy_js {
         spa_score += 0.15;
-        indicators.push(format!("Heavy JS: {} scripts, {:.0}KB estimated", 
-            script_analysis.script_count, script_analysis.estimated_size_kb));
+        indicators.push(format!(
+            "Heavy JS: {} scripts, {:.0}KB estimated",
+            script_analysis.script_count, script_analysis.estimated_size_kb
+        ));
     }
 
     // Check for hydration/client-side rendering markers
@@ -199,21 +209,29 @@ pub fn analyze_page(html: &str, url: &str) -> PageAnalysis {
     let uses_hash_routing = !hash_routes.is_empty();
     if uses_hash_routing {
         spa_score += 0.3;
-        indicators.push(format!("Hash-based routing detected: {} routes", hash_routes.len()));
+        indicators.push(format!(
+            "Hash-based routing detected: {} routes",
+            hash_routes.len()
+        ));
     }
 
     // Decision threshold
     if spa_score >= 0.5 {
         if uses_hash_routing {
             PageAnalysis::spa_with_hash_routes(
-                detected_framework, 
-                spa_score.min(1.0), 
-                indicators, 
+                detected_framework,
+                spa_score.min(1.0),
+                indicators,
                 content_ratio,
                 hash_routes,
             )
         } else {
-            PageAnalysis::spa(detected_framework, spa_score.min(1.0), indicators, content_ratio)
+            PageAnalysis::spa(
+                detected_framework,
+                spa_score.min(1.0),
+                indicators,
+                content_ratio,
+            )
         }
     } else {
         PageAnalysis::static_page(content_ratio)
@@ -232,17 +250,14 @@ fn calculate_content_ratio(html: &str) -> f32 {
     let style_re = Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap();
     let cleaned = script_re.replace_all(html, "");
     let cleaned = style_re.replace_all(&cleaned, "");
-    
+
     // Now strip remaining tags
     let tag_re = Regex::new(r"<[^>]+>").unwrap();
     let text_only = tag_re.replace_all(&cleaned, " ");
-    
+
     // Normalize whitespace and count
-    let text_content: String = text_only
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    
+    let text_content: String = text_only.split_whitespace().collect::<Vec<_>>().join(" ");
+
     let text_size = text_content.len() as f32;
     text_size / total_size
 }
@@ -250,21 +265,42 @@ fn calculate_content_ratio(html: &str) -> f32 {
 /// Check for common SPA root elements that indicate client-side rendering
 fn check_spa_root_elements(html: &str) -> Vec<String> {
     let mut indicators = Vec::new();
-    
+
     let spa_patterns = [
         // Angular
         (r"<app-root[^>]*>\s*</app-root>", "Angular <app-root> shell"),
-        (r"<app-root[^>]*>Loading", "Angular <app-root> with loading state"),
+        (
+            r"<app-root[^>]*>Loading",
+            "Angular <app-root> with loading state",
+        ),
         // React
-        (r#"<div\s+id\s*=\s*["']root["'][^>]*>\s*</div>"#, "React #root shell"),
-        (r#"<div\s+id\s*=\s*["']app["'][^>]*>\s*</div>"#, "React/Vue #app shell"),
-        (r#"<div\s+id\s*=\s*["']__next["'][^>]*>\s*</div>"#, "Next.js #__next shell"),
+        (
+            r#"<div\s+id\s*=\s*["']root["'][^>]*>\s*</div>"#,
+            "React #root shell",
+        ),
+        (
+            r#"<div\s+id\s*=\s*["']app["'][^>]*>\s*</div>"#,
+            "React/Vue #app shell",
+        ),
+        (
+            r#"<div\s+id\s*=\s*["']__next["'][^>]*>\s*</div>"#,
+            "Next.js #__next shell",
+        ),
         // Vue
-        (r#"<div\s+id\s*=\s*["']__nuxt["'][^>]*>"#, "Nuxt #__nuxt shell"),
+        (
+            r#"<div\s+id\s*=\s*["']__nuxt["'][^>]*>"#,
+            "Nuxt #__nuxt shell",
+        ),
         // Svelte
-        (r#"<div\s+id\s*=\s*["']svelte["'][^>]*>\s*</div>"#, "Svelte #svelte shell"),
+        (
+            r#"<div\s+id\s*=\s*["']svelte["'][^>]*>\s*</div>"#,
+            "Svelte #svelte shell",
+        ),
         // Generic
-        (r#"<div\s+id\s*=\s*["']main-app["'][^>]*>\s*</div>"#, "SPA #main-app shell"),
+        (
+            r#"<div\s+id\s*=\s*["']main-app["'][^>]*>\s*</div>"#,
+            "SPA #main-app shell",
+        ),
     ];
 
     for (pattern, description) in spa_patterns {
@@ -283,7 +319,8 @@ fn detect_framework(html: &str, html_lower: &str) -> Option<(SpaFramework, Vec<S
     let mut indicators = Vec::new();
 
     // Angular
-    if html_lower.contains("ng-version") || html.contains("_ngcontent") || html.contains("_nghost") {
+    if html_lower.contains("ng-version") || html.contains("_ngcontent") || html.contains("_nghost")
+    {
         indicators.push("Angular markers (ng-version, _ngcontent)".to_string());
         return Some((SpaFramework::Angular, indicators));
     }
@@ -438,11 +475,11 @@ fn check_bot_protection(html_lower: &str) -> bool {
 /// Extract hash-based routes from HTML (e.g., href="#/api", href="#/service/Lightbulb")
 pub fn extract_hash_routes(html: &str) -> Vec<String> {
     let mut routes = std::collections::HashSet::new();
-    
+
     // Match href="#/..." patterns (hash-based routing)
     // This captures Angular, Vue hash mode, and other hash-routed SPAs
     let hash_route_re = Regex::new(r#"href\s*=\s*["']#(/[^"'#]*)["']"#).unwrap();
-    
+
     for cap in hash_route_re.captures_iter(html) {
         if let Some(route) = cap.get(1) {
             let route_str = route.as_str().to_string();
@@ -484,17 +521,17 @@ pub fn extract_hash_routes(html: &str) -> Vec<String> {
 /// Analyze rendered HTML to extract hash routes (call after JS rendering)
 pub fn extract_hash_routes_from_rendered(html: &str, base_url: &str) -> Vec<String> {
     use url::Url;
-    
+
     let mut routes = std::collections::HashSet::new();
     let base = Url::parse(base_url).ok();
-    
+
     // Match all href attributes
     let href_re = Regex::new(r#"href\s*=\s*["']([^"']+)["']"#).unwrap();
-    
+
     for cap in href_re.captures_iter(html) {
         if let Some(href) = cap.get(1) {
             let href_str = href.as_str();
-            
+
             // Check for hash routes
             if href_str.starts_with("#/") {
                 let route = &href_str[1..]; // Remove leading #
@@ -543,7 +580,10 @@ mod tests {
 
         let analysis = analyze_page(html, "https://example.com");
         assert!(analysis.needs_js_rendering);
-        assert!(matches!(analysis.technology, PageTechnology::Spa(SpaFramework::Angular) | PageTechnology::Spa(SpaFramework::Unknown)));
+        assert!(matches!(
+            analysis.technology,
+            PageTechnology::Spa(SpaFramework::Angular) | PageTechnology::Spa(SpaFramework::Unknown)
+        ));
     }
 
     #[test]
@@ -596,7 +636,8 @@ mod tests {
         assert!(calculate_content_ratio(content_heavy) > 0.3);
 
         // Mostly markup
-        let markup_heavy = "<html><body><div><div><div><span></span></div></div></div></body></html>";
+        let markup_heavy =
+            "<html><body><div><div><div><span></span></div></div></div></body></html>";
         assert!(calculate_content_ratio(markup_heavy) < 0.1);
     }
 }

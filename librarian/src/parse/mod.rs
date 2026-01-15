@@ -61,7 +61,7 @@ impl ContentType {
                 return detected;
             }
         }
-        
+
         // Fall back to extension
         if let Some(p) = path {
             let detected = Self::from_extension(p);
@@ -79,19 +79,19 @@ impl ContentType {
 pub struct ParsedDocument {
     /// Extracted title (if found)
     pub title: Option<String>,
-    
+
     /// Main text content
     pub text: String,
-    
+
     /// Detected content type
     pub content_type: ContentType,
-    
+
     /// Extracted headings with their levels and positions
     pub headings: Vec<Heading>,
-    
+
     /// Code blocks with language info
     pub code_blocks: Vec<CodeBlock>,
-    
+
     /// Links found in the document
     pub links: Vec<ExtractedLink>,
 }
@@ -101,10 +101,10 @@ pub struct ParsedDocument {
 pub struct Heading {
     /// Heading level (1-6)
     pub level: u8,
-    
+
     /// Heading text
     pub text: String,
-    
+
     /// Character position in the extracted text
     pub position: usize,
 }
@@ -114,10 +114,10 @@ pub struct Heading {
 pub struct CodeBlock {
     /// Language identifier (if specified)
     pub language: Option<String>,
-    
+
     /// Code content
     pub content: String,
-    
+
     /// Character position in the extracted text
     pub position: usize,
 }
@@ -127,10 +127,10 @@ pub struct CodeBlock {
 pub struct ExtractedLink {
     /// Link URL
     pub url: String,
-    
+
     /// Link text
     pub text: Option<String>,
-    
+
     /// Whether this is internal (same domain) or external
     pub is_internal: bool,
 }
@@ -155,7 +155,7 @@ impl ParsedDocument {
             if heading.position > position {
                 break;
             }
-            
+
             // Remove headings at same or lower level
             current_levels.retain(|h| h.level < heading.level);
             current_levels.push(heading);
@@ -166,7 +166,11 @@ impl ParsedDocument {
 }
 
 /// Parse content based on detected type
-pub fn parse_content(content: &str, content_type: ContentType, base_url: Option<&str>) -> Result<ParsedDocument> {
+pub fn parse_content(
+    content: &str,
+    content_type: ContentType,
+    base_url: Option<&str>,
+) -> Result<ParsedDocument> {
     match content_type {
         ContentType::Html => parse_html(content, base_url),
         ContentType::Markdown => parse_markdown(content),
@@ -184,12 +188,9 @@ pub fn is_binary_content(data: &[u8]) -> bool {
 /// Check if file should be skipped based on extension
 pub fn should_skip_file(path: &Path) -> bool {
     let skip_extensions = [
-        "png", "jpg", "jpeg", "gif", "bmp", "ico", "svg", "webp",
-        "mp3", "mp4", "wav", "ogg", "webm", "avi", "mov",
-        "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
-        "exe", "dll", "so", "dylib", "bin",
-        "woff", "woff2", "ttf", "otf", "eot",
-        "pyc", "pyo", "class", "o", "obj",
+        "png", "jpg", "jpeg", "gif", "bmp", "ico", "svg", "webp", "mp3", "mp4", "wav", "ogg",
+        "webm", "avi", "mov", "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "exe", "dll", "so",
+        "dylib", "bin", "woff", "woff2", "ttf", "otf", "eot", "pyc", "pyo", "class", "o", "obj",
         "lock", "DS_Store",
     ];
 
@@ -248,16 +249,34 @@ mod tests {
 
     #[test]
     fn test_content_type_detection() {
-        assert_eq!(ContentType::from_extension(Path::new("test.html")), ContentType::Html);
-        assert_eq!(ContentType::from_extension(Path::new("test.md")), ContentType::Markdown);
-        assert_eq!(ContentType::from_extension(Path::new("test.txt")), ContentType::PlainText);
-        assert_eq!(ContentType::from_extension(Path::new("test.rs")), ContentType::Unknown);
+        assert_eq!(
+            ContentType::from_extension(Path::new("test.html")),
+            ContentType::Html
+        );
+        assert_eq!(
+            ContentType::from_extension(Path::new("test.md")),
+            ContentType::Markdown
+        );
+        assert_eq!(
+            ContentType::from_extension(Path::new("test.txt")),
+            ContentType::PlainText
+        );
+        assert_eq!(
+            ContentType::from_extension(Path::new("test.rs")),
+            ContentType::Unknown
+        );
     }
 
     #[test]
     fn test_mime_detection() {
-        assert_eq!(ContentType::from_mime("text/html; charset=utf-8"), ContentType::Html);
-        assert_eq!(ContentType::from_mime("text/markdown"), ContentType::Markdown);
+        assert_eq!(
+            ContentType::from_mime("text/html; charset=utf-8"),
+            ContentType::Html
+        );
+        assert_eq!(
+            ContentType::from_mime("text/markdown"),
+            ContentType::Markdown
+        );
         assert_eq!(ContentType::from_mime("text/plain"), ContentType::PlainText);
     }
 

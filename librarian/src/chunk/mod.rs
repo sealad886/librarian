@@ -20,19 +20,19 @@ use blake3::Hasher;
 pub struct TextChunk {
     /// The actual text content
     pub text: String,
-    
+
     /// Character start position in original document
     pub char_start: usize,
-    
+
     /// Character end position in original document  
     pub char_end: usize,
-    
+
     /// Chunk index (0-based)
     pub index: usize,
-    
+
     /// Headings that apply to this chunk
     pub headings: Vec<String>,
-    
+
     /// Blake3 hash of the normalized text
     pub hash: String,
 }
@@ -54,14 +54,14 @@ pub fn chunk_document(
     config: &ChunkConfig,
 ) -> Result<Vec<TextChunk>> {
     let text = &doc.text;
-    
+
     if text.is_empty() {
         return Ok(Vec::new());
     }
 
     // Find potential break points
     let break_points = find_break_points(text, &doc.headings, config);
-    
+
     let mut chunks = Vec::new();
     let mut current_start = 0;
     let mut chunk_index = 0;
@@ -75,7 +75,7 @@ pub fn chunk_document(
 
         // Find the next chunk boundary
         let target_end = current_start + config.max_chars;
-        
+
         let chunk_end = if target_end >= text.len() {
             text.len()
         } else {
@@ -92,7 +92,7 @@ pub fn chunk_document(
 
         // Extract chunk text (now guaranteed to be on char boundaries)
         let chunk_text = text[current_start..chunk_end].trim().to_string();
-        
+
         // Skip if too small (unless it's the last chunk)
         if chunk_text.len() < config.min_chars && chunk_end < text.len() {
             current_start = chunk_end;
@@ -101,7 +101,8 @@ pub fn chunk_document(
 
         if !chunk_text.is_empty() {
             // Get headings that apply to this chunk
-            let headings = doc.headings_at_position(current_start)
+            let headings = doc
+                .headings_at_position(current_start)
                 .iter()
                 .map(|h| h.text.clone())
                 .collect();
@@ -124,7 +125,7 @@ pub fn chunk_document(
         if chunk_end >= text.len() {
             break;
         }
-        
+
         // Ensure overlap position is on a char boundary
         current_start = if chunk_end > config.overlap_chars {
             ensure_char_boundary(text, chunk_end - config.overlap_chars)
@@ -137,11 +138,7 @@ pub fn chunk_document(
 }
 
 /// Find potential break points in the text
-fn find_break_points(
-    text: &str,
-    headings: &[Heading],
-    config: &ChunkConfig,
-) -> Vec<BreakPoint> {
+fn find_break_points(text: &str, headings: &[Heading], config: &ChunkConfig) -> Vec<BreakPoint> {
     let mut points = Vec::new();
 
     // Add heading positions as high-priority breaks
@@ -237,29 +234,32 @@ fn find_best_break(
 ) -> usize {
     // Search window: 80% to 120% of target chunk size
     let min_pos = ensure_char_boundary(text, start + (config.max_chars * 4 / 5));
-    let max_pos = ensure_char_boundary(text, std::cmp::min(start + (config.max_chars * 6 / 5), text.len()));
+    let max_pos = ensure_char_boundary(
+        text,
+        std::cmp::min(start + (config.max_chars * 6 / 5), text.len()),
+    );
 
     // Find break points in the window (all break points should already be on char boundaries)
     let candidates: Vec<&BreakPoint> = break_points
         .iter()
-        .filter(|p| p.position >= min_pos && p.position <= max_pos && text.is_char_boundary(p.position))
+        .filter(|p| {
+            p.position >= min_pos && p.position <= max_pos && text.is_char_boundary(p.position)
+        })
         .collect();
 
-    if let Some(best) = candidates
-        .iter()
-        .max_by_key(|p| p.priority as u8)
-    {
+    if let Some(best) = candidates.iter().max_by_key(|p| p.priority as u8) {
         return best.position;
     }
 
     // Fall back to word boundary using char_indices for safety
     if target < text.len() {
-        let search_start = ensure_char_boundary(text, if target > 50 { target - 50 } else { start });
+        let search_start =
+            ensure_char_boundary(text, if target > 50 { target - 50 } else { start });
         let search_end = ensure_char_boundary(text, std::cmp::min(target + 50, text.len()));
-        
+
         if search_start < search_end {
             let search_text = &text[search_start..search_end];
-            
+
             for (i, _) in search_text.rmatch_indices(' ') {
                 let pos = search_start + i + 1;
                 if pos >= min_pos && pos <= max_pos && text.is_char_boundary(pos) {
@@ -315,9 +315,9 @@ mod tests {
         let doc = make_test_doc("This is a short document.");
         let config = default_chunk_config();
         let doc_hash = compute_text_hash(&doc.text);
-        
+
         let chunks = chunk_document(&doc, &doc_hash, &config).unwrap();
-        
+
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].text, "This is a short document.");
         assert_eq!(chunks[0].index, 0);
@@ -329,9 +329,9 @@ mod tests {
         let doc = make_test_doc(&text);
         let config = default_chunk_config();
         let doc_hash = compute_text_hash(&doc.text);
-        
+
         let chunks = chunk_document(&doc, &doc_hash, &config).unwrap();
-        
+
         assert!(chunks.len() > 1);
         // Check chunks don't exceed max size
         for chunk in &chunks {
@@ -344,10 +344,10 @@ mod tests {
         let doc = make_test_doc("Test content for hashing.");
         let config = default_chunk_config();
         let doc_hash = compute_text_hash(&doc.text);
-        
+
         let chunks1 = chunk_document(&doc, &doc_hash, &config).unwrap();
         let chunks2 = chunk_document(&doc, &doc_hash, &config).unwrap();
-        
+
         assert_eq!(chunks1[0].hash, chunks2[0].hash);
     }
 
@@ -356,7 +356,7 @@ mod tests {
         let hash1 = compute_text_hash("hello world");
         let hash2 = compute_text_hash("hello world");
         let hash3 = compute_text_hash("different content");
-        
+
         assert_eq!(hash1, hash2);
         assert_ne!(hash1, hash3);
     }
@@ -365,10 +365,18 @@ mod tests {
     fn test_chunk_with_headings() {
         let mut doc = make_test_doc("# Title\n\nSome content here.\n\n## Section\n\nMore content.");
         doc.headings = vec![
-            Heading { level: 1, text: "Title".to_string(), position: 0 },
-            Heading { level: 2, text: "Section".to_string(), position: 30 },
+            Heading {
+                level: 1,
+                text: "Title".to_string(),
+                position: 0,
+            },
+            Heading {
+                level: 2,
+                text: "Section".to_string(),
+                position: 30,
+            },
         ];
-        
+
         let config = ChunkConfig {
             max_chars: 100,
             overlap_chars: 10,
@@ -376,9 +384,9 @@ mod tests {
             min_chars: 10,
         };
         let doc_hash = compute_text_hash(&doc.text);
-        
+
         let chunks = chunk_document(&doc, &doc_hash, &config).unwrap();
-        
+
         // Verify headings are captured
         for chunk in &chunks {
             // Each chunk should have appropriate headings

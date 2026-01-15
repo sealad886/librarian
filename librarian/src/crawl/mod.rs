@@ -8,17 +8,17 @@
 //! - Sitemap XML parsing
 //! - SPA detection and JavaScript rendering
 
-mod robots;
-mod rate_limit;
-mod sitemap;
 mod detection;
+mod rate_limit;
 mod renderer;
+mod robots;
+mod sitemap;
 
-pub use robots::*;
-pub use rate_limit::*;
-pub use sitemap::*;
 pub use detection::*;
+pub use rate_limit::*;
 pub use renderer::*;
+pub use robots::*;
+pub use sitemap::*;
 
 use crate::config::CrawlConfig;
 use crate::error::{Error, Result};
@@ -73,7 +73,9 @@ impl Crawler {
                 wait_for_selector: None,
                 sandbox: !config.js_no_sandbox,
             };
-            Some(Arc::new(tokio::sync::Mutex::new(HeadlessRenderer::new(renderer_config))))
+            Some(Arc::new(tokio::sync::Mutex::new(HeadlessRenderer::new(
+                renderer_config,
+            ))))
         } else {
             None
         };
@@ -91,7 +93,8 @@ impl Crawler {
     /// Fetch a single URL with automatic SPA detection and JS rendering fallback
     pub async fn fetch(&self, url: &str) -> Result<CrawledPage> {
         let parsed_url = Url::parse(url)?;
-        let host = parsed_url.host_str()
+        let host = parsed_url
+            .host_str()
             .ok_or_else(|| Error::Crawl("URL has no host".to_string()))?
             .to_string();
 
@@ -113,13 +116,14 @@ impl Crawler {
 
         // Initial fetch with plain HTTP
         let response = self.client.get(url).send().await?;
-        
+
         let status = response.status();
         if !status.is_success() {
             return Err(Error::Crawl(format!("HTTP {}: {}", status, url)));
         }
 
-        let content_type_header = response.headers()
+        let content_type_header = response
+            .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
@@ -135,7 +139,7 @@ impl Crawler {
         // For HTML pages, check if SPA rendering is needed
         if ct == ContentType::Html && self.config.auto_js_rendering {
             let analysis = analyze_page(&content, url);
-            
+
             if analysis.needs_js_rendering {
                 info!(
                     "SPA detected ({}, confidence: {:.0}%): {}",
@@ -146,7 +150,7 @@ impl Crawler {
                     analysis.confidence * 100.0,
                     url
                 );
-                
+
                 for indicator in &analysis.indicators {
                     debug!("  - {}", indicator);
                 }
@@ -163,32 +167,38 @@ impl Crawler {
                                 url,
                                 rendered.html.len()
                             );
-                            
+
                             // Parse the rendered HTML and extract hash routes
                             let parsed = parse_html(&rendered.html, Some(&rendered.url))?;
-                            
+
                             // Check for hash routes in rendered content
-                            let hash_routes = extract_hash_routes_from_rendered(&rendered.html, &rendered.url);
+                            let hash_routes =
+                                extract_hash_routes_from_rendered(&rendered.html, &rendered.url);
                             if !hash_routes.is_empty() {
-                                info!("Discovered {} hash routes in rendered page", hash_routes.len());
+                                info!(
+                                    "Discovered {} hash routes in rendered page",
+                                    hash_routes.len()
+                                );
                                 for route in &hash_routes {
                                     debug!("  Hash route: {}", route);
                                 }
                             }
-                            
+
                             // Convert hash routes to full URLs as links
                             let mut links = parsed.links;
                             for route in hash_routes {
-                                let hash_url = format!("{}#{}", 
+                                let hash_url = format!(
+                                    "{}#{}",
                                     parsed_url.origin().ascii_serialization(),
-                                    route);
+                                    route
+                                );
                                 links.push(ExtractedLink {
                                     url: hash_url,
                                     text: None,
                                     is_internal: true,
                                 });
                             }
-                            
+
                             return Ok(CrawledPage {
                                 url: rendered.url,
                                 content: rendered.html,
@@ -235,7 +245,7 @@ impl Crawler {
     /// Fetch a specific hash route (renders the page at that hash location)
     pub async fn fetch_hash_route(&self, base_url: &str, hash_route: &str) -> Result<CrawledPage> {
         let full_url = format!("{}#{}", base_url.trim_end_matches('/'), hash_route);
-        
+
         debug!("Fetching hash route: {}", full_url);
 
         if let Some(renderer) = &self.renderer {
@@ -243,14 +253,16 @@ impl Crawler {
             match renderer_guard.render(&full_url).await {
                 Ok(rendered) => {
                     let parsed = parse_html(&rendered.html, Some(&rendered.url))?;
-                    
+
                     // Extract more hash routes from this page
-                    let hash_routes = extract_hash_routes_from_rendered(&rendered.html, &rendered.url);
+                    let hash_routes =
+                        extract_hash_routes_from_rendered(&rendered.html, &rendered.url);
                     let mut links = parsed.links;
                     let base = Url::parse(base_url).ok();
                     for route in hash_routes {
                         if let Some(ref b) = base {
-                            let hash_url = format!("{}#{}", b.origin().ascii_serialization(), route);
+                            let hash_url =
+                                format!("{}#{}", b.origin().ascii_serialization(), route);
                             links.push(ExtractedLink {
                                 url: hash_url,
                                 text: None,
@@ -258,7 +270,7 @@ impl Crawler {
                             });
                         }
                     }
-                    
+
                     return Ok(CrawledPage {
                         url: full_url,
                         content: rendered.html,
@@ -269,12 +281,17 @@ impl Crawler {
                     });
                 }
                 Err(e) => {
-                    return Err(Error::Crawl(format!("Failed to render hash route {}: {}", full_url, e)));
+                    return Err(Error::Crawl(format!(
+                        "Failed to render hash route {}: {}",
+                        full_url, e
+                    )));
                 }
             }
         }
-        
-        Err(Error::Crawl("JS rendering not available for hash routes".to_string()))
+
+        Err(Error::Crawl(
+            "JS rendering not available for hash routes".to_string(),
+        ))
     }
 
     /// Close the renderer (call this when done crawling)
@@ -293,19 +310,18 @@ impl Crawler {
         callback: impl Fn(CrawledPage) -> bool + Send + Sync,
     ) -> Result<Vec<CrawledPage>> {
         let seed = Url::parse(seed_url)?;
-        let seed_host = seed.host_str()
+        let seed_host = seed
+            .host_str()
             .ok_or_else(|| Error::Crawl("Seed URL has no host".to_string()))?
             .to_string();
 
         // Determine allowed domains
-        let mut allowed_hosts: HashSet<String> = self.config.allowed_domains
-            .iter()
-            .cloned()
-            .collect();
+        let mut allowed_hosts: HashSet<String> =
+            self.config.allowed_domains.iter().cloned().collect();
         if allowed_hosts.is_empty() {
             allowed_hosts.insert(seed_host.clone());
         }
-        
+
         // Determine path prefix restriction
         // If not explicitly set, use the seed URL's path
         let path_prefix = self.config.path_prefix.clone().unwrap_or_else(|| {
@@ -323,7 +339,7 @@ impl Crawler {
                 }
             }
         });
-        
+
         if path_prefix != "/" {
             info!("Restricting crawl to path prefix: {}", path_prefix);
         }
@@ -333,7 +349,7 @@ impl Crawler {
 
         let mut results = Vec::new();
         let mut pages_crawled = 0u32;
-        
+
         // Track if we're crawling a hash-routed SPA
         let mut is_hash_routed_spa = false;
 
@@ -353,7 +369,7 @@ impl Crawler {
             } else {
                 normalize_url(&url)
             };
-            
+
             {
                 let mut visited = self.visited.write().await;
                 if visited.contains(&normalized) {
@@ -378,39 +394,42 @@ impl Crawler {
             } else {
                 self.fetch(&url).await
             };
-            
+
             match fetch_result {
                 Ok(mut page) => {
                     page.depth = depth;
-                    
+
                     // Check if we discovered hash routes - if so, switch to hash-aware mode
                     let has_hash_routes = page.links.iter().any(|l| l.url.contains("#/"));
                     if has_hash_routes && !is_hash_routed_spa {
                         info!("Detected hash-routed SPA, switching to hash-aware crawling");
                         is_hash_routed_spa = true;
                     }
-                    
+
                     // Queue internal links
                     for link in &page.links {
                         if !link.is_internal {
                             continue;
                         }
-                        
+
                         // Skip URLs that shouldn't be crawled
                         if !should_crawl_url(&link.url) {
                             continue;
                         }
-                        
+
                         if let Ok(link_url) = Url::parse(&link.url) {
                             if let Some(host) = link_url.host_str() {
                                 if allowed_hosts.contains(host) {
                                     // Check path prefix restriction
                                     let link_path = link_url.path();
                                     if !link_path.starts_with(&path_prefix) {
-                                        debug!("Skipping {} - outside path prefix {}", link.url, path_prefix);
+                                        debug!(
+                                            "Skipping {} - outside path prefix {}",
+                                            link.url, path_prefix
+                                        );
                                         continue;
                                     }
-                                    
+
                                     // Use hash-aware normalization for SPAs
                                     let link_normalized = if is_hash_routed_spa {
                                         normalize_url_with_hash(&link.url)
@@ -475,7 +494,8 @@ impl Crawler {
     async fn rate_limit(&self, host: &str) -> Result<()> {
         let limiter = {
             let mut limiters = self.rate_limiters.write().await;
-            limiters.entry(host.to_string())
+            limiters
+                .entry(host.to_string())
                 .or_insert_with(|| HostRateLimiter::new(self.config.rate_limit_per_host))
                 .clone()
         };
@@ -499,7 +519,7 @@ pub fn normalize_url_with_hash(url: &str) -> String {
 fn normalize_url_impl(url: &str, preserve_hash_routes: bool) -> String {
     if let Ok(parsed) = Url::parse(url) {
         let mut normalized = parsed.clone();
-        
+
         // Handle fragment
         if let Some(fragment) = parsed.fragment() {
             // Check if this looks like a hash route (starts with /)
@@ -510,7 +530,7 @@ fn normalize_url_impl(url: &str, preserve_hash_routes: bool) -> String {
                 normalized.set_fragment(None);
             }
         }
-        
+
         // Remove trailing slash from path
         let path = parsed.path().trim_end_matches('/');
         if path.is_empty() {
@@ -521,7 +541,7 @@ fn normalize_url_impl(url: &str, preserve_hash_routes: bool) -> String {
 
         // Sort query parameters for consistency
         // (simplified - full implementation would parse and sort)
-        
+
         normalized.to_string()
     } else {
         url.to_string()
@@ -531,14 +551,28 @@ fn normalize_url_impl(url: &str, preserve_hash_routes: bool) -> String {
 /// Check if a URL should be crawled based on patterns
 pub fn should_crawl_url(url: &str) -> bool {
     let lower = url.to_lowercase();
-    
+
     // Skip common non-document URLs
     let skip_patterns = [
-        "/login", "/logout", "/signin", "/signout", "/register",
-        "/admin", "/wp-admin", "/api/", "/cgi-bin/",
-        ".xml", ".json", ".rss", ".atom",
-        "javascript:", "mailto:", "tel:",
-        "?page=", "?sort=", "?filter=",
+        "/login",
+        "/logout",
+        "/signin",
+        "/signout",
+        "/register",
+        "/admin",
+        "/wp-admin",
+        "/api/",
+        "/cgi-bin/",
+        ".xml",
+        ".json",
+        ".rss",
+        ".atom",
+        "javascript:",
+        "mailto:",
+        "tel:",
+        "?page=",
+        "?sort=",
+        "?filter=",
     ];
 
     for pattern in skip_patterns {
@@ -546,7 +580,7 @@ pub fn should_crawl_url(url: &str) -> bool {
             return false;
         }
     }
-    
+
     // Skip plain anchor fragments (but NOT hash routes like #/path)
     if let Some(hash_idx) = lower.find('#') {
         let after_hash = &lower[hash_idx + 1..];
@@ -587,7 +621,7 @@ mod tests {
             "https://example.com/"
         );
     }
-    
+
     #[test]
     fn test_normalize_url_with_hash_routes() {
         // Hash routes should be preserved when using hash-aware normalization

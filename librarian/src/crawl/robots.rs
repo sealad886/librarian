@@ -32,11 +32,11 @@ impl RobotsRules {
 
         let mut matcher = DefaultMatcher::default();
         let allowed = matcher.one_agent_allowed_by_robots(&self.content, user_agent, path);
-        
+
         if !allowed {
             debug!("robots.txt disallows {} for {}", path, user_agent);
         }
-        
+
         allowed
     }
 
@@ -50,11 +50,11 @@ impl RobotsRules {
 
         for line in self.content.lines() {
             let line = line.trim();
-            
+
             if line.starts_with("User-agent:") {
                 current_agent = Some(line.trim_start_matches("User-agent:").trim().to_lowercase());
             }
-            
+
             if line.starts_with("Crawl-delay:") {
                 if let Some(ref agent) = current_agent {
                     if let Some(delay_str) = line.strip_prefix("Crawl-delay:") {
@@ -96,7 +96,7 @@ User-agent: BadBot
 Disallow: /
 "#;
         let rules = RobotsRules::parse(content);
-        
+
         assert!(rules.is_allowed("/public/page", "GoodBot"));
         assert!(!rules.is_allowed("/admin/secret", "GoodBot"));
         assert!(!rules.is_allowed("/anything", "BadBot"));
@@ -112,7 +112,7 @@ User-agent: SpecialBot
 Crawl-delay: 1.0
 "#;
         let rules = RobotsRules::parse(content);
-        
+
         assert_eq!(rules.crawl_delay("SpecialBot"), Some(1.0));
         assert_eq!(rules.crawl_delay("RandomBot"), Some(2.5));
     }

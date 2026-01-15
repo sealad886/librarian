@@ -1,6 +1,6 @@
 //! HTML parsing and text extraction
 
-use super::{CodeBlock, ContentType, ExtractedLink, Heading, ParsedDocument, normalize_whitespace};
+use super::{normalize_whitespace, CodeBlock, ContentType, ExtractedLink, Heading, ParsedDocument};
 use crate::error::Result;
 use scraper::{Html, Selector};
 use url::Url;
@@ -26,8 +26,7 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
         .unwrap_or_else(|| content.to_string());
 
     // Use html2text for main content extraction
-    let text = html2text::from_read(root.as_bytes(), 80)
-        .unwrap_or_else(|_| root.clone());
+    let text = html2text::from_read(root.as_bytes(), 80).unwrap_or_else(|_| root.clone());
     doc.text = normalize_whitespace(&text);
 
     // Extract headings
@@ -55,15 +54,16 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
     if let Ok(selector) = Selector::parse("pre code, pre") {
         for elem in document.select(&selector) {
             let code_text = elem.text().collect::<String>();
-            let language = elem
-                .value()
-                .attr("class")
-                .and_then(|c| {
-                    c.split_whitespace()
-                        .find(|cls| cls.starts_with("language-") || cls.starts_with("lang-"))
-                        .map(|cls| cls.trim_start_matches("language-").trim_start_matches("lang-").to_string())
-                });
-            
+            let language = elem.value().attr("class").and_then(|c| {
+                c.split_whitespace()
+                    .find(|cls| cls.starts_with("language-") || cls.starts_with("lang-"))
+                    .map(|cls| {
+                        cls.trim_start_matches("language-")
+                            .trim_start_matches("lang-")
+                            .to_string()
+                    })
+            });
+
             let position = doc.text.find(&code_text).unwrap_or(0);
             doc.code_blocks.push(CodeBlock {
                 language,
@@ -76,15 +76,21 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
     // Extract links
     if let Ok(selector) = Selector::parse("a[href]") {
         let base = base_url.and_then(|u| Url::parse(u).ok());
-        
+
         for elem in document.select(&selector) {
             if let Some(href) = elem.value().attr("href") {
                 let link_text = elem.text().collect::<String>().trim().to_string();
-                let link_text = if link_text.is_empty() { None } else { Some(link_text) };
+                let link_text = if link_text.is_empty() {
+                    None
+                } else {
+                    Some(link_text)
+                };
 
                 // Resolve relative URLs
                 let url = if let Some(ref base) = base {
-                    base.join(href).map(|u| u.to_string()).unwrap_or_else(|_| href.to_string())
+                    base.join(href)
+                        .map(|u| u.to_string())
+                        .unwrap_or_else(|_| href.to_string())
                 } else {
                     href.to_string()
                 };
@@ -114,8 +120,7 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
 
 /// Extract just the text content from HTML (simpler version)
 pub fn extract_text_from_html(content: &str) -> String {
-    let text = html2text::from_read(content.as_bytes(), 80)
-        .unwrap_or_else(|_| content.to_string());
+    let text = html2text::from_read(content.as_bytes(), 80).unwrap_or_else(|_| content.to_string());
     normalize_whitespace(&text)
 }
 
@@ -141,7 +146,7 @@ mod tests {
         "#;
 
         let doc = parse_html(html, Some("https://example.com")).unwrap();
-        
+
         assert_eq!(doc.title, Some("Test Page".to_string()));
         assert!(doc.text.contains("Main Heading"));
         assert!(doc.text.contains("paragraph text"));
@@ -161,7 +166,7 @@ mod tests {
         "#;
 
         let doc = parse_html(html, Some("https://example.com")).unwrap();
-        
+
         assert_eq!(doc.links.len(), 3);
         assert!(doc.links[0].is_internal);
         assert!(!doc.links[1].is_internal);

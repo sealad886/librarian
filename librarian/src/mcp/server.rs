@@ -170,8 +170,7 @@ impl McpServer {
 
         debug!("Calling tool: {} with args: {:?}", name, arguments);
 
-        let result =
-            handle_tool_call(&name, &arguments, &self.config, &self.db, &self.store).await;
+        let result = handle_tool_call(&name, &arguments, &self.config, &self.db, &self.store).await;
 
         McpResponse::success(
             id,

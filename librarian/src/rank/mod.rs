@@ -63,7 +63,11 @@ impl Ranker {
     /// Rank results using vector scores only
     pub fn rank_vector_only(&self, results: Vec<SearchResult>) -> Vec<RankedResult> {
         let mut ranked: Vec<RankedResult> = results.into_iter().map(RankedResult::from).collect();
-        ranked.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         ranked
     }
 
@@ -78,28 +82,35 @@ impl Ranker {
             .map(|r| {
                 let mut result = RankedResult::from(r);
                 result.bm25_score = bm25_scores.get(&result.id).copied();
-                
+
                 // Combine scores
                 let bm25 = result.bm25_score.unwrap_or(0.0);
                 result.score = self.vector_weight * result.vector_score + self.bm25_weight * bm25;
-                
+
                 result
             })
             .collect();
 
-        ranked.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         ranked
     }
 
     /// Filter results by minimum score
     pub fn filter_by_score(&self, results: Vec<RankedResult>, min_score: f32) -> Vec<RankedResult> {
-        results.into_iter().filter(|r| r.score >= min_score).collect()
+        results
+            .into_iter()
+            .filter(|r| r.score >= min_score)
+            .collect()
     }
 
     /// Deduplicate results by doc_uri (keep highest scoring chunk per doc)
     pub fn dedupe_by_doc(&self, results: Vec<RankedResult>) -> Vec<RankedResult> {
         let mut by_doc: HashMap<String, RankedResult> = HashMap::new();
-        
+
         for result in results {
             let entry = by_doc.entry(result.doc_uri.clone());
             match entry {
@@ -115,7 +126,11 @@ impl Ranker {
         }
 
         let mut deduped: Vec<RankedResult> = by_doc.into_values().collect();
-        deduped.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        deduped.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         deduped
     }
 }
@@ -140,7 +155,7 @@ impl Bm25Scorer {
         for term in query_terms {
             let term_lower = term.to_lowercase();
             let tf = doc_lower.matches(&term_lower).count() as f32;
-            
+
             if tf > 0.0 {
                 // Simplified BM25 - assumes single document collection
                 let idf = 1.0; // Would need corpus statistics for real IDF
@@ -203,7 +218,7 @@ mod tests {
         ];
 
         let ranked = ranker.rank_vector_only(results);
-        
+
         assert_eq!(ranked[0].id, "2");
         assert_eq!(ranked[1].id, "3");
         assert_eq!(ranked[2].id, "1");
@@ -220,16 +235,19 @@ mod tests {
 
         let ranked = ranker.rank_vector_only(results);
         let deduped = ranker.dedupe_by_doc(ranked);
-        
+
         assert_eq!(deduped.len(), 2);
-        assert_eq!(deduped.iter().find(|r| r.doc_uri == "/doc1").unwrap().score, 0.9);
+        assert_eq!(
+            deduped.iter().find(|r| r.doc_uri == "/doc1").unwrap().score,
+            0.9
+        );
     }
 
     #[test]
     fn test_bm25_tokenize() {
         let scorer = Bm25Scorer::new();
         let terms = scorer.tokenize("How to configure X?");
-        
+
         assert!(terms.contains(&"how".to_string()));
         assert!(terms.contains(&"configure".to_string()));
         assert!(!terms.contains(&"to".to_string())); // Too short
@@ -239,10 +257,10 @@ mod tests {
     fn test_bm25_score() {
         let scorer = Bm25Scorer::new();
         let terms = scorer.tokenize("rust programming");
-        
+
         let score1 = scorer.score(&terms, "Rust is a systems programming language", 100.0);
         let score2 = scorer.score(&terms, "Python is great", 100.0);
-        
+
         assert!(score1 > score2);
     }
 }

@@ -24,7 +24,7 @@ impl HostRateLimiter {
     /// Create a new rate limiter for the given requests per second
     pub fn new(requests_per_second: f64) -> Self {
         let interval_ms = (1000.0 / requests_per_second) as u64;
-        
+
         Self {
             inner: Arc::new(Mutex::new(RateLimiterInner {
                 last_request: None,
@@ -36,7 +36,7 @@ impl HostRateLimiter {
     /// Wait until the next request is allowed
     pub async fn wait(&self) {
         let mut inner = self.inner.lock().await;
-        
+
         if let Some(last) = inner.last_request {
             let elapsed = last.elapsed();
             if elapsed < inner.min_interval {
@@ -45,14 +45,18 @@ impl HostRateLimiter {
                 tokio::time::sleep(wait_time).await;
             }
         }
-        
+
         inner.last_request = Some(Instant::now());
     }
 }
 
 /// Global rate limiter for all requests
 pub struct GlobalRateLimiter {
-    limiter: RateLimiter<governor::state::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>,
+    limiter: RateLimiter<
+        governor::state::NotKeyed,
+        governor::state::InMemoryState,
+        governor::clock::DefaultClock,
+    >,
 }
 
 impl GlobalRateLimiter {
@@ -61,7 +65,7 @@ impl GlobalRateLimiter {
         let rps = NonZeroU32::new(requests_per_second).unwrap_or(nonzero!(1u32));
         let quota = Quota::per_second(rps);
         let limiter = RateLimiter::direct(quota);
-        
+
         Self { limiter }
     }
 
@@ -79,13 +83,13 @@ mod tests {
     #[tokio::test]
     async fn test_host_rate_limiter() {
         let limiter = HostRateLimiter::new(10.0); // 10 req/s = 100ms between requests
-        
+
         let start = Instant::now();
         limiter.wait().await;
         limiter.wait().await;
         limiter.wait().await;
         let elapsed = start.elapsed();
-        
+
         // Should take at least 200ms for 3 requests (2 intervals)
         assert!(elapsed >= Duration::from_millis(180));
     }
@@ -93,7 +97,7 @@ mod tests {
     #[tokio::test]
     async fn test_global_rate_limiter() {
         let limiter = GlobalRateLimiter::new(100);
-        
+
         // Should be able to make many requests quickly
         for _ in 0..10 {
             limiter.wait().await;

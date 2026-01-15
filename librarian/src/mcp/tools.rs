@@ -143,11 +143,7 @@ async fn handle_search(
             output.push_str(&format!("Found {} results:\n\n", result.results.len()));
 
             for (i, r) in result.results.iter().enumerate() {
-                output.push_str(&format!(
-                    "## Result {} (score: {:.2})\n",
-                    i + 1,
-                    r.score
-                ));
+                output.push_str(&format!("## Result {} (score: {:.2})\n", i + 1, r.score));
                 output.push_str(&format!("**Source:** {}\n", r.doc_uri));
                 if let Some(title) = &r.title {
                     output.push_str(&format!("**Title:** {}\n", title));

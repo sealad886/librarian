@@ -74,7 +74,10 @@ impl McpError {
     }
 
     pub fn method_not_found(method: &str) -> Self {
-        Self::new(ErrorCode::MethodNotFound, format!("Method not found: {}", method))
+        Self::new(
+            ErrorCode::MethodNotFound,
+            format!("Method not found: {}", method),
+        )
     }
 
     pub fn invalid_params(msg: impl Into<String>) -> Self {
@@ -168,22 +171,22 @@ impl<'de> Deserialize<'de> for McpMessage {
         D: serde::Deserializer<'de>,
     {
         let value = Value::deserialize(deserializer)?;
-        
+
         // Check for error field (response)
         if value.get("error").is_some() || value.get("result").is_some() {
-            let resp: McpResponse = serde_json::from_value(value)
-                .map_err(serde::de::Error::custom)?;
+            let resp: McpResponse =
+                serde_json::from_value(value).map_err(serde::de::Error::custom)?;
             return Ok(McpMessage::Response(resp));
         }
-        
+
         // Check for id field (request vs notification)
         if value.get("id").is_some() {
-            let req: McpRequest = serde_json::from_value(value)
-                .map_err(serde::de::Error::custom)?;
+            let req: McpRequest =
+                serde_json::from_value(value).map_err(serde::de::Error::custom)?;
             Ok(McpMessage::Request(req))
         } else {
-            let notif: McpNotification = serde_json::from_value(value)
-                .map_err(serde::de::Error::custom)?;
+            let notif: McpNotification =
+                serde_json::from_value(value).map_err(serde::de::Error::custom)?;
             Ok(McpMessage::Notification(notif))
         }
     }

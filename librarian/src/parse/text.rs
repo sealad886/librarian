@@ -1,20 +1,24 @@
 //! Plain text parsing
 
-use super::{ContentType, ParsedDocument, normalize_whitespace};
+use super::{normalize_whitespace, ContentType, ParsedDocument};
 
 /// Parse plain text content
 pub fn parse_plain_text(content: &str) -> ParsedDocument {
     let text = normalize_whitespace(content);
-    
+
     // Try to extract a title from the first line
-    let title = text.lines().next().map(|line| {
-        let trimmed = line.trim();
-        if trimmed.len() < 100 && !trimmed.is_empty() {
-            Some(trimmed.to_string())
-        } else {
-            None
-        }
-    }).flatten();
+    let title = text
+        .lines()
+        .next()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.len() < 100 && !trimmed.is_empty() {
+                Some(trimmed.to_string())
+            } else {
+                None
+            }
+        })
+        .flatten();
 
     ParsedDocument {
         title,
@@ -59,7 +63,7 @@ pub fn clean_for_embedding(text: &str) -> String {
     // Collapse multiple spaces
     let mut final_result = String::with_capacity(result.len());
     let mut last_was_space = false;
-    
+
     for c in result.chars() {
         if c == ' ' {
             if !last_was_space {
@@ -83,7 +87,7 @@ mod tests {
     fn test_parse_plain_text() {
         let text = "Title Line\n\nSome content here.\n\nMore content.";
         let doc = parse_plain_text(text);
-        
+
         assert_eq!(doc.title, Some("Title Line".to_string()));
         assert!(doc.text.contains("content"));
     }

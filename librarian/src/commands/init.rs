@@ -10,7 +10,7 @@ use tracing::info;
 /// Initialize librarian configuration and database
 pub async fn cmd_init(base_dir: Option<PathBuf>, force: bool) -> Result<()> {
     let mut config = Config::default();
-    
+
     if let Some(dir) = base_dir {
         config.paths.base_dir = dir.clone();
         config.paths.config_file = dir.join("config.toml");
@@ -25,7 +25,7 @@ pub async fn cmd_init(base_dir: Option<PathBuf>, force: bool) -> Result<()> {
     // Check if already initialized
     if config.paths.config_file.exists() && !force {
         return Err(Error::AlreadyInitialized(
-            config.paths.base_dir.display().to_string()
+            config.paths.base_dir.display().to_string(),
         ));
     }
 
@@ -46,18 +46,20 @@ pub async fn cmd_init(base_dir: Option<PathBuf>, force: bool) -> Result<()> {
 
     // Try to connect to Qdrant and create collection
     match QdrantStore::connect(&config).await {
-        Ok(store) => {
-            match store.ensure_collection().await {
-                Ok(_) => info!("Qdrant collection '{}' ready", config.collection_name),
-                Err(e) => {
-                    tracing::warn!("Could not create Qdrant collection: {}. You can create it later.", e);
-                }
+        Ok(store) => match store.ensure_collection().await {
+            Ok(_) => info!("Qdrant collection '{}' ready", config.collection_name),
+            Err(e) => {
+                tracing::warn!(
+                    "Could not create Qdrant collection: {}. You can create it later.",
+                    e
+                );
             }
-        }
+        },
         Err(e) => {
             tracing::warn!(
                 "Could not connect to Qdrant at {}: {}. Make sure Qdrant is running.",
-                config.qdrant_url, e
+                config.qdrant_url,
+                e
             );
         }
     }

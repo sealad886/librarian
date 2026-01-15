@@ -8,7 +8,7 @@ use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
     let parser = Parser::new(content);
     let mut doc = ParsedDocument::new(String::new(), ContentType::Markdown);
-    
+
     let mut text_parts: Vec<String> = Vec::new();
     let mut current_heading: Option<(u8, Vec<String>)> = None;
     let mut in_code_block = false;
@@ -31,13 +31,13 @@ pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
                         if doc.title.is_none() && level == 1 {
                             doc.title = Some(heading_text.clone());
                         }
-                        
+
                         doc.headings.push(Heading {
                             level,
                             text: heading_text.clone(),
                             position: char_position,
                         });
-                        
+
                         text_parts.push(format!("\n{}\n", heading_text));
                         char_position += heading_text.len() + 2;
                     }
@@ -48,7 +48,11 @@ pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
                 code_language = match kind {
                     pulldown_cmark::CodeBlockKind::Fenced(lang) => {
                         let lang_str = lang.to_string();
-                        if lang_str.is_empty() { None } else { Some(lang_str) }
+                        if lang_str.is_empty() {
+                            None
+                        } else {
+                            Some(lang_str)
+                        }
                     }
                     pulldown_cmark::CodeBlockKind::Indented => None,
                 };
@@ -73,10 +77,14 @@ pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
             Event::End(TagEnd::Link) => {
                 if let Some(url) = current_link_url.take() {
                     let link_text = current_link_text.join("");
-                    let link_text = if link_text.is_empty() { None } else { Some(link_text) };
-                    
+                    let link_text = if link_text.is_empty() {
+                        None
+                    } else {
+                        Some(link_text)
+                    };
+
                     let is_internal = !url.contains("://") || url.starts_with('#');
-                    
+
                     doc.links.push(ExtractedLink {
                         url,
                         text: link_text,
@@ -87,7 +95,7 @@ pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
             }
             Event::Text(text) => {
                 let text_str = text.to_string();
-                
+
                 if let Some((_, ref mut parts)) = current_heading {
                     parts.push(text_str.clone());
                 } else if in_code_block {
@@ -181,7 +189,7 @@ fn main() {
 "#;
 
         let doc = parse_markdown(markdown).unwrap();
-        
+
         assert_eq!(doc.title, Some("Main Title".to_string()));
         assert!(doc.text.contains("paragraph"));
         assert!(doc.headings.len() >= 3);
@@ -194,7 +202,7 @@ fn main() {
     fn test_heading_hierarchy() {
         let markdown = "# H1\n## H2\n### H3\n## Another H2";
         let doc = parse_markdown(markdown).unwrap();
-        
+
         assert_eq!(doc.headings.len(), 4);
         assert_eq!(doc.headings[0].level, 1);
         assert_eq!(doc.headings[1].level, 2);
@@ -206,7 +214,7 @@ fn main() {
     fn test_code_blocks() {
         let markdown = "```python\nprint('hello')\n```\n\n```\nplain code\n```";
         let doc = parse_markdown(markdown).unwrap();
-        
+
         assert_eq!(doc.code_blocks.len(), 2);
         assert_eq!(doc.code_blocks[0].language, Some("python".to_string()));
         assert_eq!(doc.code_blocks[1].language, None);

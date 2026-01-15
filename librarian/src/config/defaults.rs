@@ -67,7 +67,10 @@ pub fn default_crawl_rate_limit() -> f64 {
 
 /// Default user agent
 pub fn default_crawl_user_agent() -> String {
-    format!("librarian/{} (Documentation Indexer)", env!("CARGO_PKG_VERSION"))
+    format!(
+        "librarian/{} (Documentation Indexer)",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 /// Default request timeout in seconds

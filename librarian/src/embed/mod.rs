@@ -20,10 +20,10 @@ use async_trait::async_trait;
 pub trait Embedder: Send + Sync {
     /// Embed a batch of texts
     async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>>;
-    
+
     /// Get the embedding dimension
     fn dimension(&self) -> usize;
-    
+
     /// Get the model name
     fn model_name(&self) -> &str;
 }
@@ -35,11 +35,11 @@ pub fn create_embedder(config: &EmbeddingConfig) -> Result<Box<dyn Embedder>> {
         let embedder = FastEmbedder::new(config)?;
         Ok(Box::new(embedder))
     }
-    
+
     #[cfg(not(feature = "local-embed"))]
     {
         Err(Error::Embedding(
-            "No embedding backend available. Enable 'local-embed' feature.".to_string()
+            "No embedding backend available. Enable 'local-embed' feature.".to_string(),
         ))
     }
 }
@@ -51,20 +51,18 @@ pub async fn embed_in_batches(
     batch_size: usize,
 ) -> Result<Vec<Vec<f32>>> {
     let mut all_embeddings = Vec::with_capacity(texts.len());
-    
+
     for chunk in texts.chunks(batch_size) {
         let batch_texts: Vec<String> = chunk.to_vec();
         let embeddings = embedder.embed(batch_texts).await?;
         all_embeddings.extend(embeddings);
     }
-    
+
     Ok(all_embeddings)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Note: Real embedding tests require model download
     // These are basic structural tests
 
@@ -72,7 +70,7 @@ mod tests {
     fn test_batch_splitting() {
         let texts: Vec<String> = (0..10).map(|i| format!("text {}", i)).collect();
         let chunks: Vec<_> = texts.chunks(3).collect();
-        
+
         assert_eq!(chunks.len(), 4); // 3 + 3 + 3 + 1
         assert_eq!(chunks[0].len(), 3);
         assert_eq!(chunks[3].len(), 1);

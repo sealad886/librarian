@@ -83,7 +83,7 @@ mod browser_impl {
             info!("Launching headless Chrome browser...");
 
             let mut builder = BrowserConfig::builder();
-            
+
             // chromiumoxide defaults to headless mode
             // Only call with_head() if we explicitly want a visible browser
             if !self.config.headless {
@@ -110,14 +110,15 @@ mod browser_impl {
                 .arg("--disable-ipc-flooding-protection")
                 // Run completely silently in background
                 .arg("--silent-launch")
-                .arg("--bwsi")  // Browse without sign-in
+                .arg("--bwsi") // Browse without sign-in
                 .arg("--disable-sync")
                 .arg("--disable-translate")
                 .arg("--disable-popup-blocking")
                 .arg("--disable-infobars")
                 .arg("--disable-notifications");
 
-            let browser_config = builder.build()
+            let browser_config = builder
+                .build()
                 .map_err(|e| Error::Crawl(format!("Failed to build browser config: {}", e)))?;
 
             let (browser, mut handler) = Browser::launch(browser_config)
@@ -148,11 +149,13 @@ mod browser_impl {
             debug!("Rendering page with headless browser: {}", url);
 
             let browser_guard = self.browser.lock().await;
-            let browser = browser_guard.as_ref()
+            let browser = browser_guard
+                .as_ref()
                 .ok_or_else(|| Error::Crawl("Browser not initialized".to_string()))?;
 
             // Create new page/tab
-            let page = browser.new_page(url)
+            let page = browser
+                .new_page(url)
                 .await
                 .map_err(|e| Error::Crawl(format!("Failed to create page: {}", e)))?;
 
@@ -179,19 +182,22 @@ mod browser_impl {
             }
 
             // Get final URL (after redirects)
-            let final_url = page.url()
+            let final_url = page
+                .url()
                 .await
                 .map_err(|e| Error::Crawl(format!("Failed to get URL: {}", e)))?
                 .map(|u| u.to_string())
                 .unwrap_or_else(|| url.to_string());
 
             // Get rendered HTML
-            let html = page.content()
+            let html = page
+                .content()
                 .await
                 .map_err(|e| Error::Crawl(format!("Failed to get content: {}", e)))?;
 
             // Get page title
-            let title = page.evaluate("document.title")
+            let title = page
+                .evaluate("document.title")
                 .await
                 .ok()
                 .and_then(|v| v.into_value::<String>().ok())
@@ -217,7 +223,9 @@ mod browser_impl {
         pub async fn close(&self) -> Result<()> {
             let mut browser_guard = self.browser.lock().await;
             if let Some(mut browser) = browser_guard.take() {
-                browser.close().await
+                browser
+                    .close()
+                    .await
                     .map_err(|e| Error::Crawl(format!("Failed to close browser: {}", e)))?;
             }
 

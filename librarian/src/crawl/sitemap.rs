@@ -52,50 +52,61 @@ impl SitemapParser {
     /// Parse a sitemap URL and return all page URLs
     pub async fn parse(&self, sitemap_url: &str) -> Result<Vec<SitemapEntry>> {
         info!("Parsing sitemap: {}", sitemap_url);
-        
+
         let mut all_entries = Vec::new();
         let mut sitemaps_processed = 0;
-        
+
         // Start with the initial sitemap
         let mut sitemap_queue = vec![sitemap_url.to_string()];
-        
+
         while let Some(url) = sitemap_queue.pop() {
             if sitemaps_processed >= self.max_sitemaps {
-                warn!("Reached max sitemap limit ({}), stopping", self.max_sitemaps);
+                warn!(
+                    "Reached max sitemap limit ({}), stopping",
+                    self.max_sitemaps
+                );
                 break;
             }
-            
+
             match self.fetch_and_parse(&url).await {
                 Ok(ParseResult::UrlSet(entries)) => {
                     debug!("Found {} URLs in sitemap: {}", entries.len(), url);
                     all_entries.extend(entries);
                 }
                 Ok(ParseResult::SitemapIndex(sitemaps)) => {
-                    debug!("Found sitemap index with {} sitemaps: {}", sitemaps.len(), url);
+                    debug!(
+                        "Found sitemap index with {} sitemaps: {}",
+                        sitemaps.len(),
+                        url
+                    );
                     sitemap_queue.extend(sitemaps);
                 }
                 Err(e) => {
                     warn!("Failed to parse sitemap {}: {}", url, e);
                 }
             }
-            
+
             sitemaps_processed += 1;
         }
-        
-        info!("Parsed {} URLs from {} sitemaps", all_entries.len(), sitemaps_processed);
+
+        info!(
+            "Parsed {} URLs from {} sitemaps",
+            all_entries.len(),
+            sitemaps_processed
+        );
         Ok(all_entries)
     }
 
     /// Fetch and parse a single sitemap
     async fn fetch_and_parse(&self, url: &str) -> Result<ParseResult> {
         let response = self.client.get(url).send().await?;
-        
+
         if !response.status().is_success() {
             return Err(Error::Crawl(format!("HTTP {}: {}", response.status(), url)));
         }
-        
+
         let content = response.text().await?;
-        
+
         // Detect sitemap type and parse
         if content.contains("<sitemapindex") {
             self.parse_sitemap_index(&content)
@@ -110,13 +121,13 @@ impl SitemapParser {
     /// Parse a urlset sitemap
     fn parse_urlset(&self, content: &str) -> Result<ParseResult> {
         let mut entries = Vec::new();
-        
+
         // Simple XML parsing using string operations
         // A full XML parser would be better but this keeps dependencies minimal
         for url_block in content.split("<url>").skip(1) {
             if let Some(end) = url_block.find("</url>") {
                 let block = &url_block[..end];
-                
+
                 let loc = extract_tag(block, "loc");
                 if let Some(loc) = loc {
                     // Validate URL
@@ -125,25 +136,24 @@ impl SitemapParser {
                             loc,
                             lastmod: extract_tag(block, "lastmod"),
                             changefreq: extract_tag(block, "changefreq"),
-                            priority: extract_tag(block, "priority")
-                                .and_then(|s| s.parse().ok()),
+                            priority: extract_tag(block, "priority").and_then(|s| s.parse().ok()),
                         });
                     }
                 }
             }
         }
-        
+
         Ok(ParseResult::UrlSet(entries))
     }
 
     /// Parse a sitemap index
     fn parse_sitemap_index(&self, content: &str) -> Result<ParseResult> {
         let mut sitemaps = Vec::new();
-        
+
         for sitemap_block in content.split("<sitemap>").skip(1) {
             if let Some(end) = sitemap_block.find("</sitemap>") {
                 let block = &sitemap_block[..end];
-                
+
                 if let Some(loc) = extract_tag(block, "loc") {
                     if Url::parse(&loc).is_ok() {
                         sitemaps.push(loc);
@@ -151,14 +161,14 @@ impl SitemapParser {
                 }
             }
         }
-        
+
         Ok(ParseResult::SitemapIndex(sitemaps))
     }
 
     /// Parse plain text list of URLs
     fn parse_plain_text(&self, content: &str) -> Result<ParseResult> {
         let mut entries = Vec::new();
-        
+
         for line in content.lines() {
             let line = line.trim();
             if line.starts_with("http://") || line.starts_with("https://") {
@@ -172,7 +182,7 @@ impl SitemapParser {
                 }
             }
         }
-        
+
         Ok(ParseResult::UrlSet(entries))
     }
 }
@@ -189,14 +199,12 @@ enum ParseResult {
 fn extract_tag(content: &str, tag: &str) -> Option<String> {
     let start_tag = format!("<{}>", tag);
     let end_tag = format!("</{}>", tag);
-    
+
     content.find(&start_tag).and_then(|start| {
         let value_start = start + start_tag.len();
-        content[value_start..].find(&end_tag).map(|end| {
-            content[value_start..value_start + end]
-                .trim()
-                .to_string()
-        })
+        content[value_start..]
+            .find(&end_tag)
+            .map(|end| content[value_start..value_start + end].trim().to_string())
     })
 }
 
@@ -207,7 +215,10 @@ mod tests {
     #[test]
     fn test_extract_tag() {
         let xml = "<loc>https://example.com/page</loc>";
-        assert_eq!(extract_tag(xml, "loc"), Some("https://example.com/page".to_string()));
+        assert_eq!(
+            extract_tag(xml, "loc"),
+            Some("https://example.com/page".to_string())
+        );
     }
 
     #[test]
@@ -226,7 +237,7 @@ mod tests {
             </url>
         </urlset>
         "#;
-        
+
         let result = parser.parse_urlset(xml).unwrap();
         if let ParseResult::UrlSet(entries) = result {
             assert_eq!(entries.len(), 2);

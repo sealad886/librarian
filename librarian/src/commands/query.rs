@@ -50,13 +50,15 @@ pub async fn cmd_query(
     // Create embedder and embed query
     let embedder = create_embedder(&config.embedding)?;
     let query_embeddings = embedder.embed(vec![query.to_string()]).await?;
-    let query_vector = query_embeddings.into_iter().next()
+    let query_vector = query_embeddings
+        .into_iter()
+        .next()
         .ok_or_else(|| crate::error::Error::Embedding("No embedding returned".to_string()))?;
 
     // Build search filter
-    let filter = if options.source_ids.is_some() 
-        || options.source_types.is_some() 
-        || options.path_prefix.is_some() 
+    let filter = if options.source_ids.is_some()
+        || options.source_types.is_some()
+        || options.path_prefix.is_some()
     {
         Some(SearchFilter {
             source_ids: options.source_ids,
@@ -110,11 +112,11 @@ pub fn print_query_results(result: &QueryResult) {
 
     for (i, r) in result.results.iter().enumerate() {
         println!("{}. [score: {:.3}] {}", i + 1, r.score, r.doc_uri);
-        
+
         if let Some(title) = &r.title {
             println!("   Title: {}", title);
         }
-        
+
         if let Some(headings) = &r.headings {
             if !headings.is_empty() {
                 println!("   Section: {}", headings.join(" > "));
