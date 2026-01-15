@@ -130,6 +130,29 @@ enum Commands {
         #[arg(value_enum)]
         shell: Shell,
     },
+
+    /// Manage Qdrant vector database
+    Db {
+        #[command(subcommand)]
+        action: DbAction,
+    },
+}
+
+/// Database management actions
+#[derive(Subcommand)]
+enum DbAction {
+    /// Initialize/create the Qdrant collection
+    Init,
+
+    /// Show Qdrant collection status
+    Status,
+
+    /// Reset the collection (delete all vectors and recreate)
+    Reset {
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -222,6 +245,42 @@ async fn run() -> Result<()> {
     if let Commands::Completions { shell } = cli.command {
         let mut cmd = Cli::command();
         generate(shell, &mut cmd, "librarian", &mut std::io::stdout());
+        // Print instructions for dynamic source_id completions
+        eprintln!();
+        eprintln!("Note: For dynamic source ID completion, add this to your shell config:");
+        match shell {
+            Shell::Bash => {
+                eprintln!();
+                eprintln!(r#"# Dynamic completion for 'librarian remove' source IDs"#);
+                eprintln!(r#"_librarian_source_ids() {{"#);
+                eprintln!(r#"    local cur="${{COMP_WORDS[COMP_CWORD]}}""#);
+                eprintln!(r#"    if [[ ${{COMP_WORDS[1]}} == "remove" && $COMP_CWORD -eq 2 ]]; then"#);
+                eprintln!(r#"        COMPREPLY=( $(compgen -W "$(librarian sources --ids-only 2>/dev/null)" -- "$cur") )"#);
+                eprintln!(r#"    fi"#);
+                eprintln!(r#"}}"#);
+                eprintln!(r#"complete -F _librarian_source_ids -o default librarian"#);
+            }
+            Shell::Zsh => {
+                eprintln!();
+                eprintln!(r#"# Dynamic completion for 'librarian remove' source IDs"#);
+                eprintln!(r#"_librarian_source_ids() {{"#);
+                eprintln!(r#"    local -a sources"#);
+                eprintln!(r#"    sources=(${{(f)"$(librarian sources --ids-only 2>/dev/null)"}})"#);
+                eprintln!(r#"    compadd -a sources"#);
+                eprintln!(r#"}}"#);
+                eprintln!(r#"compdef '_librarian_source_ids' librarian remove"#);
+            }
+            Shell::Fish => {
+                eprintln!();
+                eprintln!(r#"# Dynamic completion for 'librarian remove' source IDs"#);
+                eprintln!(r#"complete -c librarian -n '__fish_seen_subcommand_from remove' -xa '(librarian sources --ids-only 2>/dev/null)'"#);
+            }
+            _ => {
+                eprintln!();
+                eprintln!("Dynamic completions for this shell are not yet documented.");
+                eprintln!("Use 'librarian sources --ids-only' to list available source IDs.");
+            }
+        }
         return Ok(());
     }
 
@@ -337,6 +396,10 @@ async fn run() -> Result<()> {
             }
         }
 
+        Commands::Db { action } => {
+            handle_db_action(&config, action, cli.json).await?;
+        }
+
         Commands::Mcp => {
             let server = McpServer::new(config, db, store);
             server.run().await.map_err(|e| librarian::error::Error::McpProtocol(e.to_string()))?;
@@ -384,6 +447,60 @@ async fn handle_init(cli: Cli) -> Result<()> {
     println!("  1. Edit the config file to customize settings");
     println!("  2. Start Qdrant: docker run -p 6333:6333 qdrant/qdrant");
     println!("  3. Ingest docs: librarian ingest dir /path/to/docs");
+
+    Ok(())
+}
+
+async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Result<()> {
+    let store = QdrantStore::connect(config).await?;
+
+    match action {
+        DbAction::Init => {
+            store.ensure_collection().await?;
+            if json {
+                println!(r#"{{"status": "ok", "message": "Collection initialized"}}"#);
+            } else {
+                println!("✓ Qdrant collection initialized");
+            }
+        }
+        DbAction::Status => {
+            match store.get_collection_info().await? {
+                Some(info) => {
+                    if json {
+                        println!(
+                            r#"{{"exists": true, "points_count": {}, "indexed_vectors_count": {}, "status": "{}"}}"#,
+                            info.points_count, info.indexed_vectors_count, info.status
+                        );
+                    } else {
+                        println!("Qdrant Collection Status:");
+                        println!("  Status: {}", info.status);
+                        println!("  Points: {}", info.points_count);
+                        println!("  Indexed Vectors: {}", info.indexed_vectors_count);
+                    }
+                }
+                None => {
+                    if json {
+                        println!(r#"{{"exists": false}}"#);
+                    } else {
+                        println!("Collection does not exist. Run 'librarian db init' to create it.");
+                    }
+                }
+            }
+        }
+        DbAction::Reset { yes } => {
+            if !yes {
+                eprintln!("⚠️  This will delete ALL indexed data!");
+                eprintln!("Run with --yes to confirm.");
+                std::process::exit(1);
+            }
+            store.reset_collection().await?;
+            if json {
+                println!(r#"{{"status": "ok", "message": "Collection reset"}}"#);
+            } else {
+                println!("✓ Qdrant collection reset (all data deleted and collection recreated)");
+            }
+        }
+    }
 
     Ok(())
 }

@@ -17,8 +17,16 @@ use qdrant_client::qdrant::{
 };
 use qdrant_client::Qdrant;
 use serde_json::Value;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use uuid::Uuid;
+
+/// Information about a Qdrant collection
+#[derive(Debug, Clone)]
+pub struct CollectionInfo {
+    pub points_count: u64,
+    pub indexed_vectors_count: u64,
+    pub status: String,
+}
 
 /// Qdrant store handle
 pub struct QdrantStore {
@@ -78,6 +86,56 @@ impl QdrantStore {
 
         info!("Collection {} created successfully", self.collection);
         Ok(())
+    }
+
+    /// Check if the collection exists
+    pub async fn collection_exists(&self) -> Result<bool> {
+        let exists = self.client.collection_exists(&self.collection).await?;
+        Ok(exists)
+    }
+
+    /// Delete the collection if it exists
+    pub async fn delete_collection(&self) -> Result<bool> {
+        let exists = self.client.collection_exists(&self.collection).await?;
+        
+        if !exists {
+            return Ok(false);
+        }
+
+        info!("Deleting collection {}", self.collection);
+        self.client.delete_collection(&self.collection).await?;
+        Ok(true)
+    }
+
+    /// Reset the collection (delete and recreate)
+    pub async fn reset_collection(&self) -> Result<()> {
+        // Delete if exists
+        if self.client.collection_exists(&self.collection).await? {
+            info!("Deleting existing collection {}", self.collection);
+            self.client.delete_collection(&self.collection).await?;
+        }
+
+        // Recreate
+        self.ensure_collection().await?;
+        Ok(())
+    }
+
+    /// Get collection info (point count, etc)
+    pub async fn get_collection_info(&self) -> Result<Option<CollectionInfo>> {
+        if !self.client.collection_exists(&self.collection).await? {
+            return Ok(None);
+        }
+
+        let info = self.client.collection_info(&self.collection).await?;
+        if let Some(result) = info.result {
+            Ok(Some(CollectionInfo {
+                points_count: result.points_count.unwrap_or(0),
+                indexed_vectors_count: result.indexed_vectors_count.unwrap_or(0),
+                status: format!("{:?}", result.status()),
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Upsert ChunkPoint objects (converts to PointStruct internally)
@@ -189,19 +247,6 @@ impl QdrantStore {
             collection: self.collection.clone(),
             points_count: points_count as usize,
         })
-    }
-
-    /// Check if collection exists
-    pub async fn collection_exists(&self) -> Result<bool> {
-        let exists = self.client.collection_exists(&self.collection).await?;
-        Ok(exists)
-    }
-
-    /// Delete the entire collection
-    pub async fn delete_collection(&self) -> Result<()> {
-        warn!("Deleting collection {}", self.collection);
-        self.client.delete_collection(&self.collection).await?;
-        Ok(())
     }
 
     /// List all point IDs (for orphan detection) - scrolls through all points
