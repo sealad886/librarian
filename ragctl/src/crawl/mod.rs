@@ -5,12 +5,15 @@
 //! - robots.txt parsing and respect
 //! - Per-host rate limiting
 //! - Crawl depth and page limits
+//! - Sitemap XML parsing
 
 mod robots;
 mod rate_limit;
+mod sitemap;
 
 pub use robots::*;
 pub use rate_limit::*;
+pub use sitemap::*;
 
 use crate::config::CrawlConfig;
 use crate::error::{Error, Result};

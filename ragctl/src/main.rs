@@ -3,10 +3,10 @@
 use clap::{Parser, Subcommand};
 use ragctl::{
     commands::{
-        cmd_ingest_dir, cmd_ingest_url, cmd_init, cmd_list_sources, cmd_prune, cmd_query,
-        cmd_reindex, cmd_remove_source, cmd_status, print_prune_stats, print_query_results,
-        print_reindex_stats, print_sources, print_status, PruneOptions, QueryOptions,
-        ReindexOptions,
+        cmd_ingest_dir, cmd_ingest_sitemap, cmd_ingest_url, cmd_init, cmd_list_sources, cmd_prune,
+        cmd_query, cmd_reindex, cmd_remove_source, cmd_status, print_prune_stats,
+        print_query_results, print_reindex_stats, print_sources, print_status, PruneOptions,
+        QueryOptions, ReindexOptions,
     },
     config::Config,
     embed::FastEmbedder,
@@ -171,7 +171,7 @@ enum IngestSource {
 
         /// Maximum pages to fetch
         #[arg(long)]
-        max_pages: Option<usize>,
+        max_pages: Option<u32>,
     },
 }
 
@@ -408,20 +408,22 @@ async fn handle_ingest(
         IngestSource::Sitemap {
             url,
             name,
-            max_pages: _,
+            max_pages,
         } => {
-            let stats = cmd_ingest_url(
+            let stats = cmd_ingest_sitemap(
                 config,
                 db,
                 store,
                 &url,
                 name,
+                max_pages,
             )
             .await?;
 
             println!("\n✓ Sitemap ingestion complete");
             println!("  Pages processed: {}", stats.docs_processed);
             println!("  Chunks created: {}", stats.chunks_created);
+            println!("  Chunks updated: {}", stats.chunks_updated);
         }
     }
 

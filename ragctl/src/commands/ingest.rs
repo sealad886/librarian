@@ -441,6 +441,144 @@ pub async fn cmd_ingest_url(
     Ok(stats)
 }
 
+/// Ingest from a sitemap URL
+pub async fn cmd_ingest_sitemap(
+    config: &Config,
+    db: &MetaDb,
+    store: &QdrantStore,
+    sitemap_url: &str,
+    name: Option<String>,
+    max_pages: Option<u32>,
+) -> Result<IngestStats> {
+    use crate::crawl::SitemapParser;
+
+    info!("Ingesting sitemap: {}", sitemap_url);
+
+    // Parse sitemap to get URLs
+    let parser = SitemapParser::new(&config.crawl.user_agent)?;
+    let entries = parser.parse(sitemap_url).await?;
+    
+    if entries.is_empty() {
+        warn!("No URLs found in sitemap: {}", sitemap_url);
+        return Ok(IngestStats::default());
+    }
+
+    let max = max_pages.unwrap_or(config.crawl.max_pages);
+    let entries: Vec<_> = entries.into_iter().take(max as usize).collect();
+    info!("Found {} URLs in sitemap (limited to {})", entries.len(), max);
+
+    // Get or create source
+    let source = match db.get_source_by_uri(sitemap_url).await? {
+        Some(s) => {
+            info!("Found existing source: {}", s.id);
+            s
+        }
+        None => {
+            let s = Source::new(
+                SourceType::Sitemap, 
+                sitemap_url.to_string(), 
+                name.or(Some(sitemap_url.to_string()))
+            );
+            db.insert_source(&s).await?;
+            info!("Created new source: {}", s.id);
+            s
+        }
+    };
+
+    // Start ingestion run
+    let run = db.start_ingestion_run(&source.id).await?;
+
+    // Create embedder and crawler
+    let embedder = create_embedder(&config.embedding)?;
+    let crawler = Crawler::new(config.crawl.clone())?;
+
+    let mut stats = IngestStats::default();
+    let mut current_uris: Vec<String> = Vec::new();
+
+    // Process each URL from sitemap
+    for entry in entries {
+        current_uris.push(entry.loc.clone());
+
+        // Fetch the page
+        match crawler.fetch(&entry.loc).await {
+            Ok(page) => {
+                match process_page(
+                    config,
+                    db,
+                    store,
+                    embedder.as_ref(),
+                    &source,
+                    &page,
+                )
+                .await
+                {
+                    Ok((created, updated)) => {
+                        stats.docs_processed += 1;
+                        stats.chunks_created += created;
+                        stats.chunks_updated += updated;
+                    }
+                    Err(e) => {
+                        let error_msg = format!("{}: {}", entry.loc, e);
+                        warn!("{}", error_msg);
+                        stats.errors.push(error_msg);
+                        stats.docs_skipped += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                let error_msg = format!("{}: {}", entry.loc, e);
+                warn!("{}", error_msg);
+                stats.errors.push(error_msg);
+                stats.docs_skipped += 1;
+            }
+        }
+    }
+
+    // Delete stale documents
+    let stale_ids = db.delete_stale_documents(&source.id, &current_uris).await?;
+    if !stale_ids.is_empty() {
+        info!("Deleted {} stale documents", stale_ids.len());
+        for doc_id in &stale_ids {
+            if let Ok(chunks) = db.get_chunks(doc_id).await {
+                let point_ids: Vec<Uuid> = chunks
+                    .iter()
+                    .filter_map(|c| Uuid::try_parse(&c.qdrant_point_id).ok())
+                    .collect();
+                if !point_ids.is_empty() {
+                    if let Err(e) = store.delete_points(&point_ids).await {
+                        warn!("Failed to delete Qdrant points: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    // Complete ingestion run
+    let errors = if stats.errors.is_empty() {
+        None
+    } else {
+        Some(stats.errors.clone())
+    };
+
+    db.complete_ingestion_run(
+        &run.id,
+        if stats.errors.is_empty() { RunStatus::Completed } else { RunStatus::Failed },
+        stats.docs_processed,
+        stats.chunks_created,
+        stats.chunks_updated,
+        stats.chunks_deleted,
+        errors,
+    )
+    .await?;
+
+    info!(
+        "Sitemap ingestion complete: {} docs, {} chunks created, {} chunks updated",
+        stats.docs_processed, stats.chunks_created, stats.chunks_updated
+    );
+
+    Ok(stats)
+}
+
 /// Process a crawled page
 async fn process_page(
     config: &Config,
