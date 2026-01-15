@@ -215,11 +215,11 @@ impl Default for QueryConfig {
 }
 
 impl Config {
-    /// Get the default base directory for librarian
+    /// Get the default base directory for librarian (~/.librarian)
     pub fn default_base_dir() -> PathBuf {
-        dirs::config_dir()
+        dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("librarian")
+            .join(".librarian")
     }
 
     /// Get the default config file path

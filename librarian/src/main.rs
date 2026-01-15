@@ -1,6 +1,7 @@
 //! librarian CLI entry point
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
 use librarian::{
     commands::{
         cmd_ingest_dir, cmd_ingest_sitemap, cmd_ingest_url, cmd_init, cmd_list_sources, cmd_prune,
@@ -116,6 +117,13 @@ enum Commands {
 
     /// Start MCP server on stdio
     Mcp,
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 #[derive(Subcommand)]
@@ -201,6 +209,13 @@ async fn run() -> Result<()> {
     // Handle init command specially (doesn't need existing config)
     if matches!(cli.command, Commands::Init { .. }) {
         return handle_init(cli).await;
+    }
+
+    // Handle completions command (doesn't need config/db/store)
+    if let Commands::Completions { shell } = cli.command {
+        let mut cmd = Cli::command();
+        generate(shell, &mut cmd, "librarian", &mut std::io::stdout());
+        return Ok(());
     }
 
     // Load configuration
@@ -314,6 +329,8 @@ async fn run() -> Result<()> {
             let server = McpServer::new(config, db, store);
             server.run().await.map_err(|e| librarian::error::Error::McpProtocol(e.to_string()))?;
         }
+
+        Commands::Completions { .. } => unreachable!(),
     }
 
     Ok(())
@@ -324,7 +341,20 @@ async fn handle_init(cli: Cli) -> Result<()> {
         unreachable!()
     };
 
-    let config_path = cli.config.unwrap_or_else(Config::default_config_path);
+    // Get the base directory: if user specifies config file, use its parent dir
+    // Otherwise use default base dir
+    let (base_dir, config_path) = if let Some(path) = cli.config {
+        let base = path.parent().map(PathBuf::from).unwrap_or_else(Config::default_base_dir);
+        let config = if path.extension().map_or(false, |e| e == "toml") {
+            path  // User specified a .toml file
+        } else {
+            path.join("config.toml")  // User specified a directory
+        };
+        (base, config)
+    } else {
+        let base = Config::default_base_dir();
+        (base.clone(), base.join("config.toml"))
+    };
 
     if config_path.exists() && !force {
         eprintln!(
@@ -334,7 +364,7 @@ async fn handle_init(cli: Cli) -> Result<()> {
         std::process::exit(1);
     }
 
-    cmd_init(Some(config_path.clone()), force).await?;
+    cmd_init(Some(base_dir), force).await?;
 
     println!("✓ librarian initialized successfully");
     println!("  Config: {}", config_path.display());

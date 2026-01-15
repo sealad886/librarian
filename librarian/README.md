@@ -222,6 +222,26 @@ The MCP server communicates via stdio and exposes:
 - `rag_sources`: List sources
 - `rag_status`: Get status
 
+### `completions`
+
+Generate shell completions for tab completion support.
+
+```bash
+# Bash (add to ~/.bashrc)
+librarian completions bash >> ~/.bashrc
+
+# Zsh (add to ~/.zshrc or create completion file)
+librarian completions zsh > ~/.zsh/completions/_librarian
+
+# Fish
+librarian completions fish > ~/.config/fish/completions/librarian.fish
+
+# PowerShell
+librarian completions powershell >> $PROFILE
+```
+
+Supported shells: `bash`, `zsh`, `fish`, `powershell`, `elvish`
+
 ## Configuration
 
 Configuration is stored in `~/.librarian/config.toml` (or custom path).
