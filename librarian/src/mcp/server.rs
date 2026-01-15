@@ -138,7 +138,7 @@ impl McpServer {
                     }
                 },
                 "serverInfo": {
-                    "name": "ragctl",
+                    "name": "librarian",
                     "version": env!("CARGO_PKG_VERSION")
                 }
             }),

@@ -1,4 +1,4 @@
-//! ragctl - A CLI tool for local RAG (Retrieval-Augmented Generation)
+//! librarian - A CLI tool for local RAG (Retrieval-Augmented Generation)
 //!
 //! This crate provides:
 //! - CLI commands for ingesting documentation (local directories + web URLs)

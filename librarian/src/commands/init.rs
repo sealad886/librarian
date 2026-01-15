@@ -7,7 +7,7 @@ use crate::store::QdrantStore;
 use std::path::PathBuf;
 use tracing::info;
 
-/// Initialize ragctl configuration and database
+/// Initialize librarian configuration and database
 pub async fn cmd_init(base_dir: Option<PathBuf>, force: bool) -> Result<()> {
     let mut config = Config::default();
     
@@ -62,13 +62,13 @@ pub async fn cmd_init(base_dir: Option<PathBuf>, force: bool) -> Result<()> {
         }
     }
 
-    println!("✓ Initialized ragctl at {:?}", config.paths.base_dir);
+    println!("✓ Initialized librarian at {:?}", config.paths.base_dir);
     println!("\nConfiguration: {:?}", config.paths.config_file);
     println!("Database: {:?}", config.paths.db_file);
     println!("\nNext steps:");
-    println!("  ragctl ingest dir ./path/to/docs    # Index local docs");
-    println!("  ragctl ingest url https://docs.rs   # Index web docs");
-    println!("  ragctl query \"how to use X\"         # Search the index");
+    println!("  librarian ingest dir ./path/to/docs    # Index local docs");
+    println!("  librarian ingest url https://docs.rs   # Index web docs");
+    println!("  librarian query \"how to use X\"         # Search the index");
 
     Ok(())
 }

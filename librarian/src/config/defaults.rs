@@ -12,7 +12,7 @@ pub fn default_qdrant_api_key_env() -> String {
 
 /// Default collection name
 pub fn default_collection_name() -> String {
-    "ragctl_docs".to_string()
+    "librarian_docs".to_string()
 }
 
 /// Default embedding model (BAAI/bge-small-en-v1.5)
@@ -67,7 +67,7 @@ pub fn default_crawl_rate_limit() -> f64 {
 
 /// Default user agent
 pub fn default_crawl_user_agent() -> String {
-    format!("ragctl/{} (Documentation Indexer)", env!("CARGO_PKG_VERSION"))
+    format!("librarian/{} (Documentation Indexer)", env!("CARGO_PKG_VERSION"))
 }
 
 /// Default request timeout in seconds

@@ -80,7 +80,7 @@ pub async fn cmd_list_sources(db: &MetaDb) -> Result<Vec<SourceInfo>> {
 
 /// Print status to console
 pub fn print_status(status: &StatusInfo) {
-    println!("\n📊 ragctl Status\n");
+    println!("\n📊 librarian Status\n");
     println!("Configuration: {}", status.config_path);
     println!("Database: {}", status.db_path);
     println!("\nQdrant:");
@@ -107,7 +107,7 @@ pub fn print_sources(sources: &[SourceInfo]) {
     println!("\n📚 Registered Sources\n");
 
     if sources.is_empty() {
-        println!("No sources registered. Use 'ragctl ingest' to add sources.");
+        println!("No sources registered. Use 'librarian ingest' to add sources.");
         return;
     }
 

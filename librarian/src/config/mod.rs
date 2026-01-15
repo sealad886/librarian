@@ -1,4 +1,4 @@
-//! Configuration management for ragctl
+//! Configuration management for librarian
 //!
 //! Handles loading, saving, and validating configuration from TOML files.
 
@@ -142,7 +142,7 @@ pub struct QueryConfig {
 /// Internal paths configuration
 #[derive(Debug, Clone, Default)]
 pub struct PathsConfig {
-    /// Base directory for ragctl data
+    /// Base directory for librarian data
     pub base_dir: PathBuf,
 
     /// Path to config file
@@ -215,11 +215,11 @@ impl Default for QueryConfig {
 }
 
 impl Config {
-    /// Get the default base directory for ragctl
+    /// Get the default base directory for librarian
     pub fn default_base_dir() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("ragctl")
+            .join("librarian")
     }
 
     /// Get the default config file path
@@ -307,7 +307,7 @@ impl Config {
         std::env::var(&self.qdrant_api_key_env).ok()
     }
 
-    /// Check if ragctl is initialized (config and DB exist)
+    /// Check if librarian is initialized (config and DB exist)
     pub fn is_initialized(&self) -> bool {
         self.paths.config_file.exists() && self.paths.db_file.exists()
     }
@@ -362,7 +362,7 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.qdrant_url, "http://127.0.0.1:6333");
-        assert_eq!(config.collection_name, "ragctl_docs");
+        assert_eq!(config.collection_name, "librarian_docs");
         assert!(config.validate().is_ok());
     }
 

@@ -174,7 +174,7 @@ async fn handle_sources(db: &MetaDb) -> ToolResult {
         Ok(sources) => {
             if sources.is_empty() {
                 return ToolResult::text(
-                    "No sources registered. Use 'ragctl ingest' to add documentation sources.",
+                    "No sources registered. Use 'librarian ingest' to add documentation sources.",
                 );
             }
 

@@ -1,6 +1,6 @@
-# Contributing to ragctl
+# Contributing to librarian
 
-Thank you for your interest in contributing to ragctl! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to librarian! This document provides guidelines and information for contributors.
 
 ## Table of Contents
 
@@ -24,7 +24,7 @@ Thank you for your interest in contributing to ragctl! This document provides gu
 ```bash
 # Clone the repository
 git clone https://github.com/sealad886/librarian.git
-cd librarian/ragctl
+cd librarian/librarian
 
 # Build in development mode
 cargo build
@@ -51,7 +51,7 @@ docker run -p 6333:6333 -p 6334:6334 \
 ## Project Structure
 
 ```
-ragctl/
+librarian/
 ├── Cargo.toml           # Project manifest
 ├── README.md            # User documentation
 ├── CONTRIBUTING.md      # This file
@@ -64,12 +64,12 @@ ragctl/
     │   └── defaults.rs  # Default configuration values
     ├── commands/        # CLI command implementations
     │   ├── mod.rs       # Re-exports
-    │   ├── init.rs      # ragctl init
-    │   ├── ingest.rs    # ragctl ingest (dir/url/sitemap)
-    │   ├── query.rs     # ragctl query
-    │   ├── status.rs    # ragctl status, list
-    │   ├── prune.rs     # ragctl prune, remove
-    │   └── reindex.rs   # ragctl reindex
+    │   ├── init.rs      # librarian init
+    │   ├── ingest.rs    # librarian ingest (dir/url/sitemap)
+    │   ├── query.rs     # librarian query
+    │   ├── status.rs    # librarian status, list
+    │   ├── prune.rs     # librarian prune, remove
+    │   └── reindex.rs   # librarian reindex
     ├── crawl/           # Web crawling
     │   ├── mod.rs       # Crawler implementation
     │   ├── robots.rs    # robots.txt parsing

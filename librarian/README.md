@@ -1,4 +1,4 @@
-# ragctl
+# librarian
 
 A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP server for indexing and querying documentation.
 
@@ -16,7 +16,7 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      ragctl CLI                              │
+│                      librarian CLI                              │
 ├─────────────────────────────────────────────────────────────┤
 │  Commands: init | ingest | list | status | query | mcp | ... │
 └──────────────────────┬──────────────────────────────────────┘
@@ -40,10 +40,10 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
 
 ```bash
 git clone https://github.com/sealad886/librarian.git
-cd librarian/ragctl
+cd librarian/librarian
 cargo build --release
 
-# Binary will be at target/release/ragctl
+# Binary will be at target/release/librarian
 ```
 
 ### Qdrant Setup
@@ -61,39 +61,39 @@ Or install natively: https://qdrant.tech/documentation/guides/installation/
 ## Quick Start
 
 ```bash
-# Initialize ragctl (creates config and database)
-ragctl init
+# Initialize librarian (creates config and database)
+librarian init
 
 # Index a local directory
-ragctl ingest dir ./docs --name "My Docs"
+librarian ingest dir ./docs --name "My Docs"
 
 # Index a website
-ragctl ingest url https://docs.rs/tokio/latest/tokio/ --name "Tokio Docs"
+librarian ingest url https://docs.rs/tokio/latest/tokio/ --name "Tokio Docs"
 
 # Index from a sitemap
-ragctl ingest sitemap https://example.com/sitemap.xml --name "Example Site"
+librarian ingest sitemap https://example.com/sitemap.xml --name "Example Site"
 
 # Search the index
-ragctl query "how to use async/await"
+librarian query "how to use async/await"
 
 # View indexed sources
-ragctl list
+librarian list
 
 # Check system status
-ragctl status
+librarian status
 ```
 
 ## Commands
 
 ### `init`
 
-Initialize ragctl configuration and database.
+Initialize librarian configuration and database.
 
 ```bash
-ragctl init [OPTIONS]
+librarian init [OPTIONS]
 
 Options:
-  -c, --config <PATH>  Custom config directory (default: ~/.ragctl)
+  -c, --config <PATH>  Custom config directory (default: ~/.librarian)
   -f, --force          Overwrite existing configuration
 ```
 
@@ -104,7 +104,7 @@ Add content to the RAG index.
 #### Directory Ingestion
 
 ```bash
-ragctl ingest dir <PATH> [OPTIONS]
+librarian ingest dir <PATH> [OPTIONS]
 
 Options:
   -n, --name <NAME>     Human-readable source name
@@ -117,7 +117,7 @@ Supports: Markdown, HTML, plain text, code files. Respects `.gitignore`.
 #### URL Ingestion
 
 ```bash
-ragctl ingest url <URL> [OPTIONS]
+librarian ingest url <URL> [OPTIONS]
 
 Options:
   -n, --name <NAME>       Human-readable source name
@@ -131,7 +131,7 @@ Features: robots.txt respect, rate limiting, automatic link following.
 #### Sitemap Ingestion
 
 ```bash
-ragctl ingest sitemap <URL> [OPTIONS]
+librarian ingest sitemap <URL> [OPTIONS]
 
 Options:
   -n, --name <NAME>     Human-readable source name
@@ -145,7 +145,7 @@ Supports: sitemap.xml, sitemap index files, plain text URL lists.
 Search the RAG index.
 
 ```bash
-ragctl query <QUERY> [OPTIONS]
+librarian query <QUERY> [OPTIONS]
 
 Options:
   -k, --limit <N>        Number of results (default: 5)
@@ -159,7 +159,7 @@ Options:
 List all indexed sources.
 
 ```bash
-ragctl list [OPTIONS]
+librarian list [OPTIONS]
 
 Options:
   --json                 Output as JSON
@@ -170,7 +170,7 @@ Options:
 Show system status and statistics.
 
 ```bash
-ragctl status [OPTIONS]
+librarian status [OPTIONS]
 
 Options:
   --json                 Output as JSON
@@ -181,7 +181,7 @@ Options:
 Remove stale documents and orphaned data.
 
 ```bash
-ragctl prune [OPTIONS]
+librarian prune [OPTIONS]
 
 Options:
   -s, --source <ID>      Only prune specific source
@@ -194,7 +194,7 @@ Options:
 Re-embed all documents (useful after model changes).
 
 ```bash
-ragctl reindex [OPTIONS]
+librarian reindex [OPTIONS]
 
 Options:
   -s, --source <ID>      Only reindex specific source
@@ -206,7 +206,7 @@ Options:
 Remove a source and all its data.
 
 ```bash
-ragctl remove <SOURCE_ID>
+librarian remove <SOURCE_ID>
 ```
 
 ### `mcp`
@@ -214,7 +214,7 @@ ragctl remove <SOURCE_ID>
 Start the MCP server for VS Code integration.
 
 ```bash
-ragctl mcp
+librarian mcp
 ```
 
 The MCP server communicates via stdio and exposes:
@@ -224,12 +224,12 @@ The MCP server communicates via stdio and exposes:
 
 ## Configuration
 
-Configuration is stored in `~/.ragctl/config.toml` (or custom path).
+Configuration is stored in `~/.librarian/config.toml` (or custom path).
 
 ```toml
 # Qdrant connection
 qdrant_url = "http://localhost:6333"
-collection_name = "ragctl"
+collection_name = "librarian"
 
 # Embedding model
 [embedding]
@@ -251,7 +251,7 @@ bm25_weight = 0.3
 
 # Crawl settings
 [crawl]
-user_agent = "ragctl/0.1 (https://github.com/sealad886/librarian)"
+user_agent = "librarian/0.1 (https://github.com/sealad886/librarian)"
 timeout_secs = 30
 max_pages = 100
 max_depth = 3
@@ -266,8 +266,8 @@ Add to your VS Code `settings.json`:
 ```json
 {
   "mcp.servers": {
-    "ragctl": {
-      "command": "/path/to/ragctl",
+    "librarian": {
+      "command": "/path/to/librarian",
       "args": ["mcp"]
     }
   }
@@ -339,8 +339,8 @@ Hybrid ranking combines:
 # Check if Qdrant is running
 curl http://localhost:6333/health
 
-# View ragctl status
-ragctl status
+# View librarian status
+librarian status
 ```
 
 ### Slow Embedding
@@ -349,22 +349,22 @@ First run downloads the model (~50MB). Subsequent runs are fast.
 Consider reducing batch size if memory-constrained:
 
 ```bash
-ragctl reindex --batch-size 16
+librarian reindex --batch-size 16
 ```
 
 ### Index Corruption
 
 ```bash
 # Rebuild from scratch
-ragctl prune --orphans
-ragctl reindex
+librarian prune --orphans
+librarian reindex
 ```
 
 ## Environment Variables
 
 ```bash
-RAGCTL_CONFIG=/path/to/config.toml  # Custom config path
-RAGCTL_LOG=debug                    # Log level (trace/debug/info/warn/error)
+librarian_CONFIG=/path/to/config.toml  # Custom config path
+librarian_LOG=debug                    # Log level (trace/debug/info/warn/error)
 QDRANT_URL=http://host:6333         # Override Qdrant URL
 ```
 

@@ -1,10 +1,10 @@
 [package]
-name = "ragctl"
+name = "librarian"
 version = "0.1.0"
-edition = "2021"
-authors = ["RAGctl Contributors"]
+edition = "2026"
+authors = ["Dr Andrew Cox"]
 description = "A CLI tool for local RAG (Retrieval-Augmented Generation) with MCP server support"
-license = "MIT"
+license = "GPL-3.0-or-later"
 repository = "https://github.com/sealad886/librarian"
 keywords = ["rag", "retrieval", "mcp", "qdrant", "embedding"]
 categories = ["command-line-utilities", "text-processing"]

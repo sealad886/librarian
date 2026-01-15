@@ -1,7 +1,7 @@
-//! ragctl CLI entry point
+//! librarian CLI entry point
 
 use clap::{Parser, Subcommand};
-use ragctl::{
+use librarian::{
     commands::{
         cmd_ingest_dir, cmd_ingest_sitemap, cmd_ingest_url, cmd_init, cmd_list_sources, cmd_prune,
         cmd_query, cmd_reindex, cmd_remove_source, cmd_status, print_prune_stats,
@@ -20,7 +20,7 @@ use tracing::error;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Parser)]
-#[command(name = "ragctl")]
+#[command(name = "librarian")]
 #[command(version, about = "Local RAG CLI tool with MCP server support", long_about = None)]
 struct Cli {
     /// Path to config file
@@ -41,7 +41,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize ragctl configuration and database
+    /// Initialize librarian configuration and database
     Init {
         /// Force overwrite existing config
         #[arg(long)]
@@ -312,7 +312,7 @@ async fn run() -> Result<()> {
 
         Commands::Mcp => {
             let server = McpServer::new(config, db, store);
-            server.run().await.map_err(|e| ragctl::error::Error::McpProtocol(e.to_string()))?;
+            server.run().await.map_err(|e| librarian::error::Error::McpProtocol(e.to_string()))?;
         }
     }
 
@@ -336,12 +336,12 @@ async fn handle_init(cli: Cli) -> Result<()> {
 
     cmd_init(Some(config_path.clone()), force).await?;
 
-    println!("✓ ragctl initialized successfully");
+    println!("✓ librarian initialized successfully");
     println!("  Config: {}", config_path.display());
     println!("\nNext steps:");
     println!("  1. Edit the config file to customize settings");
     println!("  2. Start Qdrant: docker run -p 6333:6333 qdrant/qdrant");
-    println!("  3. Ingest docs: ragctl ingest dir /path/to/docs");
+    println!("  3. Ingest docs: librarian ingest dir /path/to/docs");
 
     Ok(())
 }
@@ -353,7 +353,7 @@ async fn load_config(path: Option<&std::path::Path>) -> Result<Config> {
 
     if !config_path.exists() {
         eprintln!(
-            "Config file not found: {}\nRun 'ragctl init' first.",
+            "Config file not found: {}\nRun 'librarian init' first.",
             config_path.display()
         );
         std::process::exit(1);

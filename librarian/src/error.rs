@@ -1,8 +1,8 @@
-//! Custom error types for ragctl
+//! Custom error types for librarian
 
 use thiserror::Error;
 
-/// Main error type for ragctl operations
+/// Main error type for librarian operations
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("Configuration error: {0}")]
@@ -47,7 +47,7 @@ pub enum Error {
     #[error("Document not found: {0}")]
     DocumentNotFound(String),
 
-    #[error("Not initialized: run 'ragctl init' first")]
+    #[error("Not initialized: run 'librarian init' first")]
     NotInitialized,
 
     #[error("Already initialized at {0}")]
@@ -84,7 +84,7 @@ impl From<anyhow::Error> for Error {
     }
 }
 
-/// Result type alias for ragctl
+/// Result type alias for librarian
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Convert qdrant errors
