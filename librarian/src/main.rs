@@ -81,7 +81,11 @@ enum Commands {
     Status,
 
     /// List registered sources
-    Sources,
+    Sources {
+        /// Output only source IDs (one per line, for scripting)
+        #[arg(long)]
+        ids_only: bool,
+    },
 
     /// Remove stale documents and orphan points
     Prune {
@@ -110,8 +114,10 @@ enum Commands {
     },
 
     /// Remove a source and all its data
+    /// 
+    /// Use 'librarian sources --ids-only' to list available source IDs
     Remove {
-        /// Source ID to remove
+        /// Source ID to remove (use 'librarian sources' to list)
         source_id: String,
     },
 
@@ -157,15 +163,16 @@ enum IngestSource {
 
         /// Maximum pages to crawl
         #[arg(long, default_value = "100")]
-        max_pages: usize,
+        max_pages: u32,
 
         /// Maximum crawl depth
         #[arg(long, default_value = "3")]
-        max_depth: usize,
+        max_depth: u32,
 
-        /// Stay within same domain
-        #[arg(long, default_value = "true")]
-        same_domain: bool,
+        /// Restrict crawling to this path prefix (e.g., /docs/)
+        /// If not specified, defaults to the seed URL's directory path
+        #[arg(long)]
+        path_prefix: Option<String>,
     },
 
     /// Ingest URLs from a sitemap
@@ -267,10 +274,15 @@ async fn run() -> Result<()> {
             }
         }
 
-        Commands::Sources => {
+        Commands::Sources { ids_only } => {
             let sources = cmd_list_sources(&db).await?;
 
-            if cli.json {
+            if ids_only {
+                // Output only IDs for scripting/completions
+                for source in &sources {
+                    println!("{}", source.id);
+                }
+            } else if cli.json {
                 println!("{}", serde_json::to_string_pretty(&sources)?);
             } else {
                 print_sources(&sources);
@@ -410,6 +422,11 @@ async fn handle_ingest(
             )
             .await?;
 
+            // Display overlap warnings
+            for warning in &stats.overlap_warnings {
+                println!("{}", warning);
+            }
+
             println!("\n✓ Directory ingestion complete");
             println!("  Documents processed: {}", stats.docs_processed);
             println!("  Chunks created: {}", stats.chunks_created);
@@ -420,14 +437,25 @@ async fn handle_ingest(
         IngestSource::Url {
             url,
             name,
-            max_pages: _,
-            max_depth: _,
-            same_domain: _,
+            max_pages,
+            max_depth,
+            path_prefix,
         } => {
+            use librarian::commands::CrawlOverrides;
+            let overrides = CrawlOverrides {
+                max_pages: Some(max_pages),
+                max_depth: Some(max_depth),
+                path_prefix,
+            };
             let stats = cmd_ingest_url(
-                config, db, store, &url, name,
+                config, db, store, &url, name, overrides,
             )
             .await?;
+
+            // Display overlap warnings
+            for warning in &stats.overlap_warnings {
+                println!("{}", warning);
+            }
 
             println!("\n✓ URL ingestion complete");
             println!("  Pages processed: {}", stats.docs_processed);
@@ -449,6 +477,11 @@ async fn handle_ingest(
                 max_pages,
             )
             .await?;
+
+            // Display overlap warnings
+            for warning in &stats.overlap_warnings {
+                println!("{}", warning);
+            }
 
             println!("\n✓ Sitemap ingestion complete");
             println!("  Pages processed: {}", stats.docs_processed);

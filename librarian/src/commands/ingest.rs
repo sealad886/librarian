@@ -15,6 +15,7 @@ use ignore::WalkBuilder;
 use std::collections::HashSet;
 use std::path::Path;
 use tracing::{debug, info, warn};
+use url::Url;
 use uuid::Uuid;
 
 /// Statistics from an ingestion run
@@ -26,6 +27,155 @@ pub struct IngestStats {
     pub chunks_updated: i32,
     pub chunks_deleted: i32,
     pub errors: Vec<String>,
+    /// Warnings about source overlaps (potential duplicates)
+    pub overlap_warnings: Vec<String>,
+}
+
+/// CLI overrides for crawl configuration
+#[derive(Debug, Default)]
+pub struct CrawlOverrides {
+    pub max_pages: Option<u32>,
+    pub max_depth: Option<u32>,
+    pub path_prefix: Option<String>,
+}
+
+/// Describes an overlap between two sources
+#[derive(Debug)]
+pub struct SourceOverlap {
+    pub existing_source: Source,
+    pub overlap_type: OverlapType,
+}
+
+/// Type of overlap between sources
+#[derive(Debug)]
+pub enum OverlapType {
+    /// New source is a subdirectory/subpath of existing
+    SubsetOf,
+    /// New source is a parent directory/path of existing
+    SupersetOf,
+    /// Sources have the exact same URI
+    Identical,
+}
+
+/// Check if a new directory source overlaps with existing sources
+pub async fn check_dir_overlap(db: &MetaDb, new_path: &Path) -> Result<Vec<SourceOverlap>> {
+    let sources = db.list_sources().await?;
+    let mut overlaps = Vec::new();
+    
+    for source in sources {
+        // Only check Dir sources
+        if source.get_type().ok() != Some(SourceType::Dir) {
+            continue;
+        }
+        
+        let existing_path = Path::new(&source.uri);
+        
+        // Check if paths overlap - determine overlap type first
+        let overlap_type = if new_path == existing_path {
+            Some(OverlapType::Identical)
+        } else if new_path.starts_with(existing_path) {
+            Some(OverlapType::SubsetOf)
+        } else if existing_path.starts_with(new_path) {
+            Some(OverlapType::SupersetOf)
+        } else {
+            None
+        };
+        
+        if let Some(ot) = overlap_type {
+            overlaps.push(SourceOverlap {
+                existing_source: source,
+                overlap_type: ot,
+            });
+        }
+    }
+    
+    Ok(overlaps)
+}
+
+/// Check if a new URL source overlaps with existing URL sources
+pub async fn check_url_overlap(db: &MetaDb, new_url: &str) -> Result<Vec<SourceOverlap>> {
+    let sources = db.list_sources().await?;
+    let mut overlaps = Vec::new();
+    
+    let new_parsed = match Url::parse(new_url) {
+        Ok(u) => u,
+        Err(_) => return Ok(overlaps),
+    };
+    
+    let new_host = new_parsed.host_str().unwrap_or("");
+    let new_path = new_parsed.path();
+    
+    for source in sources {
+        // Check Url and Sitemap sources
+        let source_type = source.get_type().ok();
+        if source_type != Some(SourceType::Url) && source_type != Some(SourceType::Sitemap) {
+            continue;
+        }
+        
+        let existing_parsed = match Url::parse(&source.uri) {
+            Ok(u) => u,
+            Err(_) => continue,
+        };
+        
+        let existing_host = existing_parsed.host_str().unwrap_or("");
+        let existing_path = existing_parsed.path();
+        
+        // Only check overlaps for same domain
+        if new_host != existing_host {
+            continue;
+        }
+        
+        // Determine overlap type
+        let overlap_type = if new_path == existing_path {
+            Some(OverlapType::Identical)
+        } else if new_path.starts_with(existing_path) {
+            Some(OverlapType::SubsetOf)
+        } else if existing_path.starts_with(new_path) {
+            Some(OverlapType::SupersetOf)
+        } else {
+            None
+        };
+        
+        if let Some(ot) = overlap_type {
+            overlaps.push(SourceOverlap {
+                existing_source: source,
+                overlap_type: ot,
+            });
+        }
+    }
+    
+    Ok(overlaps)
+}
+
+/// Format overlap warnings for display
+pub fn format_overlap_warnings(overlaps: &[SourceOverlap], new_uri: &str) -> Vec<String> {
+    overlaps.iter().map(|o| {
+        match o.overlap_type {
+            OverlapType::Identical => {
+                format!(
+                    "Source already exists: {} (id: {})",
+                    o.existing_source.name.as_deref().unwrap_or(&o.existing_source.uri),
+                    o.existing_source.id
+                )
+            }
+            OverlapType::SubsetOf => {
+                format!(
+                    "⚠ New source '{}' is inside existing source '{}' (id: {}) - documents may be duplicated",
+                    new_uri,
+                    o.existing_source.name.as_deref().unwrap_or(&o.existing_source.uri),
+                    o.existing_source.id
+                )
+            }
+            OverlapType::SupersetOf => {
+                format!(
+                    "⚠ New source '{}' contains existing source '{}' (id: {}) - documents may be duplicated",
+                    new_uri,
+                    o.existing_source.name.as_deref().unwrap_or(&o.existing_source.uri),
+                    o.existing_source.id
+                )
+            }
+        }
+    }).collect()
 }
 
 /// Ingest a local directory
@@ -42,6 +192,17 @@ pub async fn cmd_ingest_dir(
 
     let uri = canonical_path.display().to_string();
     info!("Ingesting directory: {}", uri);
+
+    let mut stats = IngestStats::default();
+
+    // Check for overlaps with existing sources
+    let overlaps = check_dir_overlap(db, &canonical_path).await?;
+    if !overlaps.is_empty() {
+        stats.overlap_warnings = format_overlap_warnings(&overlaps, &uri);
+        for warning in &stats.overlap_warnings {
+            warn!("{}", warning);
+        }
+    }
 
     // Get or create source
     let source = match db.get_source_by_uri(&uri).await? {
@@ -85,7 +246,6 @@ pub async fn cmd_ingest_dir(
 
     info!("Found {} files to process", files.len());
 
-    let mut stats = IngestStats::default();
     let mut current_uris: Vec<String> = Vec::new();
 
     for file_path in files {
@@ -334,8 +494,20 @@ pub async fn cmd_ingest_url(
     store: &QdrantStore,
     url: &str,
     name: Option<String>,
+    overrides: CrawlOverrides,
 ) -> Result<IngestStats> {
     info!("Ingesting URL: {}", url);
+
+    let mut stats = IngestStats::default();
+
+    // Check for overlaps with existing sources
+    let overlaps = check_url_overlap(db, url).await?;
+    if !overlaps.is_empty() {
+        stats.overlap_warnings = format_overlap_warnings(&overlaps, url);
+        for warning in &stats.overlap_warnings {
+            warn!("{}", warning);
+        }
+    }
 
     // Get or create source
     let source = match db.get_source_by_uri(url).await? {
@@ -357,10 +529,21 @@ pub async fn cmd_ingest_url(
     // Create embedder
     let embedder = create_embedder(&config.embedding)?;
 
-    // Create crawler
-    let crawler = Crawler::new(config.crawl.clone())?;
+    // Build crawl config with CLI overrides
+    let mut crawl_config = config.crawl.clone();
+    if let Some(max_pages) = overrides.max_pages {
+        crawl_config.max_pages = max_pages;
+    }
+    if let Some(max_depth) = overrides.max_depth {
+        crawl_config.max_depth = max_depth;
+    }
+    if overrides.path_prefix.is_some() {
+        crawl_config.path_prefix = overrides.path_prefix;
+    }
 
-    let mut stats = IngestStats::default();
+    // Create crawler
+    let crawler = Crawler::new(crawl_config)?;
+
     let mut current_uris: Vec<String> = Vec::new();
 
     // Crawl and process pages
@@ -454,18 +637,31 @@ pub async fn cmd_ingest_sitemap(
 
     info!("Ingesting sitemap: {}", sitemap_url);
 
+    let mut stats = IngestStats::default();
+
     // Parse sitemap to get URLs
     let parser = SitemapParser::new(&config.crawl.user_agent)?;
     let entries = parser.parse(sitemap_url).await?;
     
     if entries.is_empty() {
         warn!("No URLs found in sitemap: {}", sitemap_url);
-        return Ok(IngestStats::default());
+        return Ok(stats);
     }
 
     let max = max_pages.unwrap_or(config.crawl.max_pages);
     let entries: Vec<_> = entries.into_iter().take(max as usize).collect();
     info!("Found {} URLs in sitemap (limited to {})", entries.len(), max);
+
+    // Check for overlaps - use the first entry URL as representative for the sitemap domain
+    if let Some(first_entry) = entries.first() {
+        let overlaps = check_url_overlap(db, &first_entry.loc).await?;
+        if !overlaps.is_empty() {
+            stats.overlap_warnings = format_overlap_warnings(&overlaps, sitemap_url);
+            for warning in &stats.overlap_warnings {
+                warn!("{}", warning);
+            }
+        }
+    }
 
     // Get or create source
     let source = match db.get_source_by_uri(sitemap_url).await? {
@@ -492,7 +688,6 @@ pub async fn cmd_ingest_sitemap(
     let embedder = create_embedder(&config.embedding)?;
     let crawler = Crawler::new(config.crawl.clone())?;
 
-    let mut stats = IngestStats::default();
     let mut current_uris: Vec<String> = Vec::new();
 
     // Process each URL from sitemap

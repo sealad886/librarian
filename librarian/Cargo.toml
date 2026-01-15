@@ -87,7 +87,7 @@ dirs = "5.0"
 pdf-extract = { version = "0.7", optional = true }
 
 # Headless browser for JS rendering (optional)
-chromiumoxide = { version = "0.7", optional = true, default-features = false, features = ["tokio-runtime"] }
+chromiumoxide = { version = "0.8", optional = true, default-features = false, features = ["tokio-runtime"] }
 
 # Async utilities
 futures = "0.3"

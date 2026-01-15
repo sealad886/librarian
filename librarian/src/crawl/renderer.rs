@@ -84,24 +84,38 @@ mod browser_impl {
 
             let mut builder = BrowserConfig::builder();
             
-            if self.config.headless {
+            // chromiumoxide defaults to headless mode
+            // Only call with_head() if we explicitly want a visible browser
+            if !self.config.headless {
                 builder = builder.with_head();
-                // Note: chromiumoxide defaults to headless, with_head() adds UI
-                // We want headless, so don't call with_head()
             }
 
             if !self.config.sandbox {
                 builder = builder.no_sandbox();
             }
 
-            // Common args for stability
+            // Common args for stability and to prevent focus stealing
             builder = builder
                 .arg("--disable-gpu")
                 .arg("--disable-dev-shm-usage")
                 .arg("--disable-setuid-sandbox")
                 .arg("--no-first-run")
                 .arg("--no-zygote")
-                .arg("--disable-extensions");
+                .arg("--disable-extensions")
+                // Prevent focus stealing - critical for background operation
+                .arg("--no-startup-window")
+                .arg("--disable-focus-on-load")
+                .arg("--disable-renderer-backgrounding")
+                .arg("--disable-backgrounding-occluded-windows")
+                .arg("--disable-ipc-flooding-protection")
+                // Run completely silently in background
+                .arg("--silent-launch")
+                .arg("--bwsi")  // Browse without sign-in
+                .arg("--disable-sync")
+                .arg("--disable-translate")
+                .arg("--disable-popup-blocking")
+                .arg("--disable-infobars")
+                .arg("--disable-notifications");
 
             let browser_config = builder.build()
                 .map_err(|e| Error::Crawl(format!("Failed to build browser config: {}", e)))?;

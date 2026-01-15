@@ -102,6 +102,11 @@ pub struct CrawlConfig {
     #[serde(default)]
     pub allowed_domains: Vec<String>,
 
+    /// Path prefix to restrict crawling to (e.g., /docs/)
+    /// Empty means no path restriction (entire domain allowed)
+    #[serde(default)]
+    pub path_prefix: Option<String>,
+
     /// Requests per second per host
     #[serde(default = "default_crawl_rate_limit")]
     pub rate_limit_per_host: f64,
@@ -231,6 +236,7 @@ impl Default for CrawlConfig {
             max_depth: default_crawl_max_depth(),
             max_pages: default_crawl_max_pages(),
             allowed_domains: Vec::new(),
+            path_prefix: None,
             rate_limit_per_host: default_crawl_rate_limit(),
             user_agent: default_crawl_user_agent(),
             timeout_secs: default_crawl_timeout(),

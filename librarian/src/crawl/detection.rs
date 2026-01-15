@@ -67,6 +67,10 @@ pub struct PageAnalysis {
     pub indicators: Vec<String>,
     /// Estimated content ratio (actual text / total HTML size)
     pub content_ratio: f32,
+    /// Whether the site uses hash-based routing (e.g., #/path)
+    pub uses_hash_routing: bool,
+    /// Discovered hash routes if hash routing is detected
+    pub hash_routes: Vec<String>,
 }
 
 impl PageAnalysis {
@@ -78,6 +82,8 @@ impl PageAnalysis {
             needs_js_rendering: false,
             indicators: vec!["Normal content ratio".to_string()],
             content_ratio,
+            uses_hash_routing: false,
+            hash_routes: Vec::new(),
         }
     }
 
@@ -89,6 +95,27 @@ impl PageAnalysis {
             needs_js_rendering: true,
             indicators,
             content_ratio,
+            uses_hash_routing: false,
+            hash_routes: Vec::new(),
+        }
+    }
+
+    /// Create analysis for SPA with hash routing
+    pub fn spa_with_hash_routes(
+        framework: SpaFramework, 
+        confidence: f32, 
+        indicators: Vec<String>, 
+        content_ratio: f32,
+        hash_routes: Vec<String>,
+    ) -> Self {
+        Self {
+            technology: PageTechnology::Spa(framework),
+            confidence,
+            needs_js_rendering: true,
+            indicators,
+            content_ratio,
+            uses_hash_routing: true,
+            hash_routes,
         }
     }
 }
@@ -149,6 +176,8 @@ pub fn analyze_page(html: &str, url: &str) -> PageAnalysis {
             needs_js_rendering: false,
             indicators: vec!["Login/authentication form detected".to_string()],
             content_ratio,
+            uses_hash_routing: false,
+            hash_routes: Vec::new(),
         };
     }
 
@@ -160,12 +189,32 @@ pub fn analyze_page(html: &str, url: &str) -> PageAnalysis {
             needs_js_rendering: true,
             indicators: vec!["Bot protection/CAPTCHA detected".to_string()],
             content_ratio,
+            uses_hash_routing: false,
+            hash_routes: Vec::new(),
         };
+    }
+
+    // Check for hash-based routing (common in Angular, older React apps)
+    let hash_routes = extract_hash_routes(html);
+    let uses_hash_routing = !hash_routes.is_empty();
+    if uses_hash_routing {
+        spa_score += 0.3;
+        indicators.push(format!("Hash-based routing detected: {} routes", hash_routes.len()));
     }
 
     // Decision threshold
     if spa_score >= 0.5 {
-        PageAnalysis::spa(detected_framework, spa_score.min(1.0), indicators, content_ratio)
+        if uses_hash_routing {
+            PageAnalysis::spa_with_hash_routes(
+                detected_framework, 
+                spa_score.min(1.0), 
+                indicators, 
+                content_ratio,
+                hash_routes,
+            )
+        } else {
+            PageAnalysis::spa(detected_framework, spa_score.min(1.0), indicators, content_ratio)
+        }
     } else {
         PageAnalysis::static_page(content_ratio)
     }
@@ -178,18 +227,18 @@ fn calculate_content_ratio(html: &str) -> f32 {
         return 0.0;
     }
 
-    // Strip tags and count remaining text
-    let tag_re = Regex::new(r"<[^>]+>").unwrap();
-    let text_only = tag_re.replace_all(html, " ");
-    
-    // Strip scripts and styles content
+    // First, strip scripts and styles (must do this BEFORE stripping tags)
     let script_re = Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap();
     let style_re = Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap();
-    let cleaned = script_re.replace_all(&text_only, "");
+    let cleaned = script_re.replace_all(html, "");
     let cleaned = style_re.replace_all(&cleaned, "");
     
+    // Now strip remaining tags
+    let tag_re = Regex::new(r"<[^>]+>").unwrap();
+    let text_only = tag_re.replace_all(&cleaned, " ");
+    
     // Normalize whitespace and count
-    let text_content: String = cleaned
+    let text_content: String = text_only
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
@@ -384,6 +433,93 @@ fn check_bot_protection(html_lower: &str) -> bool {
 
     // Bot protection usually has multiple markers
     protection_count >= 2
+}
+
+/// Extract hash-based routes from HTML (e.g., href="#/api", href="#/service/Lightbulb")
+pub fn extract_hash_routes(html: &str) -> Vec<String> {
+    let mut routes = std::collections::HashSet::new();
+    
+    // Match href="#/..." patterns (hash-based routing)
+    // This captures Angular, Vue hash mode, and other hash-routed SPAs
+    let hash_route_re = Regex::new(r#"href\s*=\s*["']#(/[^"'#]*)["']"#).unwrap();
+    
+    for cap in hash_route_re.captures_iter(html) {
+        if let Some(route) = cap.get(1) {
+            let route_str = route.as_str().to_string();
+            // Skip empty or just "/" routes
+            if route_str != "/" && !route_str.is_empty() {
+                routes.insert(route_str);
+            }
+        }
+    }
+
+    // Also check for programmatic routes in JavaScript (common patterns)
+    let js_route_patterns = [
+        // router.navigate(['...'])
+        r#"navigate\s*\(\s*\[\s*['"](/[^'"]+)['"]"#,
+        // this.$router.push('...')
+        r#"\$router\.push\s*\(\s*['"]#?(/[^'"]+)['"]"#,
+        // { path: '/...' }
+        r#"path\s*:\s*['"](/[^'"]+)['"]"#,
+    ];
+
+    for pattern in js_route_patterns {
+        if let Ok(re) = Regex::new(pattern) {
+            for cap in re.captures_iter(html) {
+                if let Some(route) = cap.get(1) {
+                    let route_str = route.as_str().to_string();
+                    if route_str != "/" && !route_str.is_empty() {
+                        routes.insert(route_str);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut routes_vec: Vec<String> = routes.into_iter().collect();
+    routes_vec.sort();
+    routes_vec
+}
+
+/// Analyze rendered HTML to extract hash routes (call after JS rendering)
+pub fn extract_hash_routes_from_rendered(html: &str, base_url: &str) -> Vec<String> {
+    use url::Url;
+    
+    let mut routes = std::collections::HashSet::new();
+    let base = Url::parse(base_url).ok();
+    
+    // Match all href attributes
+    let href_re = Regex::new(r#"href\s*=\s*["']([^"']+)["']"#).unwrap();
+    
+    for cap in href_re.captures_iter(html) {
+        if let Some(href) = cap.get(1) {
+            let href_str = href.as_str();
+            
+            // Check for hash routes
+            if href_str.starts_with("#/") {
+                let route = &href_str[1..]; // Remove leading #
+                if route != "/" && !route.is_empty() {
+                    routes.insert(route.to_string());
+                }
+            }
+            // Check for full URLs with hash fragments
+            else if let Some(ref base) = base {
+                if let Ok(full_url) = base.join(href_str) {
+                    if full_url.host() == base.host() {
+                        if let Some(fragment) = full_url.fragment() {
+                            if fragment.starts_with('/') && fragment != "/" {
+                                routes.insert(fragment.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut routes_vec: Vec<String> = routes.into_iter().collect();
+    routes_vec.sort();
+    routes_vec
 }
 
 #[cfg(test)]
