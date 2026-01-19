@@ -7,6 +7,7 @@ use crate::embed::{create_embedder, embed_in_batches, Embedder};
 use crate::error::{Error, Result};
 use crate::meta::{Chunk, Document, MetaDb, RunOperation, RunStatus, Source, SourceType};
 use crate::parse::{is_binary_content, parse_content, should_skip_file, ContentType};
+use crate::parse::{ParsedDocument, ExtractedMedia};
 use crate::progress::add_progress_bar;
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
 use chrono::Utc;
@@ -31,6 +32,123 @@ pub struct IngestStats {
     pub errors: Vec<String>,
     /// Warnings about source overlaps (potential duplicates)
     pub overlap_warnings: Vec<String>,
+}
+
+/// Determine if a URL looks like an allowed image type based on extension and config
+fn url_is_allowed_image(url: &str, allowed_prefixes: &[String]) -> bool {
+    // If allowed prefixes contain "image/", accept common image extensions
+    let lower = url.to_lowercase();
+    let exts = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"];
+    let has_img_ext = exts.iter().any(|e| lower.ends_with(e));
+    let allows_images = allowed_prefixes.iter().any(|p| p.starts_with("image/"));
+    has_img_ext && allows_images
+}
+
+/// Very simple relevance scoring for image candidates based on alt text and heading overlap
+fn score_image_candidate(doc: &ParsedDocument, media: &ExtractedMedia) -> f32 {
+    let mut score: f32 = 0.0;
+    if let Some(ref alt) = media.alt {
+        if !alt.trim().is_empty() { score += 0.4; }
+        // Heading overlap heuristic
+        let alt_lower = alt.to_lowercase();
+        if doc.headings.iter().any(|h| alt_lower.contains(&h.text.to_lowercase())) {
+            score += 0.3;
+        }
+    }
+    // URL keyword heuristic
+    let url_lower = media.url.to_lowercase();
+    for kw in ["diagram", "architecture", "overview", "flow", "guide", "example"].iter() {
+        if url_lower.contains(kw) { score += 0.2; break; }
+    }
+    // Cap at 1.0
+    score.min(1.0f32)
+}
+
+/// Select image candidates according to config thresholds and limits
+fn select_image_candidates(config: &Config, doc: &ParsedDocument) -> Vec<(ExtractedMedia, f32)> {
+    let mm = &config.crawl.multimodal;
+    if !mm.enabled || !mm.include_images { return Vec::new(); }
+
+    // Collect, filter, score
+    let mut scored: Vec<(ExtractedMedia, f32)> = Vec::new();
+    for m in &doc.media {
+        // Skip CSS backgrounds if disabled
+        if m.css_background && !mm.include_css_background_images { continue; }
+        // Filter by extension prefix heuristic
+        if !url_is_allowed_image(&m.url, &mm.allowed_mime_prefixes) { continue; }
+        let score = score_image_candidate(doc, m);
+        if score >= mm.min_relevance_score {
+            scored.push((m.clone(), score));
+        } else {
+            debug!(url = %m.url, score, threshold = mm.min_relevance_score, "Rejected image candidate (below threshold)");
+        }
+    }
+
+    // Sort by score desc and take up to max_assets_per_page
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    if scored.len() > mm.max_assets_per_page {
+        scored.truncate(mm.max_assets_per_page);
+    }
+    scored
+}
+
+/// Fetch accepted image candidates and cache them under base_dir/assets
+async fn fetch_and_cache_images(config: &Config, images: &[(ExtractedMedia, f32)]) {
+    use reqwest::Client;
+    use tokio::fs;
+
+    let mm = &config.crawl.multimodal;
+    if images.is_empty() { return; }
+
+    let client = Client::builder()
+        .user_agent(&config.crawl.user_agent)
+        .timeout(Duration::from_secs(config.crawl.timeout_secs))
+        .gzip(true)
+        .brotli(true)
+        .build();
+    let client = match client { Ok(c) => c, Err(e) => { warn!("Failed to create HTTP client: {}", e); return; } };
+
+    let assets_dir = config.paths.base_dir.join("assets");
+    if let Err(e) = fs::create_dir_all(&assets_dir).await { warn!("Failed to create assets dir: {}", e); }
+
+    for (m, _score) in images.iter() {
+        // Fetch
+        match client.get(&m.url).send().await {
+            Ok(resp) => {
+                // Content length check
+                if let Some(len) = resp.content_length() {
+                    if len as usize > mm.max_asset_bytes {
+                        debug!(url = %m.url, size = len, limit = mm.max_asset_bytes, "Skipping image (content-length exceeds limit)");
+                        continue;
+                    }
+                }
+                match resp.bytes().await {
+                    Ok(bytes) => {
+                        if bytes.len() > mm.max_asset_bytes {
+                            debug!(url = %m.url, size = bytes.len(), limit = mm.max_asset_bytes, "Skipping image (downloaded size exceeds limit)");
+                            continue;
+                        }
+                        let hash = compute_content_hash(&bytes);
+                        // Determine extension from URL (best-effort)
+                        let ext = if let Some(pos) = m.url.rfind('.') { m.url[pos..].to_string() } else { ".bin".to_string() };
+                        let file_name = format!("{}{}", hash, ext);
+                        let target = assets_dir.join(file_name);
+                        if let Err(e) = fs::write(&target, &bytes).await {
+                            warn!(url = %m.url, path = %target.display(), "Failed to write cached image: {}", e);
+                        } else {
+                            debug!(url = %m.url, path = %target.display(), size = bytes.len(), "Cached image asset");
+                        }
+                    }
+                    Err(e) => {
+                        warn!(url = %m.url, "Failed to read image bytes: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(url = %m.url, "Failed to fetch image: {}", e);
+            }
+        }
+    }
 }
 
 /// CLI overrides for crawl configuration
@@ -448,22 +566,23 @@ async fn process_chunks(
         // Save chunk to SQLite
         db.upsert_chunk(&meta_chunk).await?;
 
-        // Create Qdrant payload
-        let payload = ChunkPayload {
-            source_id: source.id.clone(),
-            source_type: source.source_type.clone(),
-            source_uri: source.uri.clone(),
-            doc_id: doc.id.clone(),
-            doc_uri: doc_uri.to_string(),
-            title: doc.title.clone(),
-            headings: if chunk.headings.is_empty() {
-                None
-            } else {
-                Some(chunk.headings.clone())
-            },
-            chunk_index: *chunk_index as i32,
-            chunk_hash: chunk.hash.clone(),
-            updated_at: Utc::now().to_rfc3339(),
+        // Create Qdrant payload (defaults to text modality)
+        let mut payload = ChunkPayload::new(
+            source.id.clone(),
+            source.source_type.clone(),
+            source.uri.clone(),
+            doc.id.clone(),
+            doc_uri.to_string(),
+            *chunk_index as i32,
+            chunk.hash.clone(),
+            Utc::now().to_rfc3339(),
+        );
+        // Attach optional metadata
+        payload.title = doc.title.clone();
+        payload.headings = if chunk.headings.is_empty() {
+            None
+        } else {
+            Some(chunk.headings.clone())
         };
 
         // Parse qdrant_point_id string to Uuid
@@ -824,6 +943,17 @@ async fn process_page(
 
     // Chunk the document
     let chunks = chunk_document(&parsed, &content_hash, &config.chunk)?;
+
+    // Multimodal image selection (DOM-level) — fetch/embed handled in later steps
+    let images = select_image_candidates(config, &parsed);
+    if !images.is_empty() {
+        debug!(count = images.len(), uri = %page.url, "Selected image candidates for ingestion");
+        for (m, score) in &images {
+            debug!(url = %m.url, css = m.css_background, score, "Image candidate accepted");
+        }
+        // Fetch and cache assets for later embedding
+        fetch_and_cache_images(config, &images).await;
+    }
 
     if chunks.is_empty() {
         debug!("No chunks generated for: {}", page.url);

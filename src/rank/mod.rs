@@ -190,21 +190,21 @@ mod tests {
     use crate::store::ChunkPayload;
 
     fn make_search_result(id: &str, score: f32, doc_uri: &str) -> SearchResult {
+        let payload = ChunkPayload::new(
+            "src".to_string(),
+            "dir".to_string(),
+            "/docs".to_string(),
+            "doc".to_string(),
+            doc_uri.to_string(),
+            0,
+            "hash".to_string(),
+            "2024-01-01".to_string(),
+        );
+
         SearchResult {
             id: id.to_string(),
             score,
-            payload: ChunkPayload {
-                source_id: "src".to_string(),
-                source_type: "dir".to_string(),
-                source_uri: "/docs".to_string(),
-                doc_id: "doc".to_string(),
-                doc_uri: doc_uri.to_string(),
-                title: None,
-                headings: None,
-                chunk_index: 0,
-                chunk_hash: "hash".to_string(),
-                updated_at: "2024-01-01".to_string(),
-            },
+            payload,
         }
     }
 
