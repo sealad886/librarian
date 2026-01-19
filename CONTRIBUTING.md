@@ -94,6 +94,9 @@ librarian/
     │   └── schema.rs    # Database schema
     ├── rank/            # Result ranking
     │   └── mod.rs       # Hybrid BM25 + vector ranking
+   ├── rerank/          # Cross-encoder reranking
+   │   ├── mod.rs       # Reranker trait
+   │   └── fastembed_impl.rs # FastEmbed reranker
     └── mcp/             # MCP server
         ├── mod.rs       # Module exports
         ├── server.rs    # stdio server loop
@@ -272,6 +275,7 @@ Query → Embed → Search (Qdrant) → Rank → Return Results
 - `Embedder` trait for abstraction
 - `FastEmbedder`: Local ONNX embedding
 - Batch processing support
+- Optional image embeddings when multimodal is enabled
 
 #### Store (`store/`)
 
@@ -290,6 +294,12 @@ Query → Embed → Search (Qdrant) → Rank → Return Results
 - `Ranker`: Result scoring
 - Hybrid BM25 + vector scoring
 - Deduplication and filtering
+
+#### Rerank (`rerank/`)
+
+- `Reranker` trait for cross-encoder reranking
+- `FastEmbedReranker` for local reranking
+- Multimodal gating via `reranker.supports_multimodal`
 
 #### MCP (`mcp/`)
 

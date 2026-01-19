@@ -16,6 +16,7 @@ pub mod meta;
 pub mod parse;
 pub mod progress;
 pub mod rank;
+pub mod rerank;
 pub mod store;
 
 pub use config::Config;

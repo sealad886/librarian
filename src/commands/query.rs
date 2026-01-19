@@ -5,6 +5,7 @@ use crate::embed::create_embedder;
 use crate::error::Result;
 use crate::meta::MetaDb;
 use crate::rank::{RankedResult, Ranker};
+use crate::rerank::{create_reranker, Reranker};
 use crate::store::{QdrantStore, SearchFilter};
 use serde::Serialize;
 use tracing::{debug, info};
@@ -87,6 +88,24 @@ pub async fn cmd_query(
     // Filter by score
     ranked = ranker.filter_by_score(ranked, min_score);
 
+    // Optional reranking
+    if config.reranker.enabled && !ranked.is_empty() {
+        let reranker = create_reranker(&config.reranker)?;
+        if config.reranker.supports_multimodal {
+            ranked = apply_reranker(reranker.as_ref(), query, ranked, config.reranker.top_k).await?;
+        } else {
+            let (text_results, other_results): (Vec<_>, Vec<_>) = ranked
+                .into_iter()
+                .partition(|r| r.modality.as_deref().unwrap_or("text") == "text");
+
+            let mut reranked_text =
+                apply_reranker(reranker.as_ref(), query, text_results, config.reranker.top_k)
+                    .await?;
+            reranked_text.extend(other_results);
+            ranked = reranked_text;
+        }
+    }
+
     // Deduplicate if requested
     if options.dedupe_docs {
         ranked = ranker.dedupe_by_doc(ranked);
@@ -103,6 +122,43 @@ pub async fn cmd_query(
         query: query.to_string(),
         total_chunks_searched: total,
     })
+}
+
+async fn apply_reranker(
+    reranker: &dyn Reranker,
+    query: &str,
+    mut results: Vec<RankedResult>,
+    top_k: usize,
+) -> Result<Vec<RankedResult>> {
+    if results.is_empty() {
+        return Ok(results);
+    }
+
+    let docs: Vec<String> = results.iter().map(|r| r.chunk_text.clone()).collect();
+    let mut reranked = reranker.rerank(query, docs).await?;
+
+    if reranked.is_empty() {
+        results.truncate(top_k);
+        return Ok(results);
+    }
+
+    reranked.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut ordered = Vec::new();
+    for r in reranked {
+        if let Some(item) = results.get(r.index) {
+            let mut updated = item.clone();
+            updated.score = r.score;
+            ordered.push(updated);
+        }
+    }
+
+    ordered.truncate(top_k);
+    Ok(ordered)
 }
 
 /// Print query results to console
@@ -123,12 +179,19 @@ pub fn print_query_results(result: &QueryResult) {
             }
         }
 
-        // Print preview (first 200 chars)
-        let preview = if r.chunk_text.len() > 200 {
-            format!("{}...", &r.chunk_text[..200].trim())
+        if r.modality.as_deref() == Some("image") {
+            let label = r
+                .media_url
+                .as_deref()
+                .unwrap_or_else(|| r.doc_uri.as_str());
+            println!("   [image] {}\n", label);
         } else {
-            r.chunk_text.trim().to_string()
-        };
-        println!("   {}\n", preview.replace('\n', " "));
+            let preview = if r.chunk_text.len() > 200 {
+                format!("{}...", &r.chunk_text[..200].trim())
+            } else {
+                r.chunk_text.trim().to_string()
+            };
+            println!("   {}\n", preview.replace('\n', " "));
+        }
     }
 }

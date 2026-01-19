@@ -74,6 +74,24 @@
 - `src/config/mod.rs`  
 - `src/config/defaults.rs`
 
+### Image chunks carry modality + media metadata
+
+**Status:** REQUIRED  
+**Scope:** Chunk creation, cleanup, and reindex flows (ingest, update, reindex)  
+**Rule:** Always set `Chunk.modality = "text"` for text chunks and `Chunk.modality = "image"` (with `media_url`/`media_hash`) for image assets. Use modality-aware helpers (`get_chunks_by_modality`, `delete_chunks_by_modality`) so text cleanup does not delete image chunks.  
+**Rationale (Why this exists):**  
+
+- Ensures Qdrant points can be deleted/reindexed correctly for both text and image assets.  
+- Prevents text-only cleanup (e.g., when a document shrinks) from erasing image embeddings.  
+- Keeps reindex behavior deterministic across modalities.  
+**Examples:**  
+- Good: `Chunk::new_media(..., media_url, media_hash)` and `delete_chunks_by_modality(doc_id, "image")` before re-embedding images.  
+- Bad: Storing images as text chunks without `modality` or letting `delete_chunks_from_index` remove image chunks.  
+**Related Files / Modules:**  
+- `src/meta/mod.rs`  
+- `src/commands/ingest.rs`  
+- `src/commands/reindex.rs`
+
 ## 3. Rationale and Examples
 
 - See examples embedded within each convention above for concrete good/bad patterns that align status reporting and background execution with run tracking.
@@ -85,3 +103,4 @@
 ## 5. Change History (Human-Readable)
 
 - 2026-01-19: Added conventions for RunOperation-aware ingestion and asynchronous MCP triggers with fresh connections.
+- 2026-01-19: Added convention for modality-aware image chunks and multimodal cleanup.

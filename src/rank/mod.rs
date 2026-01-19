@@ -24,6 +24,9 @@ pub struct RankedResult {
     pub source_id: String,
     pub source_type: String,
     pub source_uri: String,
+    pub modality: Option<String>,
+    pub media_url: Option<String>,
+    pub media_hash: Option<String>,
 }
 
 impl From<SearchResult> for RankedResult {
@@ -41,6 +44,9 @@ impl From<SearchResult> for RankedResult {
             source_id: result.payload.source_id,
             source_type: result.payload.source_type,
             source_uri: result.payload.source_uri,
+            modality: result.payload.modality,
+            media_url: result.payload.media_url,
+            media_hash: result.payload.media_hash,
         }
     }
 }

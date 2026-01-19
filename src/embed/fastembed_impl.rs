@@ -4,7 +4,7 @@ use super::Embedder;
 use crate::config::EmbeddingConfig;
 use crate::error::{Error, Result};
 use async_trait::async_trait;
-use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+use fastembed::{EmbeddingModel, ImageEmbedding, ImageEmbeddingModel, ImageInitOptions, InitOptions, TextEmbedding};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
@@ -12,6 +12,7 @@ use tracing::{debug, info};
 /// FastEmbed-based embedder
 pub struct FastEmbedder {
     model: Arc<Mutex<TextEmbedding>>,
+    image_model: Option<Arc<Mutex<ImageEmbedding>>>,
     model_name: String,
     dimension: usize,
 }
@@ -44,8 +45,20 @@ impl FastEmbedder {
 
         info!("FastEmbed model loaded successfully");
 
+        let image_model = if config.supports_multimodal {
+            info!("Initializing FastEmbed image model for multimodal embeddings");
+            let image_options =
+                ImageInitOptions::new(ImageEmbeddingModel::ClipVitB32).with_show_download_progress(true);
+            let image_model = ImageEmbedding::try_new(image_options)
+                .map_err(|e| Error::Embedding(format!("Failed to initialize image model: {}", e)))?;
+            Some(Arc::new(Mutex::new(image_model)))
+        } else {
+            None
+        };
+
         Ok(Self {
             model: Arc::new(Mutex::new(model)),
+            image_model,
             model_name: config.model.clone(),
             dimension: config.resolved_dimension(),
         })
@@ -70,6 +83,28 @@ impl Embedder for FastEmbedder {
         .await
         .map_err(|e| Error::Embedding(format!("Task join error: {}", e)))?
         .map_err(|e| Error::Embedding(format!("Embedding failed: {}", e)))?;
+
+        Ok(embeddings)
+    }
+
+    async fn embed_images(&self, images: Vec<String>) -> Result<Vec<Vec<f32>>> {
+        if images.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let model = self.image_model.clone().ok_or_else(|| {
+            Error::Embedding("Image embedding is not available for this model".to_string())
+        })?;
+
+        debug!("Embedding {} images", images.len());
+
+        let embeddings = tokio::task::spawn_blocking(move || {
+            let model = model.blocking_lock();
+            model.embed(images, None)
+        })
+        .await
+        .map_err(|e| Error::Embedding(format!("Task join error: {}", e)))?
+        .map_err(|e| Error::Embedding(format!("Image embedding failed: {}", e)))?;
 
         Ok(embeddings)
     }

@@ -187,6 +187,9 @@ pub struct Chunk {
     pub char_end: i32,
     pub headings_json: Option<String>,
     pub qdrant_point_id: String,
+    pub modality: String,
+    pub media_url: Option<String>,
+    pub media_hash: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -215,6 +218,40 @@ impl Chunk {
             char_end,
             headings_json: headings.map(|h| serde_json::to_string(&h).unwrap_or_default()),
             qdrant_point_id: point_id,
+            modality: "text".to_string(),
+            media_url: None,
+            media_hash: None,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
+    pub fn new_media(
+        doc_id: String,
+        chunk_index: i32,
+        chunk_hash: String,
+        chunk_text: String,
+        media_url: String,
+        media_hash: Option<String>,
+    ) -> Self {
+        let now = Utc::now().to_rfc3339();
+        let point_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk_hash.as_bytes()).to_string();
+
+        let char_end = chunk_text.len() as i32;
+
+        Self {
+            id: Uuid::new_v4().to_string(),
+            doc_id,
+            chunk_index,
+            chunk_hash,
+            chunk_text,
+            char_start: 0,
+            char_end,
+            headings_json: None,
+            qdrant_point_id: point_id,
+            modality: "image".to_string(),
+            media_url: Some(media_url),
+            media_hash,
             created_at: now.clone(),
             updated_at: now,
         }
@@ -313,6 +350,42 @@ impl MetaDb {
             )
             .execute(&self.pool)
             .await?;
+        }
+
+        let has_modality: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM pragma_table_info('chunks') WHERE name='modality'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if has_modality.is_none() {
+            sqlx::query("ALTER TABLE chunks ADD COLUMN modality TEXT NOT NULL DEFAULT 'text'")
+                .execute(&self.pool)
+                .await?;
+        }
+
+        let has_media_url: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM pragma_table_info('chunks') WHERE name='media_url'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if has_media_url.is_none() {
+            sqlx::query("ALTER TABLE chunks ADD COLUMN media_url TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+
+        let has_media_hash: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM pragma_table_info('chunks') WHERE name='media_hash'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if has_media_hash.is_none() {
+            sqlx::query("ALTER TABLE chunks ADD COLUMN media_hash TEXT")
+                .execute(&self.pool)
+                .await?;
         }
         Ok(())
     }
@@ -558,8 +631,8 @@ impl MetaDb {
     pub async fn upsert_chunk(&self, chunk: &Chunk) -> Result<()> {
         sqlx::query(
             r#"
-            INSERT INTO chunks (id, doc_id, chunk_index, chunk_hash, chunk_text, char_start, char_end, headings_json, qdrant_point_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO chunks (id, doc_id, chunk_index, chunk_hash, chunk_text, char_start, char_end, headings_json, qdrant_point_id, modality, media_url, media_hash, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(doc_id, chunk_index) DO UPDATE SET
                 chunk_hash = excluded.chunk_hash,
                 chunk_text = excluded.chunk_text,
@@ -567,6 +640,9 @@ impl MetaDb {
                 char_end = excluded.char_end,
                 headings_json = excluded.headings_json,
                 qdrant_point_id = excluded.qdrant_point_id,
+                modality = excluded.modality,
+                media_url = excluded.media_url,
+                media_hash = excluded.media_hash,
                 updated_at = excluded.updated_at
             "#,
         )
@@ -579,6 +655,9 @@ impl MetaDb {
         .bind(chunk.char_end)
         .bind(&chunk.headings_json)
         .bind(&chunk.qdrant_point_id)
+        .bind(&chunk.modality)
+        .bind(&chunk.media_url)
+        .bind(&chunk.media_hash)
         .bind(&chunk.created_at)
         .bind(&chunk.updated_at)
         .execute(&self.pool)
@@ -592,6 +671,18 @@ impl MetaDb {
             "SELECT * FROM chunks WHERE doc_id = ? ORDER BY chunk_index",
         )
         .bind(doc_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(chunks)
+    }
+
+    /// Get chunks for a document filtered by modality
+    pub async fn get_chunks_by_modality(&self, doc_id: &str, modality: &str) -> Result<Vec<Chunk>> {
+        let chunks = sqlx::query_as::<_, Chunk>(
+            "SELECT * FROM chunks WHERE doc_id = ? AND modality = ? ORDER BY chunk_index",
+        )
+        .bind(doc_id)
+        .bind(modality)
         .fetch_all(&self.pool)
         .await?;
         Ok(chunks)
@@ -613,16 +704,39 @@ impl MetaDb {
         from_index: i32,
     ) -> Result<Vec<String>> {
         let point_ids: Vec<String> = sqlx::query_scalar(
-            "SELECT qdrant_point_id FROM chunks WHERE doc_id = ? AND chunk_index >= ?",
+            "SELECT qdrant_point_id FROM chunks WHERE doc_id = ? AND chunk_index >= ? AND (modality IS NULL OR modality = 'text')",
         )
         .bind(doc_id)
         .bind(from_index)
         .fetch_all(&self.pool)
         .await?;
 
-        sqlx::query("DELETE FROM chunks WHERE doc_id = ? AND chunk_index >= ?")
+        sqlx::query("DELETE FROM chunks WHERE doc_id = ? AND chunk_index >= ? AND (modality IS NULL OR modality = 'text')")
             .bind(doc_id)
             .bind(from_index)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(point_ids)
+    }
+
+    /// Delete chunks for a document filtered by modality
+    pub async fn delete_chunks_by_modality(
+        &self,
+        doc_id: &str,
+        modality: &str,
+    ) -> Result<Vec<String>> {
+        let point_ids: Vec<String> = sqlx::query_scalar(
+            "SELECT qdrant_point_id FROM chunks WHERE doc_id = ? AND modality = ?",
+        )
+        .bind(doc_id)
+        .bind(modality)
+        .fetch_all(&self.pool)
+        .await?;
+
+        sqlx::query("DELETE FROM chunks WHERE doc_id = ? AND modality = ?")
+            .bind(doc_id)
+            .bind(modality)
             .execute(&self.pool)
             .await?;
 
@@ -823,6 +937,9 @@ impl MetaDb {
                 chunk_index: c.chunk_index,
                 content_hash: c.chunk_hash,
                 headings: c.headings_json,
+                modality: c.modality,
+                media_url: c.media_url,
+                media_hash: c.media_hash,
             })
             .collect())
     }
@@ -859,6 +976,9 @@ pub struct ChunkRecord {
     pub chunk_index: i32,
     pub content_hash: String,
     pub headings: Option<String>,
+    pub modality: String,
+    pub media_url: Option<String>,
+    pub media_hash: Option<String>,
 }
 
 /// Statistics for a single source

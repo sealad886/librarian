@@ -12,7 +12,7 @@ mod fastembed_impl;
 pub use fastembed_impl::*;
 
 use crate::config::EmbeddingConfig;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use async_trait::async_trait;
 
 /// Trait for embedding providers
@@ -20,6 +20,13 @@ use async_trait::async_trait;
 pub trait Embedder: Send + Sync {
     /// Embed a batch of texts
     async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>>;
+
+    /// Embed a batch of images (file paths)
+    async fn embed_images(&self, _images: Vec<String>) -> Result<Vec<Vec<f32>>> {
+        Err(Error::Embedding(
+            "Image embedding is not supported by this backend".to_string(),
+        ))
+    }
 
     /// Get the embedding dimension
     fn dimension(&self) -> usize;
@@ -55,6 +62,23 @@ pub async fn embed_in_batches(
     for chunk in texts.chunks(batch_size) {
         let batch_texts: Vec<String> = chunk.to_vec();
         let embeddings = embedder.embed(batch_texts).await?;
+        all_embeddings.extend(embeddings);
+    }
+
+    Ok(all_embeddings)
+}
+
+/// Helper to embed images in batches with progress
+pub async fn embed_images_in_batches(
+    embedder: &dyn Embedder,
+    images: Vec<String>,
+    batch_size: usize,
+) -> Result<Vec<Vec<f32>>> {
+    let mut all_embeddings = Vec::with_capacity(images.len());
+
+    for chunk in images.chunks(batch_size) {
+        let batch_images: Vec<String> = chunk.to_vec();
+        let embeddings = embedder.embed_images(batch_images).await?;
         all_embeddings.extend(embeddings);
     }
 

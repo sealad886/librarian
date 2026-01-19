@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS chunks (
     char_end INTEGER NOT NULL,
     headings_json TEXT,
     qdrant_point_id TEXT NOT NULL,
+    modality TEXT NOT NULL DEFAULT 'text',
+    media_url TEXT,
+    media_hash TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE(doc_id, chunk_index)

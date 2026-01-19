@@ -12,6 +12,7 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
 - **Incremental Updates**: Smart content hashing for efficient re-indexing
 - **Structure-Aware Chunking**: Respect document structure (headings, code blocks)
 - **Safe Re-ingestion**: Re-running ingest/update reuses canonical document IDs to avoid FK issues and keeps chunk history consistent
+- **Multimodal (Images)**: Optional image discovery, caching, and embeddings (config-gated)
 
 ## Architecture
 
@@ -61,9 +62,9 @@ The easiest way to run Qdrant is via Docker:
 ```bash
 qdrant_for_librarian="qdrant_librarian"
 docker run -p 6333:6333 -p 6334:6334 \
-    -v $(HOME)/.librarian/qdrant_storage:/qdrant/storage:z \
+    -v ${HOME}/.librarian/qdrant_storage:/qdrant/storage:z \
     --name ${qdrant_for_librarian} \
-    qdrant/qdrant
+    qdrant/qdrant -d
 ```
 
 Or install natively: [Qdrant installation guide](https://qdrant.tech/documentation/guides/installation/)
@@ -97,6 +98,22 @@ librarian status
 - **Safe re-ingestion**: Chunk writes now always use the canonical document ID returned by SQLite, preventing `FOREIGN KEY constraint failed` errors during repeated ingest/update runs.
 - **Better debugging**: Run with `RUST_LOG=debug` (or `-v` if using the CLI flag) to see which document IDs are used during ingestion for easier troubleshooting.
 ```
+
+## Multimodal Indexing (Images)
+
+Multimodal indexing is off by default. When enabled, librarian discovers image assets in HTML
+(`img`, `picture`/`source`, and optional CSS backgrounds), caches them locally, and stores image
+embeddings alongside text chunks.
+
+To enable:
+
+1. Set `embedding.supports_multimodal = true`.
+2. Set `crawl.multimodal.enabled = true` and tune thresholds/limits.
+3. Ensure your embedding dimensions are compatible with the image model.
+
+Image embeddings currently use fastembed’s CLIP ViT-B/32 model (512 dimensions). If your configured
+embedding dimension does not match, image embeddings are skipped and a warning is logged. Cached
+assets are stored under `~/.librarian/assets`.
 
 ## Commands
 
@@ -271,6 +288,7 @@ collection_name = "librarian"
 [embedding]
 model = "BAAI/bge-small-en-v1.5"
 dimension = 384
+supports_multimodal = false
 
 # Chunking settings
 [chunk]
@@ -285,6 +303,13 @@ default_k = 5
 min_score = 0.5
 bm25_weight = 0.3
 
+# Optional reranker
+[reranker]
+enabled = false
+model = "BAAI/bge-reranker-base"
+top_k = 10
+supports_multimodal = false
+
 # Crawl settings
 [crawl]
 user_agent = "librarian/0.1 (https://github.com/sealad886/librarian)"
@@ -293,6 +318,18 @@ max_pages = 100
 max_depth = 3
 respect_robots_txt = true
 request_delay_ms = 500
+
+# Multimodal crawling (images)
+[crawl.multimodal]
+enabled = false
+include_images = true
+include_audio = false
+include_video = false
+max_asset_bytes = 5000000
+max_assets_per_page = 10
+allowed_mime_prefixes = ["image/"]
+min_relevance_score = 0.6
+include_css_background_images = false
 ```
 
 ## MCP Integration with VS Code
@@ -331,6 +368,7 @@ Then use the tools via GitHub Copilot or other MCP clients:
 - HTML pages
 - Markdown pages
 - Sitemap XML files
+- Image assets (optional, when multimodal is enabled)
 
 ## Technical Details
 
