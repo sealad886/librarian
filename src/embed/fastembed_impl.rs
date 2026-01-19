@@ -109,6 +109,7 @@ mod tests {
             model: "BAAI/bge-small-en-v1.5".to_string(),
             dimension: 384,
             batch_size: 32,
+            supports_multimodal: false,
         };
 
         let embedder = FastEmbedder::new(&config).unwrap();

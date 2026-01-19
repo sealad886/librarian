@@ -65,6 +65,10 @@ pub struct EmbeddingConfig {
     /// Batch size for embedding
     #[serde(default = "default_embedding_batch_size")]
     pub batch_size: usize,
+
+    /// Whether the embedding model supports multimodal (image/audio/video) embeddings
+    #[serde(default = "default_embedding_supports_multimodal")]
+    pub supports_multimodal: bool,
 }
 
 /// Lookup the expected embedding dimension for a known model
@@ -166,6 +170,10 @@ pub struct CrawlConfig {
     /// Disable browser sandbox (required in some Docker/CI environments)
     #[serde(default)]
     pub js_no_sandbox: bool,
+
+    /// Multimodal crawling configuration
+    #[serde(default)]
+    pub multimodal: MultimodalCrawlConfig,
 }
 
 /// Query configuration
@@ -206,6 +214,50 @@ pub struct RerankerConfig {
     /// Number of results to return after reranking
     #[serde(default = "default_reranker_top_k")]
     pub top_k: usize,
+
+    /// Whether the reranker supports multimodal (cross-encoder over images)
+    #[serde(default = "default_reranker_supports_multimodal")]
+    pub supports_multimodal: bool,
+}
+
+/// Multimodal crawling configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MultimodalCrawlConfig {
+    /// Enable multimodal asset discovery and indexing
+    #[serde(default = "default_multimodal_enabled")]
+    pub enabled: bool,
+
+    /// Include images
+    #[serde(default = "default_multimodal_include_images")]
+    pub include_images: bool,
+
+    /// Include audio (not yet supported)
+    #[serde(default = "default_multimodal_include_audio")]
+    pub include_audio: bool,
+
+    /// Include video (not yet supported)
+    #[serde(default = "default_multimodal_include_video")]
+    pub include_video: bool,
+
+    /// Maximum allowed asset size in bytes
+    #[serde(default = "default_multimodal_max_asset_bytes")]
+    pub max_asset_bytes: usize,
+
+    /// Maximum assets per page
+    #[serde(default = "default_multimodal_max_assets_per_page")]
+    pub max_assets_per_page: usize,
+
+    /// Allowed MIME type prefixes (e.g., ["image/"])
+    #[serde(default = "default_multimodal_allowed_mime_prefixes")]
+    pub allowed_mime_prefixes: Vec<String>,
+
+    /// Minimum relevance score (0.0 - 1.0)
+    #[serde(default = "default_multimodal_min_relevance_score")]
+    pub min_relevance_score: f32,
+
+    /// Include CSS background images if detected
+    #[serde(default = "default_multimodal_include_css_background_images")]
+    pub include_css_background_images: bool,
 }
 
 /// Internal paths configuration
@@ -243,6 +295,7 @@ impl Default for EmbeddingConfig {
             model: default_embedding_model(),
             dimension: default_embedding_dimension(),
             batch_size: default_embedding_batch_size(),
+            supports_multimodal: default_embedding_supports_multimodal(),
         }
     }
 }
@@ -273,6 +326,7 @@ impl Default for CrawlConfig {
             js_page_load_timeout_ms: default_js_page_load_timeout(),
             js_render_wait_ms: default_js_render_wait(),
             js_no_sandbox: false,
+            multimodal: MultimodalCrawlConfig::default(),
         }
     }
 }
@@ -295,6 +349,23 @@ impl Default for RerankerConfig {
             enabled: default_reranker_enabled(),
             model: default_reranker_model(),
             top_k: default_reranker_top_k(),
+            supports_multimodal: default_reranker_supports_multimodal(),
+        }
+    }
+}
+
+impl Default for MultimodalCrawlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_multimodal_enabled(),
+            include_images: default_multimodal_include_images(),
+            include_audio: default_multimodal_include_audio(),
+            include_video: default_multimodal_include_video(),
+            max_asset_bytes: default_multimodal_max_asset_bytes(),
+            max_assets_per_page: default_multimodal_max_assets_per_page(),
+            allowed_mime_prefixes: default_multimodal_allowed_mime_prefixes(),
+            min_relevance_score: default_multimodal_min_relevance_score(),
+            include_css_background_images: default_multimodal_include_css_background_images(),
         }
     }
 }
@@ -426,6 +497,38 @@ impl Config {
             ));
         }
 
+        // Multimodal validation
+        if self.crawl.multimodal.enabled {
+            if !self.embedding.supports_multimodal {
+                return Err(Error::Config(
+                    "crawl.multimodal.enabled requires embedding.supports_multimodal = true"
+                        .to_string(),
+                ));
+            }
+
+            if self.crawl.multimodal.include_audio || self.crawl.multimodal.include_video {
+                return Err(Error::Config(
+                    "Audio/video ingestion not supported yet. Disable include_audio/include_video"
+                        .to_string(),
+                ));
+            }
+
+            if self.crawl.multimodal.min_relevance_score < 0.0
+                || self.crawl.multimodal.min_relevance_score > 1.0
+            {
+                return Err(Error::Config(
+                    "crawl.multimodal.min_relevance_score must be between 0.0 and 1.0"
+                        .to_string(),
+                ));
+            }
+        }
+
+        if self.reranker.supports_multimodal && !self.reranker.enabled {
+            return Err(Error::Config(
+                "reranker.supports_multimodal requires reranker.enabled = true".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }
@@ -496,5 +599,31 @@ mod tests {
         config.embedding.dimension = 512;
 
         assert_eq!(config.embedding.resolved_dimension(), 512);
+    }
+
+    #[test]
+    fn test_multimodal_validation_requires_embedding_support() {
+        let mut config = Config::default();
+        // By default, embedding.supports_multimodal = false
+        config.crawl.multimodal.enabled = true;
+        config.crawl.multimodal.include_images = true;
+        assert!(config.validate().is_err());
+
+        // Enable model support, now validation should pass
+        config.embedding.supports_multimodal = true;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_reranker_multimodal_requires_enabled() {
+        let mut config = Config::default();
+        // If reranker supports multimodal but reranker is disabled, it's invalid
+        config.reranker.supports_multimodal = true;
+        config.reranker.enabled = false;
+        assert!(config.validate().is_err());
+
+        // Enabling reranker should make it valid
+        config.reranker.enabled = true;
+        assert!(config.validate().is_ok());
     }
 }

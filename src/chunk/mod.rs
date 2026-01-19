@@ -298,6 +298,7 @@ mod tests {
             headings: Vec::new(),
             code_blocks: Vec::new(),
             links: Vec::new(),
+            media: Vec::new(),
         }
     }
 

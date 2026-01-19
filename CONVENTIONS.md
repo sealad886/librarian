@@ -56,6 +56,24 @@
 - `src/meta/mod.rs`  
 - `src/commands/ingest.rs`
 
+### Multimodal indexing is capability-gated
+
+**Status:** REQUIRED  
+**Scope:** Configuration validation across crawl/embedding/reranker  
+**Rule:** Enabling multimodal crawling (`crawl.multimodal.enabled = true`) requires `embedding.supports_multimodal = true`. Audio/video ingestion is not yet supported and must remain disabled. If `reranker.supports_multimodal = true`, then `reranker.enabled` must also be `true`.  
+**Rationale (Why this exists):**  
+
+- Prevents configuration from enabling features unsupported by the current models.  
+- Fails fast with clear error messages to avoid silent partial ingestion.  
+- Keeps behavior deterministic and observability consistent.  
+**Examples:**  
+- Good: `embedding.supports_multimodal = true` with `crawl.multimodal.enabled = true` and `include_images = true`.  
+- Bad: `crawl.multimodal.enabled = true` while `embedding.supports_multimodal = false` (validation error).  
+- Bad: `reranker.supports_multimodal = true` with `reranker.enabled = false` (validation error).  
+**Related Files / Modules:**  
+- `src/config/mod.rs`  
+- `src/config/defaults.rs`
+
 ## 3. Rationale and Examples
 
 - See examples embedded within each convention above for concrete good/bad patterns that align status reporting and background execution with run tracking.

@@ -34,7 +34,7 @@ cargo test
 
 # Run with debug logging
 RUST_LOG=debug cargo run -- status
-```
+```text
 
 ### Running Qdrant Locally
 
@@ -50,7 +50,7 @@ docker run -p 6333:6333 -p 6334:6334 \
 
 ## Project Structure
 
-```
+```text
 librarian/
 ├── Cargo.toml           # Project manifest
 ├── README.md            # User documentation
@@ -130,6 +130,7 @@ cargo clippy --all-features -- -D warnings
 1. **Error Handling**: Use the `Result` type from `error.rs`. Propagate errors with `?` operator.
 
 2. **Logging**: Use `tracing` macros (`info!`, `debug!`, `warn!`, `error!`). Include structured fields:
+
    ```rust
    info!(source_id = %source.id, docs = count, "Ingestion complete");
    ```
@@ -137,6 +138,7 @@ cargo clippy --all-features -- -D warnings
 3. **Ingestion invariants**: `MetaDb::upsert_document` returns the canonical document row for a `(source_id, uri)` pair. Always use the returned `Document` (and its `id`) for any chunk writes to avoid FK violations. See `meta::tests::test_reingest_document_uses_canonical_id_for_chunks` for a regression guard.
 
 4. **Documentation**: Add doc comments for public items:
+
    ```rust
    /// Process a single document and return chunk statistics.
    ///
@@ -192,6 +194,7 @@ We aim for good coverage of:
 ## Pull Request Process
 
 1. **Fork and Branch**: Create a feature branch from `main`:
+
    ```bash
    git checkout -b feature/my-feature
    ```
@@ -199,6 +202,7 @@ We aim for good coverage of:
 2. **Make Changes**: Implement your feature or fix.
 
 3. **Test**: Ensure all tests pass:
+
    ```bash
    cargo test
    cargo fmt --check
@@ -206,7 +210,8 @@ We aim for good coverage of:
    ```
 
 4. **Commit**: Use conventional commit messages:
-   ```
+
+   ```text
    feat(crawl): add sitemap index support
    fix(query): handle empty result sets gracefully
    docs(readme): add MCP configuration example
@@ -221,7 +226,7 @@ We aim for good coverage of:
 
 ### Data Flow
 
-```
+```text
 User Input → Parse → Chunk → Embed → Store (Qdrant + SQLite)
                                           ↓
 Query → Embed → Search (Qdrant) → Rank → Return Results

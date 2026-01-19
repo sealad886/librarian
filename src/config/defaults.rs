@@ -7,7 +7,7 @@ pub fn default_qdrant_url() -> String {
 
 /// Default environment variable name for Qdrant API key
 pub fn default_qdrant_api_key_env() -> String {
-    "QDRANT_API_KEY".to_string()
+    "".to_string()
 }
 
 /// Default collection name
@@ -28,6 +28,11 @@ pub fn default_embedding_dimension() -> usize {
 /// Default batch size for embedding
 pub fn default_embedding_batch_size() -> usize {
     32
+}
+
+/// Default: embedding backend does not support multimodal
+pub fn default_embedding_supports_multimodal() -> bool {
+    false
 }
 
 /// Default maximum characters per chunk
@@ -113,6 +118,11 @@ pub fn default_reranker_enabled() -> bool {
     false
 }
 
+/// Default: reranker backend does not support multimodal
+pub fn default_reranker_supports_multimodal() -> bool {
+    false
+}
+
 /// Default number of results to return after reranking
 pub fn default_reranker_top_k() -> usize {
     10
@@ -132,3 +142,30 @@ pub fn default_js_page_load_timeout() -> u64 {
 pub fn default_js_render_wait() -> u64 {
     2000
 }
+
+/// Default: multimodal crawling disabled
+pub fn default_multimodal_enabled() -> bool { false }
+
+/// Default: include images
+pub fn default_multimodal_include_images() -> bool { true }
+
+/// Default: include audio disabled
+pub fn default_multimodal_include_audio() -> bool { false }
+
+/// Default: include video disabled
+pub fn default_multimodal_include_video() -> bool { false }
+
+/// Default: maximum asset bytes (5 MB)
+pub fn default_multimodal_max_asset_bytes() -> usize { 5_000_000 }
+
+/// Default: maximum assets per page
+pub fn default_multimodal_max_assets_per_page() -> usize { 10 }
+
+/// Default: allowed MIME prefixes (images only)
+pub fn default_multimodal_allowed_mime_prefixes() -> Vec<String> { vec!["image/".to_string()] }
+
+/// Default: minimum relevance score threshold
+pub fn default_multimodal_min_relevance_score() -> f32 { 0.6 }
+
+/// Default: include CSS background images disabled
+pub fn default_multimodal_include_css_background_images() -> bool { false }

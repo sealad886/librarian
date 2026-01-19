@@ -27,6 +27,7 @@ pub fn parse_plain_text(content: &str) -> ParsedDocument {
         headings: Vec::new(),
         code_blocks: Vec::new(),
         links: Vec::new(),
+        media: Vec::new(),
     }
 }
 

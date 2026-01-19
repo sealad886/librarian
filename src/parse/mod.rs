@@ -94,6 +94,9 @@ pub struct ParsedDocument {
 
     /// Links found in the document
     pub links: Vec<ExtractedLink>,
+
+    /// Media candidates found in the document (e.g., images)
+    pub media: Vec<ExtractedMedia>,
 }
 
 /// A heading in the document
@@ -135,6 +138,22 @@ pub struct ExtractedLink {
     pub is_internal: bool,
 }
 
+/// An extracted media candidate (currently focused on images)
+#[derive(Debug, Clone)]
+pub struct ExtractedMedia {
+    /// Media URL (resolved against base URL when possible)
+    pub url: String,
+
+    /// Alternative text for images if present
+    pub alt: Option<String>,
+
+    /// Tag name where the media was found (e.g., "img", "source", "div")
+    pub tag: String,
+
+    /// Whether this was extracted from a CSS background-image
+    pub css_background: bool,
+}
+
 impl ParsedDocument {
     pub fn new(text: String, content_type: ContentType) -> Self {
         Self {
@@ -144,6 +163,7 @@ impl ParsedDocument {
             headings: Vec::new(),
             code_blocks: Vec::new(),
             links: Vec::new(),
+            media: Vec::new(),
         }
     }
 

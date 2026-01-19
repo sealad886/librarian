@@ -15,12 +15,12 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      librarian CLI                              │
-├─────────────────────────────────────────────────────────────┤
+```text
+┌──────────────────────────────────────────────────────────────┐
+│                      librarian CLI                           │
+├──────────────────────────────────────────────────────────────┤
 │  Commands: init | ingest | list | status | query | mcp | ... │
-└──────────────────────┬──────────────────────────────────────┘
+└──────────────────────┬───────────────────────────────────────┘
                        │
        ┌───────────────┼───────────────┐
        ▼               ▼               ▼
@@ -42,7 +42,11 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
 ```bash
 git clone https://github.com/sealad886/librarian.git
 cd librarian/librarian
-cargo build --release
+cargo build --release --all-features
+# optionally add to the executable to your PATH
+#   [ ! -d /usr/local/bin ] && mkdir -p /usr/local/bin
+#   ln -s -F "$(pwd)/target/release/librarian" /usr/local/bin/  # if symlinks are supported on your system
+#   cp "$(pwd)/target/release/librarian" /usr/local/bin/  # to copy the executable directly
 
 # Binary will be at target/release/librarian
 ```
@@ -51,13 +55,18 @@ cargo build --release
 
 The easiest way to run Qdrant is via Docker:
 
+!!! Warning
+    Running this command may remove and existing Qdrant Docker containers that are running if you previously used default settings
+
 ```bash
+qdrant_for_librarian="qdrant_librarian"
 docker run -p 6333:6333 -p 6334:6334 \
-    -v $(pwd)/qdrant_storage:/qdrant/storage:z \
+    -v $(HOME)/.librarian/qdrant_storage:/qdrant/storage:z \
+    --name ${qdrant_for_librarian} \
     qdrant/qdrant
 ```
 
-Or install natively: https://qdrant.tech/documentation/guides/installation/
+Or install natively: [Qdrant installation guide](https://qdrant.tech/documentation/guides/installation/)
 
 ## Quick Start
 
@@ -224,6 +233,7 @@ librarian mcp
 ```
 
 The MCP server communicates via stdio and exposes:
+
 - `rag_search`: Search the index
 - `rag_sources`: List sources
 - `rag_status`: Get status
@@ -260,7 +270,7 @@ collection_name = "librarian"
 # Embedding model
 [embedding]
 model = "BAAI/bge-small-en-v1.5"
-dimensions = 384
+dimension = 384
 
 # Chunking settings
 [chunk]
@@ -301,6 +311,7 @@ Add to your VS Code `settings.json`:
 ```
 
 Then use the tools via GitHub Copilot or other MCP clients:
+
 - Search documentation with `rag_search`
 - List available sources with `rag_sources`
 - Check system health with `rag_status`
@@ -308,6 +319,7 @@ Then use the tools via GitHub Copilot or other MCP clients:
 ## Supported Formats
 
 ### Local Files
+
 - Markdown (`.md`, `.mdx`)
 - HTML (`.html`, `.htm`)
 - Plain text (`.txt`, `.text`)
@@ -315,6 +327,7 @@ Then use the tools via GitHub Copilot or other MCP clients:
 - Code files (for documentation comments)
 
 ### Web Content
+
 - HTML pages
 - Markdown pages
 - Sitemap XML files
@@ -324,6 +337,7 @@ Then use the tools via GitHub Copilot or other MCP clients:
 ### Embedding Model
 
 Uses [FastEmbed](https://crates.io/crates/fastembed) with BAAI/bge-small-en-v1.5:
+
 - 384 dimensions
 - Optimized for retrieval tasks
 - Runs locally (no API calls)
@@ -331,6 +345,7 @@ Uses [FastEmbed](https://crates.io/crates/fastembed) with BAAI/bge-small-en-v1.5
 ### Vector Database
 
 [Qdrant](https://qdrant.tech/) provides:
+
 - Efficient cosine similarity search
 - Filtering by metadata
 - Persistence and scalability
@@ -338,6 +353,7 @@ Uses [FastEmbed](https://crates.io/crates/fastembed) with BAAI/bge-small-en-v1.5
 ### Metadata Storage
 
 SQLite database stores:
+
 - Source registry
 - Document metadata
 - Chunk information with content hashes
@@ -346,6 +362,7 @@ SQLite database stores:
 ### Chunking Strategy
 
 Structure-aware chunking:
+
 1. Prefer breaking at headings
 2. Fall back to paragraph boundaries
 3. Respect sentence boundaries
@@ -354,6 +371,7 @@ Structure-aware chunking:
 ### Ranking
 
 Hybrid ranking combines:
+
 - **Vector similarity** (semantic meaning)
 - **BM25** (keyword matching) - configurable weight
 

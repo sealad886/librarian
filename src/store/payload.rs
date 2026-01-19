@@ -56,6 +56,18 @@ pub struct ChunkPayload {
 
     /// When this chunk was last updated
     pub updated_at: String,
+
+    /// Modality of the payload (e.g., "text", "image"). Defaults to "text".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modality: Option<String>,
+
+    /// Original media URL if modality is image
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_url: Option<String>,
+
+    /// Cached media content hash if available
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_hash: Option<String>,
 }
 
 impl ChunkPayload {
@@ -80,6 +92,9 @@ impl ChunkPayload {
             chunk_index,
             chunk_hash,
             updated_at,
+            modality: Some("text".to_string()),
+            media_url: None,
+            media_hash: None,
         }
     }
 
@@ -118,6 +133,18 @@ impl ChunkPayload {
             );
         }
 
+        if let Some(ref modality) = self.modality {
+            map.insert("modality".to_string(), string_to_qdrant(modality));
+        }
+
+        if let Some(ref media_url) = self.media_url {
+            map.insert("media_url".to_string(), string_to_qdrant(media_url));
+        }
+
+        if let Some(ref media_hash) = self.media_hash {
+            map.insert("media_hash".to_string(), string_to_qdrant(media_hash));
+        }
+
         map
     }
 }
@@ -149,6 +176,9 @@ impl From<Map<String, Value>> for ChunkPayload {
             chunk_index: 0,
             chunk_hash: String::new(),
             updated_at: String::new(),
+            modality: Some("text".to_string()),
+            media_url: None,
+            media_hash: None,
         })
     }
 }
