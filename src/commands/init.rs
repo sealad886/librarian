@@ -720,12 +720,12 @@ fn prompt_select(label: &str, options: &[impl AsRef<str>], default_index: usize,
             terminal::Clear(terminal::ClearType::All),
             cursor::MoveTo(0, 0)
         )?;
-        writeln!(stdout, "{}", label)?;
+        write_prompt_line(&mut stdout, label)?;
         for (idx, option) in options.iter().enumerate() {
             if idx == selected {
-                writeln!(stdout, "> {}", option.as_ref())?;
+                write_prompt_line(&mut stdout, &format!("> {}", option.as_ref()))?;
             } else {
-                writeln!(stdout, "  {}", option.as_ref())?;
+                write_prompt_line(&mut stdout, &format!("  {}", option.as_ref()))?;
             }
         }
         stdout.flush()?;
@@ -755,6 +755,15 @@ fn prompt_select(label: &str, options: &[impl AsRef<str>], default_index: usize,
             _ => {}
         }
     }
+}
+
+fn format_prompt_line(text: &str) -> String {
+    format!("\r{}\n", text)
+}
+
+fn write_prompt_line(stdout: &mut impl Write, text: &str) -> Result<()> {
+    stdout.write_all(format_prompt_line(text).as_bytes())?;
+    Ok(())
 }
 
 fn prompt_string<F>(label: &str, default: &str, validate: F, auto_accept: bool) -> Result<String>
@@ -936,5 +945,12 @@ mod tests {
     fn test_resolve_interactive_non_interactive_ok() {
         let result = resolve_interactive(false, true).unwrap();
         assert!(!result);
+    }
+
+    #[test]
+    fn test_format_prompt_line_uses_crlf() {
+        let line = format_prompt_line("Prompt");
+        assert!(line.starts_with("\r"));
+        assert!(line.ends_with("\n"));
     }
 }
