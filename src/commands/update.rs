@@ -6,7 +6,7 @@ use crate::commands::{
 use crate::commands::{cmd_prune, PruneOptions, PruneStats};
 use crate::config::Config;
 use crate::error::Result;
-use crate::meta::{MetaDb, SourceType};
+use crate::meta::{MetaDb, RunOperation, SourceType};
 use crate::store::QdrantStore;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -71,7 +71,16 @@ pub async fn cmd_update(
         let ingest_result = match source_type {
             SourceType::Dir => {
                 let path = Path::new(&source.uri);
-                cmd_ingest_dir(config, db, store, path, source.name.clone()).await
+                cmd_ingest_dir(
+                    config,
+                    db,
+                    store,
+                    path,
+                    source.name.clone(),
+                    RunOperation::Update,
+                    false,
+                )
+                .await
             }
             SourceType::Url => {
                 let overrides = CrawlOverrides::default();
@@ -82,11 +91,23 @@ pub async fn cmd_update(
                     &source.uri,
                     source.name.clone(),
                     overrides,
+                    RunOperation::Update,
+                    false,
                 )
                 .await
             }
             SourceType::Sitemap => {
-                cmd_ingest_sitemap(config, db, store, &source.uri, source.name.clone(), None).await
+                cmd_ingest_sitemap(
+                    config,
+                    db,
+                    store,
+                    &source.uri,
+                    source.name.clone(),
+                    None,
+                    RunOperation::Update,
+                    false,
+                )
+                .await
             }
         };
 

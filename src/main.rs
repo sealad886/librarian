@@ -14,7 +14,7 @@ use librarian::{
     embed::FastEmbedder,
     error::Result,
     mcp::McpServer,
-    meta::MetaDb,
+    meta::{MetaDb, RunOperation},
     progress::LogWriterFactory,
     store::QdrantStore,
 };
@@ -446,10 +446,16 @@ fn print_completion_extras(shell: Shell) {
     match shell {
         Shell::Bash => {
             println!();
-            println!("{raw}", raw = r#"# Dynamic completion for 'librarian remove' source IDs"#);
+            println!(
+                "{raw}",
+                raw = r#"# Dynamic completion for 'librarian remove' source IDs"#
+            );
             println!("{raw}", raw = r#"_librarian_dynamic() {"#);
             println!("{raw}", raw = r#"    local cur prev words cword"#);
-            println!("{raw}", raw = r#"    if declare -F _init_completion >/dev/null; then"#);
+            println!(
+                "{raw}",
+                raw = r#"    if declare -F _init_completion >/dev/null; then"#
+            );
             println!("{raw}", raw = r#"        _init_completion -n : || return"#);
             println!("{raw}", raw = r#"    else"#);
             println!("{raw}", raw = r#"        cur="${COMP_WORDS[COMP_CWORD]}""#);
@@ -458,12 +464,19 @@ fn print_completion_extras(shell: Shell) {
             println!("{raw}", raw = r#"    fi"#);
             println!("{raw}", raw = r#"    local remove_index=-1"#);
             println!("{raw}", raw = r#"    for i in "${!words[@]}"; do"#);
-            println!("{raw}", raw = r#"        if [[ "${words[i]}" == "remove" ]]; then"#);
+            println!(
+                "{raw}",
+                raw = r#"        if [[ "${words[i]}" == "remove" ]]; then"#
+            );
             println!("{raw}", raw = r#"            remove_index=$i"#);
             println!("{raw}", raw = r#"            break"#);
             println!("{raw}", raw = r#"        fi"#);
             println!("{raw}", raw = r#"    done"#);
-            println!("{raw}", raw = r#"    if [[ $remove_index -ge 0 && $cword -eq $((remove_index + 1)) ]]; then"#);
+            println!(
+                "{raw}",
+                raw =
+                    r#"    if [[ $remove_index -ge 0 && $cword -eq $((remove_index + 1)) ]]; then"#
+            );
             println!(
                 "{raw}",
                 raw = r#"        COMPREPLY=( $(compgen -W "$(librarian sources --completion bash 2>/dev/null)" -- "$cur") )"#
@@ -489,7 +502,10 @@ fn print_completion_extras(shell: Shell) {
         }
         Shell::Zsh => {
             println!();
-            println!("{}", r#"# Dynamic completion for 'librarian remove' source IDs"#);
+            println!(
+                "{}",
+                r#"# Dynamic completion for 'librarian remove' source IDs"#
+            );
             println!("{}", r#"_librarian_source_ids() {"#);
             println!("{}", r#"    local -a entries"#);
             println!(
@@ -502,7 +518,10 @@ fn print_completion_extras(shell: Shell) {
         }
         Shell::Fish => {
             println!();
-            println!("{}", r#"# Dynamic completion for 'librarian remove' source IDs"#);
+            println!(
+                "{}",
+                r#"# Dynamic completion for 'librarian remove' source IDs"#
+            );
             println!(
                 "{}",
                 r#"complete -c librarian -n '__fish_seen_subcommand_from remove' -a '(librarian sources --completion fish 2>/dev/null)'"#
@@ -636,7 +655,8 @@ async fn handle_ingest(
             extensions: _,
             exclude: _,
         } => {
-            let stats = cmd_ingest_dir(config, db, store, &path, name).await?;
+            let stats =
+                cmd_ingest_dir(config, db, store, &path, name, RunOperation::Ingest, true).await?;
 
             // Display overlap warnings
             for warning in &stats.overlap_warnings {
@@ -663,7 +683,17 @@ async fn handle_ingest(
                 max_depth: Some(max_depth),
                 path_prefix,
             };
-            let stats = cmd_ingest_url(config, db, store, &url, name, overrides).await?;
+            let stats = cmd_ingest_url(
+                config,
+                db,
+                store,
+                &url,
+                name,
+                overrides,
+                RunOperation::Ingest,
+                true,
+            )
+            .await?;
 
             // Display overlap warnings
             for warning in &stats.overlap_warnings {
@@ -681,7 +711,17 @@ async fn handle_ingest(
             name,
             max_pages,
         } => {
-            let stats = cmd_ingest_sitemap(config, db, store, &url, name, max_pages).await?;
+            let stats = cmd_ingest_sitemap(
+                config,
+                db,
+                store,
+                &url,
+                name,
+                max_pages,
+                RunOperation::Ingest,
+                true,
+            )
+            .await?;
 
             // Display overlap warnings
             for warning in &stats.overlap_warnings {

@@ -3,7 +3,7 @@
 use crate::config::Config;
 use crate::embed::Embedder;
 use crate::error::Result;
-use crate::meta::MetaDb;
+use crate::meta::{MetaDb, RunOperation, RunStatus};
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -66,6 +66,14 @@ pub async fn cmd_reindex<E: Embedder>(
 
     // Process each source
     for source in sources {
+        let run = db
+            .start_ingestion_run(&source.id, RunOperation::Reindex)
+            .await?;
+
+        let mut run_errors: Vec<String> = Vec::new();
+        let mut run_docs_processed = 0usize;
+        let mut run_chunks_updated = 0usize;
+
         let documents = db.list_source_documents(&source.id).await?;
 
         for doc in documents {
@@ -84,6 +92,8 @@ pub async fn cmd_reindex<E: Embedder>(
                 Ok(chunk_count) => {
                     stats.documents_processed += 1;
                     stats.chunks_reindexed += chunk_count;
+                    run_docs_processed += 1;
+                    run_chunks_updated += chunk_count;
                 }
                 Err(e) => {
                     warn!(
@@ -92,9 +102,32 @@ pub async fn cmd_reindex<E: Embedder>(
                         "Failed to reindex document"
                     );
                     stats.errors += 1;
+                    run_errors.push(format!("{}: {}", doc.id, e));
                 }
             }
         }
+
+        let status = if run_errors.is_empty() {
+            RunStatus::Completed
+        } else {
+            RunStatus::Failed
+        };
+
+        let _ = db
+            .complete_ingestion_run(
+                &run.id,
+                status,
+                run_docs_processed as i32,
+                0,
+                run_chunks_updated as i32,
+                0,
+                if run_errors.is_empty() {
+                    None
+                } else {
+                    Some(run_errors.clone())
+                },
+            )
+            .await;
     }
 
     info!(

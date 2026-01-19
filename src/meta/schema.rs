@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE TABLE IF NOT EXISTS ingestion_runs (
     id TEXT PRIMARY KEY,
     source_id TEXT NOT NULL REFERENCES sources(id),
+    operation TEXT NOT NULL DEFAULT 'ingest',
     started_at TEXT NOT NULL,
     completed_at TEXT,
     status TEXT NOT NULL,

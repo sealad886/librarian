@@ -2,10 +2,11 @@
 
 use crate::config::Config;
 use crate::error::Result;
-use crate::meta::{GlobalStats, MetaDb, SourceStats};
+use crate::meta::{GlobalStats, IngestionRun, MetaDb, RunOperation, RunStatus, SourceStats};
 use crate::store::QdrantStore;
 use clap_complete::Shell;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use tracing::info;
 
 /// Status information
@@ -71,6 +72,45 @@ pub struct SourceInfo {
     pub created_at: String,
     pub updated_at: String,
     pub stats: SourceStats,
+    pub state: String,
+    pub last_updated: Option<String>,
+    pub last_run: Option<RunSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunSummary {
+    pub operation: String,
+    pub status: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub docs_processed: i32,
+    pub chunks_created: i32,
+    pub chunks_updated: i32,
+    pub chunks_deleted: i32,
+    pub error_count: usize,
+}
+
+impl From<IngestionRun> for RunSummary {
+    fn from(run: IngestionRun) -> Self {
+        let error_count = run
+            .errors_json
+            .as_ref()
+            .and_then(|e| serde_json::from_str::<Vec<String>>(e).ok())
+            .map(|v| v.len())
+            .unwrap_or(0);
+
+        Self {
+            operation: run.operation,
+            status: run.status,
+            started_at: run.started_at,
+            completed_at: run.completed_at,
+            docs_processed: run.docs_processed,
+            chunks_created: run.chunks_created,
+            chunks_updated: run.chunks_updated,
+            chunks_deleted: run.chunks_deleted,
+            error_count,
+        }
+    }
 }
 
 /// List all sources with their stats
@@ -82,6 +122,8 @@ pub async fn cmd_list_sources(db: &MetaDb) -> Result<Vec<SourceInfo>> {
 
     for source in sources {
         let stats = db.get_source_stats(&source.id).await?;
+        let latest_run = db.get_latest_run(&source.id).await?;
+        let (state, last_updated) = derive_state(latest_run.as_ref());
         result.push(SourceInfo {
             id: source.id,
             source_type: source.source_type,
@@ -90,6 +132,9 @@ pub async fn cmd_list_sources(db: &MetaDb) -> Result<Vec<SourceInfo>> {
             created_at: source.created_at,
             updated_at: source.updated_at,
             stats,
+            state,
+            last_updated,
+            last_run: latest_run.map(RunSummary::from),
         });
     }
 
@@ -144,9 +189,41 @@ pub fn print_sources(sources: &[SourceInfo]) {
             "  Documents: {}, Chunks: {}",
             source.stats.document_count, source.stats.chunk_count
         );
+        println!("  State: {}", source.state);
+        if let Some(last_updated) = &source.last_updated {
+            println!("  Last update: {}", last_updated);
+        }
+        if let Some(run) = &source.last_run {
+            println!("  Last operation: {} ({})", run.operation, run.status);
+        }
         println!("  Created: {}", source.created_at);
         println!();
     }
+}
+
+fn derive_state(run: Option<&IngestionRun>) -> (String, Option<String>) {
+    let Some(run) = run else {
+        return ("ready".to_string(), None);
+    };
+
+    let status = RunStatus::from_str(&run.status).unwrap_or(RunStatus::Completed);
+    let operation = RunOperation::from_str(&run.operation).unwrap_or(RunOperation::Ingest);
+
+    let state = match status {
+        RunStatus::Running => match operation {
+            RunOperation::Update => "updating",
+            RunOperation::Reindex | RunOperation::Ingest => "indexing",
+        },
+        RunStatus::Completed => "ready",
+        RunStatus::Failed => "error",
+    };
+
+    let last_updated = run
+        .completed_at
+        .clone()
+        .or_else(|| Some(run.started_at.clone()));
+
+    (state.to_string(), last_updated)
 }
 
 /// Print source IDs with descriptions for shell completions

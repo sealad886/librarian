@@ -5,7 +5,7 @@ use crate::config::Config;
 use crate::crawl::{CrawledPage, Crawler};
 use crate::embed::{create_embedder, embed_in_batches, Embedder};
 use crate::error::{Error, Result};
-use crate::meta::{Chunk, Document, MetaDb, RunStatus, Source, SourceType};
+use crate::meta::{Chunk, Document, MetaDb, RunOperation, RunStatus, Source, SourceType};
 use crate::parse::{is_binary_content, parse_content, should_skip_file, ContentType};
 use crate::progress::add_progress_bar;
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
@@ -187,6 +187,8 @@ pub async fn cmd_ingest_dir(
     store: &QdrantStore,
     path: &Path,
     name: Option<String>,
+    operation: RunOperation,
+    interactive: bool,
 ) -> Result<IngestStats> {
     let canonical_path = path
         .canonicalize()
@@ -207,10 +209,10 @@ pub async fn cmd_ingest_dir(
     }
 
     // Resolve source interactively on conflicts
-    let source = resolve_source_interactive(db, SourceType::Dir, &uri, name.clone()).await?;
+    let source = resolve_source(db, SourceType::Dir, &uri, name.clone(), interactive).await?;
 
     // Start ingestion run
-    let run = db.start_ingestion_run(&source.id).await?;
+    let run = db.start_ingestion_run(&source.id, operation).await?;
 
     // Create embedder
     let embedder = create_embedder(&config.embedding)?;
@@ -501,6 +503,8 @@ pub async fn cmd_ingest_url(
     url: &str,
     name: Option<String>,
     overrides: CrawlOverrides,
+    operation: RunOperation,
+    interactive: bool,
 ) -> Result<IngestStats> {
     info!("Ingesting URL: {}", url);
 
@@ -516,10 +520,10 @@ pub async fn cmd_ingest_url(
     }
 
     // Resolve source interactively on conflicts
-    let source = resolve_source_interactive(db, SourceType::Url, url, name.clone()).await?;
+    let source = resolve_source(db, SourceType::Url, url, name.clone(), interactive).await?;
 
     // Start ingestion run
-    let run = db.start_ingestion_run(&source.id).await?;
+    let run = db.start_ingestion_run(&source.id, operation).await?;
 
     // Create embedder
     let embedder = create_embedder(&config.embedding)?;
@@ -630,6 +634,8 @@ pub async fn cmd_ingest_sitemap(
     sitemap_url: &str,
     name: Option<String>,
     max_pages: Option<u32>,
+    operation: RunOperation,
+    interactive: bool,
 ) -> Result<IngestStats> {
     use crate::crawl::SitemapParser;
 
@@ -666,11 +672,17 @@ pub async fn cmd_ingest_sitemap(
     }
 
     // Resolve source interactively on conflicts
-    let source =
-        resolve_source_interactive(db, SourceType::Sitemap, sitemap_url, name.clone()).await?;
+    let source = resolve_source(
+        db,
+        SourceType::Sitemap,
+        sitemap_url,
+        name.clone(),
+        interactive,
+    )
+    .await?;
 
     // Start ingestion run
-    let run = db.start_ingestion_run(&source.id).await?;
+    let run = db.start_ingestion_run(&source.id, operation).await?;
 
     // Create embedder and crawler
     let embedder = create_embedder(&config.embedding)?;
@@ -835,6 +847,26 @@ fn finish_progress(pb: Option<ProgressBar>, message: &str) {
     if let Some(pb) = pb {
         pb.finish_with_message(message.to_string());
     }
+}
+
+async fn resolve_source(
+    db: &MetaDb,
+    source_type: SourceType,
+    uri: &str,
+    desired_name: Option<String>,
+    interactive: bool,
+) -> Result<Source> {
+    if interactive {
+        return resolve_source_interactive(db, source_type, uri, desired_name).await;
+    }
+
+    if let Some(existing) = db.get_source_by_uri(uri).await? {
+        return Ok(existing);
+    }
+
+    let source = Source::new(source_type, uri.to_string(), desired_name);
+    db.insert_source(&source).await?;
+    Ok(source)
 }
 
 async fn resolve_source_interactive(

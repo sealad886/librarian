@@ -61,12 +61,30 @@ pub enum RunStatus {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunOperation {
+    Ingest,
+    Update,
+    Reindex,
+}
+
 impl std::fmt::Display for RunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RunStatus::Running => write!(f, "running"),
             RunStatus::Completed => write!(f, "completed"),
             RunStatus::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+impl std::fmt::Display for RunOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RunOperation::Ingest => write!(f, "ingest"),
+            RunOperation::Update => write!(f, "update"),
+            RunOperation::Reindex => write!(f, "reindex"),
         }
     }
 }
@@ -80,6 +98,19 @@ impl FromStr for RunStatus {
             "completed" => Ok(RunStatus::Completed),
             "failed" => Ok(RunStatus::Failed),
             _ => Err(Error::Config(format!("Unknown run status: {}", s))),
+        }
+    }
+}
+
+impl FromStr for RunOperation {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            "ingest" => Ok(RunOperation::Ingest),
+            "update" => Ok(RunOperation::Update),
+            "reindex" => Ok(RunOperation::Reindex),
+            _ => Err(Error::Config(format!("Unknown run operation: {}", s))),
         }
     }
 }
@@ -202,6 +233,7 @@ impl Chunk {
 pub struct IngestionRun {
     pub id: String,
     pub source_id: String,
+    pub operation: String,
     pub started_at: String,
     pub completed_at: Option<String>,
     pub status: String,
@@ -213,10 +245,11 @@ pub struct IngestionRun {
 }
 
 impl IngestionRun {
-    pub fn new(source_id: String) -> Self {
+    pub fn new(source_id: String, operation: RunOperation) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             source_id,
+            operation: operation.to_string(),
             started_at: Utc::now().to_rfc3339(),
             completed_at: None,
             status: RunStatus::Running.to_string(),
@@ -265,6 +298,22 @@ impl MetaDb {
     pub async fn init_schema(&self) -> Result<()> {
         info!("Initializing database schema");
         sqlx::query(SCHEMA_SQL).execute(&self.pool).await?;
+
+        // Backfill optional columns for existing installations
+        // Add ingestion_runs.operation if missing
+        let has_operation: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM pragma_table_info('ingestion_runs') WHERE name='operation'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if has_operation.is_none() {
+            sqlx::query(
+                "ALTER TABLE ingestion_runs ADD COLUMN operation TEXT NOT NULL DEFAULT 'ingest'",
+            )
+            .execute(&self.pool)
+            .await?;
+        }
         Ok(())
     }
 
@@ -582,16 +631,21 @@ impl MetaDb {
     // ===== Ingestion Run Operations =====
 
     /// Start a new ingestion run
-    pub async fn start_ingestion_run(&self, source_id: &str) -> Result<IngestionRun> {
-        let run = IngestionRun::new(source_id.to_string());
+    pub async fn start_ingestion_run(
+        &self,
+        source_id: &str,
+        operation: RunOperation,
+    ) -> Result<IngestionRun> {
+        let run = IngestionRun::new(source_id.to_string(), operation);
         sqlx::query(
             r#"
-            INSERT INTO ingestion_runs (id, source_id, started_at, status, docs_processed, chunks_created, chunks_updated, chunks_deleted)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO ingestion_runs (id, source_id, operation, started_at, status, docs_processed, chunks_created, chunks_updated, chunks_deleted)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&run.id)
         .bind(&run.source_id)
+        .bind(&run.operation)
         .bind(&run.started_at)
         .bind(&run.status)
         .bind(run.docs_processed)
