@@ -341,12 +341,14 @@ async fn process_file(
     let content_hash = compute_content_hash(text.as_bytes());
 
     // Check if content changed
-    if let Some(existing_doc) = db.get_document_by_uri(&source.id, &file_uri).await? {
+    let existing_doc = db.get_document_by_uri(&source.id, &file_uri).await?;
+    if let Some(existing_doc) = existing_doc.as_ref() {
         if existing_doc.content_hash == content_hash {
             debug!("File unchanged: {}", file_uri);
             return Ok((0, 0));
         }
     }
+    let was_existing = existing_doc.is_some();
 
     // Detect content type and parse
     let content_type = ContentType::from_extension(path);
@@ -356,7 +358,14 @@ async fn process_file(
     let mut doc = Document::new(source.id.clone(), file_uri.clone(), content_hash.clone());
     doc.title = parsed.title.clone();
     doc.content_type = Some(format!("{:?}", content_type).to_lowercase());
-    db.upsert_document(&doc).await?;
+    let doc = db.upsert_document(&doc).await?;
+    debug!(
+        doc_id = %doc.id,
+        source_id = %doc.source_id,
+        existing = was_existing,
+        uri = %doc.uri,
+        "Upserted document for file ingestion"
+    );
 
     // Chunk the document
     let chunks = chunk_document(&parsed, &content_hash, &config.chunk)?;
@@ -788,12 +797,14 @@ async fn process_page(
     let content_hash = compute_content_hash(page.content.as_bytes());
 
     // Check if content changed
-    if let Some(existing_doc) = db.get_document_by_uri(&source.id, &page.url).await? {
+    let existing_doc = db.get_document_by_uri(&source.id, &page.url).await?;
+    if let Some(existing_doc) = existing_doc.as_ref() {
         if existing_doc.content_hash == content_hash {
             debug!("Page unchanged: {}", page.url);
             return Ok((0, 0));
         }
     }
+    let was_existing = existing_doc.is_some();
 
     // Parse content
     let parsed = parse_content(&page.content, page.content_type, Some(&page.url))?;
@@ -802,7 +813,14 @@ async fn process_page(
     let mut doc = Document::new(source.id.clone(), page.url.clone(), content_hash.clone());
     doc.title = page.title.clone().or(parsed.title.clone());
     doc.content_type = Some(format!("{:?}", page.content_type).to_lowercase());
-    db.upsert_document(&doc).await?;
+    let doc = db.upsert_document(&doc).await?;
+    debug!(
+        doc_id = %doc.id,
+        source_id = %doc.source_id,
+        existing = was_existing,
+        uri = %doc.uri,
+        "Upserted document for page ingestion"
+    );
 
     // Chunk the document
     let chunks = chunk_document(&parsed, &content_hash, &config.chunk)?;

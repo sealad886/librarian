@@ -39,6 +39,23 @@
 **Related Files / Modules:**  
 - `src/mcp/tools.rs`
 
+### Chunk writes must use canonical document IDs
+
+**Status:** REQUIRED  
+**Scope:** All ingestion flows that write chunks (dir/url/sitemap, updates, tests)  
+**Rule:** Always use the `Document` returned by `MetaDb::upsert_document` when writing chunks. The returned `Document` carries the canonical `id` for `(source_id, uri)`; never reuse a freshly generated UUID when the doc already exists.  
+**Rationale (Why this exists):**  
+
+- Avoids `FOREIGN KEY constraint failed` on `chunks.doc_id → documents.id` when re-ingesting existing docs.  
+- Ensures chunk updates/embeddings attach to the persisted document row.  
+- Keeps document/chunk stats accurate across ingest/update/reindex.  
+**Examples:**  
+- Good: `let doc = db.upsert_document(&doc).await?; process_chunks(... &doc, ...)`  
+- Bad: `db.upsert_document(&doc).await?; process_chunks(... &original_doc_with_new_uuid, ...)`  
+**Related Files / Modules:**  
+- `src/meta/mod.rs`  
+- `src/commands/ingest.rs`
+
 ## 3. Rationale and Examples
 
 - See examples embedded within each convention above for concrete good/bad patterns that align status reporting and background execution with run tracking.

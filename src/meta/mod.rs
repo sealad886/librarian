@@ -431,8 +431,12 @@ impl MetaDb {
 
     // ===== Document Operations =====
 
-    /// Insert or update a document
-    pub async fn upsert_document(&self, doc: &Document) -> Result<()> {
+    /// Insert or update a document, returning the stored document with canonical ID.
+    ///
+    /// On conflict (same source_id + uri), updates the existing row but preserves
+    /// the original document ID. Callers MUST use the returned document's ID
+    /// for any subsequent operations (e.g., chunk writes) to avoid FK violations.
+    pub async fn upsert_document(&self, doc: &Document) -> Result<Document> {
         sqlx::query(
             r#"
             INSERT INTO documents (id, source_id, uri, title, content_hash, content_type, created_at, updated_at)
@@ -454,7 +458,20 @@ impl MetaDb {
         .bind(&doc.updated_at)
         .execute(&self.pool)
         .await?;
-        Ok(())
+
+        let stored = self
+            .get_document_by_uri(&doc.source_id, &doc.uri)
+            .await?
+            .ok_or_else(|| Error::DocumentNotFound(doc.uri.clone()))?;
+
+        debug!(
+            doc_id = %stored.id,
+            source_id = %stored.source_id,
+            uri = %stored.uri,
+            "Persisted document after upsert"
+        );
+
+        Ok(stored)
     }
 
     /// Get document by ID
@@ -910,7 +927,7 @@ mod tests {
             "hash1".to_string(),
         );
         doc.title = Some("Test File".to_string());
-        db.upsert_document(&doc).await.unwrap();
+        let stored = db.upsert_document(&doc).await.unwrap();
 
         let loaded = db
             .get_document_by_uri(&source.id, "/docs/file.md")
@@ -918,11 +935,21 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded.content_hash, "hash1");
+        assert_eq!(stored.id, loaded.id);
 
-        // Update the document
-        doc.content_hash = "hash2".to_string();
-        doc.updated_at = Utc::now().to_rfc3339();
-        db.upsert_document(&doc).await.unwrap();
+        // Update the document with a new Document instance (simulates re-ingest)
+        let mut doc2 = Document::new(
+            source.id.clone(),
+            "/docs/file.md".to_string(),
+            "hash2".to_string(),
+        );
+        doc2.title = Some("Updated File".to_string());
+        let stored2 = db.upsert_document(&doc2).await.unwrap();
+
+        // The returned doc should have the ORIGINAL id, not the new one
+        assert_eq!(stored2.id, stored.id);
+        assert_ne!(stored2.id, doc2.id);
+        assert_eq!(stored2.content_hash, "hash2");
 
         let loaded = db
             .get_document_by_uri(&source.id, "/docs/file.md")
@@ -930,6 +957,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded.content_hash, "hash2");
+        assert_eq!(loaded.id, stored.id);
     }
 
     #[tokio::test]
@@ -944,7 +972,7 @@ mod tests {
             "/docs/file.md".to_string(),
             "hash1".to_string(),
         );
-        db.upsert_document(&doc).await.unwrap();
+        let doc = db.upsert_document(&doc).await.unwrap();
 
         let chunk1 = Chunk::new(
             doc.id.clone(),
@@ -971,5 +999,65 @@ mod tests {
         let chunks = db.get_chunks(&doc.id).await.unwrap();
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].headings(), vec!["Introduction".to_string()]);
+    }
+
+    /// Regression test: re-ingesting an existing document with new chunks must use the canonical
+    /// document ID, otherwise the FK constraint on chunks.doc_id -> documents.id fails.
+    #[tokio::test]
+    async fn test_reingest_document_uses_canonical_id_for_chunks() {
+        let (db, _tmp) = setup_test_db().await;
+
+        let source = Source::new(SourceType::Dir, "/docs".to_string(), None);
+        db.insert_source(&source).await.unwrap();
+
+        // First ingest: create document and chunk
+        let doc1 = Document::new(
+            source.id.clone(),
+            "/docs/file.md".to_string(),
+            "hash_v1".to_string(),
+        );
+        let stored1 = db.upsert_document(&doc1).await.unwrap();
+        let original_doc_id = stored1.id.clone();
+
+        let chunk1 = Chunk::new(
+            stored1.id.clone(),
+            0,
+            "chunk_hash_v1".to_string(),
+            "Version 1 content".to_string(),
+            0,
+            17,
+            None,
+        );
+        db.upsert_chunk(&chunk1).await.unwrap();
+
+        // Simulate re-ingest: new Document instance with new UUID but same (source_id, uri)
+        let doc2 = Document::new(
+            source.id.clone(),
+            "/docs/file.md".to_string(),
+            "hash_v2".to_string(),
+        );
+        // This is a different UUID
+        assert_ne!(doc2.id, original_doc_id);
+
+        // upsert_document MUST return the canonical (original) document ID
+        let stored2 = db.upsert_document(&doc2).await.unwrap();
+        assert_eq!(stored2.id, original_doc_id, "upsert_document must return canonical doc ID");
+
+        // Now we can safely create a chunk using the returned ID
+        let chunk2 = Chunk::new(
+            stored2.id.clone(),
+            1,
+            "chunk_hash_v2".to_string(),
+            "Version 2 content".to_string(),
+            0,
+            17,
+            None,
+        );
+        // This should NOT fail with FK violation
+        db.upsert_chunk(&chunk2).await.unwrap();
+
+        // Verify both chunks exist under the same document
+        let chunks = db.get_chunks(&original_doc_id).await.unwrap();
+        assert_eq!(chunks.len(), 2);
     }
 }
