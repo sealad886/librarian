@@ -12,8 +12,8 @@ pub use payload::*;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use qdrant_client::qdrant::{
-    CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, PointId, PointStruct,
-    ScalarQuantizationBuilder, SearchPointsBuilder, VectorParamsBuilder,
+    CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, GetCollectionInfoResponse,
+    PointId, PointStruct, ScalarQuantizationBuilder, SearchPointsBuilder, VectorParamsBuilder,
 };
 use qdrant_client::Qdrant;
 use serde_json::Value;
@@ -64,6 +64,11 @@ impl QdrantStore {
         Ok(store)
     }
 
+    /// Get the expected vector dimension for this store
+    pub fn dimension(&self) -> usize {
+        self.dimension
+    }
+
     /// Ensure the collection exists with correct configuration
     pub async fn ensure_collection(&self) -> Result<()> {
         // Check if collection exists
@@ -71,6 +76,27 @@ impl QdrantStore {
 
         if exists {
             debug!("Collection {} already exists", self.collection);
+
+            if let Some(sizes) = self.collection_vector_sizes().await? {
+                if sizes.len() > 1 {
+                    let detail = describe_vector_sizes(&sizes);
+                    return Err(Error::Qdrant(format!(
+                        "Collection '{}' uses named vectors ({}) which are not supported by this store",
+                        self.collection, detail
+                    )));
+                }
+
+                if let Some((_, size)) = sizes.first() {
+                    let size = *size as usize;
+                    if size != self.dimension {
+                        return Err(Error::Qdrant(format!(
+                            "Collection '{}' has vector size {}, but config expects {}. Ensure the embedding dimension matches the collection configuration.",
+                            self.collection, size, self.dimension
+                        )));
+                    }
+                }
+            }
+
             return Ok(());
         }
 
@@ -147,6 +173,15 @@ impl QdrantStore {
     pub async fn upsert_points(&self, points: Vec<ChunkPoint>) -> Result<()> {
         if points.is_empty() {
             return Ok(());
+        }
+
+        if let Some(mismatch) = points.iter().find(|p| p.vector.len() != self.dimension) {
+            return Err(Error::Qdrant(format!(
+                "Vector dimension mismatch for collection '{}': expected {}, got {}",
+                self.collection,
+                self.dimension,
+                mismatch.vector.len()
+            )));
         }
 
         debug!(
@@ -296,6 +331,46 @@ impl QdrantStore {
     }
 }
 
+fn describe_vector_sizes(sizes: &[(String, u64)]) -> String {
+    sizes
+        .iter()
+        .map(|(name, size)| format!("{}:{}", name, size))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn extract_vector_sizes(info: &GetCollectionInfoResponse) -> Option<Vec<(String, u64)>> {
+    let result = info.result.as_ref()?;
+    let config = result.config.as_ref()?;
+    let params = config.params.as_ref()?;
+    let vectors_config = params.vectors_config.as_ref()?;
+    let config = vectors_config.config.as_ref()?;
+
+    match config {
+        qdrant_client::qdrant::vectors_config::Config::Params(params) => {
+            Some(vec![("default".to_string(), params.size as u64)])
+        }
+        qdrant_client::qdrant::vectors_config::Config::ParamsMap(map) => {
+            let mut sizes = Vec::new();
+            for (name, params) in &map.map {
+                sizes.push((name.clone(), params.size as u64));
+            }
+            if sizes.is_empty() {
+                None
+            } else {
+                Some(sizes)
+            }
+        }
+    }
+}
+
+impl QdrantStore {
+    async fn collection_vector_sizes(&self) -> Result<Option<Vec<(String, u64)>>> {
+        let info = self.client.collection_info(&self.collection).await?;
+        Ok(extract_vector_sizes(&info))
+    }
+}
+
 /// Search result
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -404,6 +479,8 @@ fn json_from_qdrant_value(v: qdrant_client::qdrant::Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Error;
+    use uuid::Uuid;
 
     #[test]
     fn test_search_filter_to_qdrant() {
@@ -416,5 +493,39 @@ mod tests {
         let qdrant_filter = filter.to_qdrant_filter();
         assert!(qdrant_filter.is_some());
         assert_eq!(qdrant_filter.unwrap().must.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_upsert_points_rejects_dimension_mismatch() {
+        let store = QdrantStore::new("http://127.0.0.1:6334", "test_collection", 3)
+            .await
+            .expect("store should initialize");
+
+        let payload = ChunkPayload::new(
+            "source-123".to_string(),
+            "dir".to_string(),
+            "/docs".to_string(),
+            "doc-456".to_string(),
+            "/docs/readme.md".to_string(),
+            0,
+            "hash123".to_string(),
+            "2024-01-01T00:00:00Z".to_string(),
+        );
+
+        let point = ChunkPoint {
+            id: Uuid::new_v4(),
+            vector: vec![0.1, 0.2],
+            payload,
+        };
+
+        let err = store
+            .upsert_points(vec![point])
+            .await
+            .expect_err("should reject mismatched vector length");
+
+        match err {
+            Error::Qdrant(message) => assert!(message.contains("Vector dimension mismatch")),
+            other => panic!("expected qdrant error, got {other:?}"),
+        }
     }
 }

@@ -2,7 +2,7 @@
 
 use crate::config::Config;
 use crate::embed::{embed_images_in_batches, Embedder};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::meta::{MetaDb, RunOperation, RunStatus};
 use crate::models::is_multimodal_embedding_model;
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
@@ -46,6 +46,16 @@ pub async fn cmd_reindex<E: Embedder>(
     options: ReindexOptions,
 ) -> Result<ReindexStats> {
     info!("Starting reindex operation");
+
+    store.ensure_collection().await?;
+
+    if embedder.dimension() != store.dimension() {
+        return Err(Error::Embedding(format!(
+            "Embedding dimension {} does not match Qdrant collection dimension {}",
+            embedder.dimension(),
+            store.dimension()
+        )));
+    }
 
     let mut stats = ReindexStats::default();
 
@@ -248,11 +258,13 @@ async fn reindex_document<E: Embedder>(
                 Ok(embeddings) => {
                     if embeddings.is_empty() {
                         warn!(doc_id = %doc_id, "No image embeddings returned");
-                    } else if embeddings[0].len() != embedder.dimension() {
+                    } else if embedder.dimension() != store.dimension()
+                        || embeddings[0].len() != store.dimension()
+                    {
                         warn!(
                             doc_id = %doc_id,
                             image_dim = embeddings[0].len(),
-                            expected_dim = embedder.dimension(),
+                            expected_dim = store.dimension(),
                             "Skipping image embeddings (dimension mismatch)"
                         );
                     } else {

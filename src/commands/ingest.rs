@@ -399,11 +399,22 @@ async fn embed_cached_images(
         return Ok((0, 0));
     }
 
-    if embeddings[0].len() != embedder.dimension() {
+    let expected_dim = store.dimension();
+    if embedder.dimension() != expected_dim {
+        warn!(
+            uri = %doc_uri,
+            embedder_dim = embedder.dimension(),
+            store_dim = expected_dim,
+            "Skipping image embeddings (dimension mismatch)"
+        );
+        return Ok((0, 0));
+    }
+
+    if embeddings[0].len() != expected_dim {
         warn!(
             uri = %doc_uri,
             image_dim = embeddings[0].len(),
-            expected_dim = embedder.dimension(),
+            expected_dim,
             "Skipping image embeddings (dimension mismatch)"
         );
         return Ok((0, 0));
@@ -650,6 +661,8 @@ pub async fn cmd_ingest_dir(
 
     let mut stats = IngestStats::default();
 
+    store.ensure_collection().await?;
+
     // Check for overlaps with existing sources
     let overlaps = check_dir_overlap(db, &canonical_path).await?;
     if !overlaps.is_empty() {
@@ -667,6 +680,13 @@ pub async fn cmd_ingest_dir(
 
     // Create embedder
     let embedder = create_embedder(&config.embedding)?;
+    if embedder.dimension() != store.dimension() {
+        return Err(Error::Embedding(format!(
+            "Embedding dimension {} does not match Qdrant collection dimension {}",
+            embedder.dimension(),
+            store.dimension()
+        )));
+    }
 
     // Collect all files
     let mut files: Vec<std::path::PathBuf> = Vec::new();
@@ -865,6 +885,15 @@ async fn process_chunks(
         return Ok((0, 0));
     }
 
+    let expected_dim = store.dimension();
+    if embedder.dimension() != expected_dim {
+        return Err(Error::Embedding(format!(
+            "Embedding dimension {} does not match Qdrant collection dimension {}",
+            embedder.dimension(),
+            expected_dim
+        )));
+    }
+
     debug!(
         "Embedding {} new/changed chunks for: {}",
         chunks_to_embed.len(),
@@ -877,6 +906,21 @@ async fn process_chunks(
         .map(|(_, c)| c.text.clone())
         .collect();
     let embeddings = embed_in_batches(embedder, texts, config.embedding.batch_size).await?;
+
+    if embeddings
+        .iter()
+        .any(|embedding| embedding.len() != expected_dim)
+    {
+        let mismatched = embeddings
+            .iter()
+            .find(|embedding| embedding.len() != expected_dim)
+            .map(|embedding| embedding.len())
+            .unwrap_or(0);
+        return Err(Error::Embedding(format!(
+            "Embedding dimension mismatch: expected {}, got {}",
+            expected_dim, mismatched
+        )));
+    }
 
     // Prepare points for Qdrant
     let mut points: Vec<ChunkPoint> = Vec::new();
@@ -971,6 +1015,8 @@ pub async fn cmd_ingest_url(
 
     let mut stats = IngestStats::default();
 
+    store.ensure_collection().await?;
+
     // Check for overlaps with existing sources
     let overlaps = check_url_overlap(db, url).await?;
     if !overlaps.is_empty() {
@@ -988,6 +1034,13 @@ pub async fn cmd_ingest_url(
 
     // Create embedder
     let embedder = create_embedder(&config.embedding)?;
+    if embedder.dimension() != store.dimension() {
+        return Err(Error::Embedding(format!(
+            "Embedding dimension {} does not match Qdrant collection dimension {}",
+            embedder.dimension(),
+            store.dimension()
+        )));
+    }
 
     // Build crawl config with CLI overrides
     let mut crawl_config = config.crawl.clone();
@@ -1104,6 +1157,8 @@ pub async fn cmd_ingest_sitemap(
 
     let mut stats = IngestStats::default();
 
+    store.ensure_collection().await?;
+
     // Parse sitemap to get URLs
     let parser = SitemapParser::new(&config.crawl.user_agent)?;
     let entries = parser.parse(sitemap_url).await?;
@@ -1147,6 +1202,13 @@ pub async fn cmd_ingest_sitemap(
 
     // Create embedder and crawler
     let embedder = create_embedder(&config.embedding)?;
+    if embedder.dimension() != store.dimension() {
+        return Err(Error::Embedding(format!(
+            "Embedding dimension {} does not match Qdrant collection dimension {}",
+            embedder.dimension(),
+            store.dimension()
+        )));
+    }
     let crawler = Crawler::new(config.crawl.clone())?;
 
     let mut current_uris: Vec<String> = Vec::new();

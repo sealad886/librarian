@@ -73,6 +73,7 @@ pub struct EmbeddingConfig {
 }
 
 /// Lookup the expected embedding dimension for a known model
+/// TODO: include all models that are recommended during init
 pub fn embedding_dimension_for_model(model: &str) -> Option<usize> {
     match model {
         "BAAI/bge-small-en-v1.5" => Some(384),
@@ -86,17 +87,29 @@ pub fn embedding_dimension_for_model(model: &str) -> Option<usize> {
 impl EmbeddingConfig {
     /// Resolve the effective embedding dimension based on the configured model
     pub fn resolved_dimension(&self) -> usize {
+        let configured = self.dimension;
+
         if let Some(expected) = embedding_dimension_for_model(&self.model) {
-            if expected != self.dimension {
+            if expected != configured {
                 warn!(
-                    "Embedding dimension {} does not match model '{}' ({}); using {}",
-                    self.dimension, self.model, expected, expected
+                    "Embedding dimension {} does not match model '{}' ({}); using configured dimension {}",
+                    configured, self.model, expected, configured
                 );
             }
-            expected
-        } else {
-            self.dimension
+            return configured;
         }
+
+        if cfg!(feature = "local-embed") {
+            let fallback = embedding_dimension_for_model("BAAI/bge-small-en-v1.5").unwrap_or(384);
+            if configured != fallback {
+                warn!(
+                    "Embedding model '{}' is not supported by the local embed backend; configured dimension {} will be used (fallback model uses {})",
+                    self.model, configured, fallback
+                );
+            }
+        }
+
+        configured
     }
 }
 
@@ -943,17 +956,17 @@ mod tests {
     }
 
     #[test]
-    fn test_resolved_dimension_matches_model() {
+    fn test_resolved_dimension_keeps_configured_value() {
         let mut config = Config::default();
         config.embedding.model = "BAAI/bge-base-en-v1.5".to_string();
-        // Intentionally wrong dimension to ensure resolver corrects it
+        // Intentionally mismatched dimension to ensure configured value is preserved
         config.embedding.dimension = 384;
 
-        assert_eq!(config.embedding.resolved_dimension(), 768);
+        assert_eq!(config.embedding.resolved_dimension(), 384);
     }
 
     #[test]
-    fn test_resolved_dimension_unknown_model_falls_back() {
+    fn test_resolved_dimension_unknown_model_keeps_configured_value() {
         let mut config = Config::default();
         config.embedding.model = "custom-model".to_string();
         config.embedding.dimension = 512;

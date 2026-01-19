@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use fastembed::{EmbeddingModel, ImageEmbedding, ImageEmbeddingModel, ImageInitOptions, InitOptions, TextEmbedding};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// FastEmbed-based embedder
 pub struct FastEmbedder {
@@ -24,20 +24,55 @@ impl FastEmbedder {
         info!("Initializing FastEmbed with model: {}", config.model);
 
         // Map model name to fastembed model enum
-        let model_enum = match config.model.as_str() {
-            "BAAI/bge-small-en-v1.5" => EmbeddingModel::BGESmallENV15,
-            "BAAI/bge-base-en-v1.5" => EmbeddingModel::BGEBaseENV15,
-            "BAAI/bge-large-en-v1.5" => EmbeddingModel::BGELargeENV15,
-            "sentence-transformers/all-MiniLM-L6-v2" => EmbeddingModel::AllMiniLML6V2,
+        let (model_enum, resolved_name, model_dimension, used_fallback) = match config.model.as_str() {
+            "BAAI/bge-small-en-v1.5" => (
+                EmbeddingModel::BGESmallENV15,
+                "BAAI/bge-small-en-v1.5",
+                384,
+                false,
+            ),
+            "BAAI/bge-base-en-v1.5" => (
+                EmbeddingModel::BGEBaseENV15,
+                "BAAI/bge-base-en-v1.5",
+                768,
+                false,
+            ),
+            "BAAI/bge-large-en-v1.5" => (
+                EmbeddingModel::BGELargeENV15,
+                "BAAI/bge-large-en-v1.5",
+                1024,
+                false,
+            ),
+            "sentence-transformers/all-MiniLM-L6-v2" => (
+                EmbeddingModel::AllMiniLML6V2,
+                "sentence-transformers/all-MiniLM-L6-v2",
+                384,
+                false,
+            ),
             _ => {
-                // Try to use default model
-                debug!(
-                    "Unknown model '{}', using default BGESmallENV15",
+                warn!(
+                    "Embedding model '{}' is not supported by fastembed; falling back to 'BAAI/bge-small-en-v1.5'",
                     config.model
                 );
-                EmbeddingModel::BGESmallENV15
+                (EmbeddingModel::BGESmallENV15, "BAAI/bge-small-en-v1.5", 384, true)
             }
         };
+
+        let configured_dimension = config.dimension;
+        if configured_dimension != model_dimension {
+            let message = if used_fallback {
+                format!(
+                    "Embedding model '{}' is not supported by fastembed; fallback model '{}' uses {} dimensions, but config specifies {}. Update embedding.model or embedding.dimension to match.",
+                    config.model, resolved_name, model_dimension, configured_dimension
+                )
+            } else {
+                format!(
+                    "Embedding dimension mismatch: config specifies {}, but model '{}' uses {}. Update embedding.dimension to match the model.",
+                    configured_dimension, resolved_name, model_dimension
+                )
+            };
+            return Err(Error::Embedding(message));
+        }
 
         let options = InitOptions::new(model_enum).with_show_download_progress(true);
 
@@ -57,11 +92,13 @@ impl FastEmbedder {
             None
         };
 
+        let dimension = model_dimension;
+
         Ok(Self {
             model: Arc::new(Mutex::new(model)),
             image_model,
-            model_name: config.model.clone(),
-            dimension: config.resolved_dimension(),
+            model_name: resolved_name.to_string(),
+            dimension,
         })
     }
 }
@@ -122,6 +159,7 @@ impl Embedder for FastEmbedder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::Error;
     use crate::config::embedding_dimension_for_model;
 
     #[test]
@@ -135,6 +173,23 @@ mod tests {
             Some(768)
         );
         assert_eq!(embedding_dimension_for_model("unknown-model"), None);
+    }
+
+    #[test]
+    fn test_fastembed_rejects_dimension_mismatch() {
+        let config = EmbeddingConfig {
+            model: "BAAI/bge-small-en-v1.5".to_string(),
+            dimension: 2560,
+            batch_size: 32,
+        };
+
+        let err = FastEmbedder::new(&config)
+            .err()
+            .expect("should reject mismatched dimension");
+        match err {
+            Error::Embedding(message) => assert!(message.contains("dimension")),
+            other => panic!("expected embedding error, got {other:?}"),
+        }
     }
 
     // Integration test - requires model download

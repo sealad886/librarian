@@ -26,7 +26,7 @@ use crate::parse::{parse_html, ContentType, ExtractedLink};
 use reqwest::Client;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use url::Url;
@@ -187,11 +187,7 @@ impl Crawler {
                             // Convert hash routes to full URLs as links
                             let mut links = parsed.links;
                             for route in hash_routes {
-                                let hash_url = format!(
-                                    "{}#{}",
-                                    parsed_url.origin().ascii_serialization(),
-                                    route
-                                );
+                                let hash_url = build_hash_route_url(&rendered.url, &route);
                                 links.push(ExtractedLink {
                                     url: hash_url,
                                     text: None,
@@ -244,7 +240,7 @@ impl Crawler {
 
     /// Fetch a specific hash route (renders the page at that hash location)
     pub async fn fetch_hash_route(&self, base_url: &str, hash_route: &str) -> Result<CrawledPage> {
-        let full_url = format!("{}#{}", base_url.trim_end_matches('/'), hash_route);
+        let full_url = build_hash_route_url(base_url, hash_route);
 
         debug!("Fetching hash route: {}", full_url);
 
@@ -258,17 +254,13 @@ impl Crawler {
                     let hash_routes =
                         extract_hash_routes_from_rendered(&rendered.html, &rendered.url);
                     let mut links = parsed.links;
-                    let base = Url::parse(base_url).ok();
                     for route in hash_routes {
-                        if let Some(ref b) = base {
-                            let hash_url =
-                                format!("{}#{}", b.origin().ascii_serialization(), route);
-                            links.push(ExtractedLink {
-                                url: hash_url,
-                                text: None,
-                                is_internal: true,
-                            });
-                        }
+                        let hash_url = build_hash_route_url(&rendered.url, &route);
+                        links.push(ExtractedLink {
+                            url: hash_url,
+                            text: None,
+                            is_internal: true,
+                        });
                     }
 
                     return Ok(CrawledPage {
@@ -349,6 +341,20 @@ impl Crawler {
 
         let mut results = Vec::new();
         let mut pages_crawled = 0u32;
+        let mut attempts = 0u32;
+        let mut hash_routes_queued = 0u32;
+        let mut warned_hash_route_cap = false;
+
+        let per_page_budget_secs = self
+            .config
+            .timeout_secs
+            .max(self.config.js_page_load_timeout_ms / 1000)
+            .max(1);
+        let max_crawl_seconds = per_page_budget_secs
+            .saturating_mul(self.config.max_pages.max(1) as u64);
+        let crawl_deadline = Instant::now() + Duration::from_secs(max_crawl_seconds);
+        let max_attempts = self.config.max_pages.saturating_mul(5).max(1);
+        let max_hash_routes = self.config.max_pages.max(1);
 
         // Track if we're crawling a hash-routed SPA
         let mut is_hash_routed_spa = false;
@@ -362,6 +368,21 @@ impl Crawler {
                 info!("Reached max pages limit ({})", self.config.max_pages);
                 break;
             }
+            if attempts >= max_attempts {
+                warn!(
+                    "Reached crawl attempt limit ({}); stopping to avoid stalling",
+                    max_attempts
+                );
+                break;
+            }
+            if Instant::now() > crawl_deadline {
+                warn!(
+                    "Reached crawl time budget ({}s); stopping to avoid stalling",
+                    max_crawl_seconds
+                );
+                break;
+            }
+            attempts += 1;
 
             // Normalize URL - use hash-aware normalization if we know this is a hash-routed SPA
             let normalized = if is_hash_routed_spa {
@@ -438,6 +459,19 @@ impl Crawler {
                                     };
                                     let visited = self.visited.read().await;
                                     if !visited.contains(&link_normalized) {
+                                        if is_hash_routed_spa && link.url.contains("#/") {
+                                            if hash_routes_queued >= max_hash_routes {
+                                                if !warned_hash_route_cap {
+                                                    warn!(
+                                                        "Reached hash-route cap ({}); skipping additional hash routes",
+                                                        max_hash_routes
+                                                    );
+                                                    warned_hash_route_cap = true;
+                                                }
+                                                continue;
+                                            }
+                                            hash_routes_queued += 1;
+                                        }
                                         queue.push_back((link.url.clone(), depth + 1));
                                     }
                                 }
@@ -548,6 +582,16 @@ fn normalize_url_impl(url: &str, preserve_hash_routes: bool) -> String {
     }
 }
 
+fn build_hash_route_url(base_url: &str, hash_route: &str) -> String {
+    let route = hash_route.trim_start_matches('#');
+    if let Ok(mut base) = Url::parse(base_url) {
+        base.set_fragment(Some(route));
+        base.to_string()
+    } else {
+        format!("{}#{}", base_url.trim_end_matches('/'), route)
+    }
+}
+
 /// Check if a URL should be crawled based on patterns
 pub fn should_crawl_url(url: &str) -> bool {
     let lower = url.to_lowercase();
@@ -605,6 +649,8 @@ pub fn should_crawl_url(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::matchers::{method, path, path_regex};
 
     #[test]
     fn test_normalize_url() {
@@ -656,5 +702,68 @@ mod tests {
         assert!(should_crawl_url("https://example.com/#/service/Lightbulb"));
         // Plain anchors should not
         assert!(!should_crawl_url("https://example.com/page#section"));
+    }
+
+    #[test]
+    fn test_build_hash_route_url_preserves_path() {
+        let base = "https://example.com/docs/";
+        let route = "/api";
+        assert_eq!(
+            build_hash_route_url(base, route),
+            "https://example.com/docs/#/api"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_crawl_attempt_cap_limits_failed_fetches() {
+        let mock_server = MockServer::start().await;
+
+        let mut links = String::new();
+        for i in 0..20 {
+            links.push_str(&format!("<a href=\"/missing/{}\">missing</a>", i));
+        }
+        let html = format!("<html><body>{}</body></html>", links);
+
+        Mock::given(method("GET"))
+            .and(path("/index.html"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                html.clone().into_bytes(),
+                "text/html",
+            ))
+            .mount(&mock_server)
+            .await;
+
+        let missing_guard = Mock::given(method("GET"))
+            .and(path_regex(r"^/missing/\d+$"))
+            .respond_with(ResponseTemplate::new(404))
+            .mount_as_scoped(&mock_server)
+            .await;
+
+        let max_pages = 2;
+        let mut crawl_config = CrawlConfig::default();
+        crawl_config.max_pages = max_pages;
+        crawl_config.max_depth = 2;
+        crawl_config.auto_js_rendering = false;
+        crawl_config.rate_limit_per_host = 1000.0;
+        crawl_config.timeout_secs = 5;
+
+        let max_attempts = max_pages.saturating_mul(5).max(1);
+        let crawler = Crawler::new(crawl_config).expect("crawler should build");
+        let seed = format!("{}/index.html", mock_server.uri());
+        let results = crawler
+            .crawl(&seed, |_page| true)
+            .await
+            .expect("crawl should complete");
+        let expected_missing = max_attempts.saturating_sub(1) as usize;
+        let missing_requests = missing_guard.received_requests().await;
+
+        assert_eq!(results[0].content_type, ContentType::Html);
+        assert_eq!(
+            results[0].links.iter().filter(|link| link.is_internal).count(),
+            20
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(missing_requests.len(), expected_missing);
     }
 }
