@@ -11,6 +11,7 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
 - **MCP Server**: Expose RAG tools via Model Context Protocol for VS Code integration
 - **Incremental Updates**: Smart content hashing for efficient re-indexing
 - **Structure-Aware Chunking**: Respect document structure (headings, code blocks)
+- **Safe Re-ingestion**: Re-running ingest/update reuses canonical document IDs to avoid FK issues and keeps chunk history consistent
 
 ## Architecture
 
@@ -81,6 +82,11 @@ librarian list
 
 # Check system status
 librarian status
+
+# What's New
+
+- **Safe re-ingestion**: Chunk writes now always use the canonical document ID returned by SQLite, preventing `FOREIGN KEY constraint failed` errors during repeated ingest/update runs.
+- **Better debugging**: Run with `RUST_LOG=debug` (or `-v` if using the CLI flag) to see which document IDs are used during ingestion for easier troubleshooting.
 ```
 
 ## Commands

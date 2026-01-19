@@ -134,7 +134,9 @@ cargo clippy --all-features -- -D warnings
    info!(source_id = %source.id, docs = count, "Ingestion complete");
    ```
 
-3. **Documentation**: Add doc comments for public items:
+3. **Ingestion invariants**: `MetaDb::upsert_document` returns the canonical document row for a `(source_id, uri)` pair. Always use the returned `Document` (and its `id`) for any chunk writes to avoid FK violations. See `meta::tests::test_reingest_document_uses_canonical_id_for_chunks` for a regression guard.
+
+4. **Documentation**: Add doc comments for public items:
    ```rust
    /// Process a single document and return chunk statistics.
    ///
@@ -147,9 +149,9 @@ cargo clippy --all-features -- -D warnings
    pub async fn process_document(...) -> Result<(i32, i32)>
    ```
 
-4. **Async**: Prefer async functions for I/O operations. Use `tokio` for the async runtime.
+5. **Async**: Prefer async functions for I/O operations. Use `tokio` for the async runtime.
 
-5. **Tests**: Add unit tests in the same file, integration tests in `tests/`.
+6. **Tests**: Add unit tests in the same file, integration tests in `tests/`.
 
 ## Testing
 
