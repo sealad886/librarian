@@ -158,7 +158,13 @@ librarian init [OPTIONS]
 Options:
   -c, --config <PATH>  Custom config directory (default: ~/.librarian)
   -f, --force          Overwrite existing configuration
+  --non-interactive    Write defaults without prompts (for CI/scripting)
+  -y, --yes            Accept defaults and skip confirmation
 ```
+
+`librarian init` now runs an interactive configuration wizard. It writes a
+`config.toml` that includes all settings, commenting out defaults and irrelevant
+fields for easy discovery.
 
 ### `ingest`
 
@@ -309,10 +315,13 @@ Supported shells: `bash`, `zsh`, `fish`, `powershell`, `elvish`
 ## Configuration
 
 Configuration is stored in `~/.librarian/config.toml` (or custom path).
+The init wizard writes a full config file, commenting out values that match
+code defaults or are irrelevant to your selections.
 
 ```toml
 # Qdrant connection
 qdrant_url = "http://localhost:6333"
+qdrant_api_key_env = "QDRANT_API_KEY"
 collection_name = "librarian"
 
 # Embedding model
@@ -345,8 +354,12 @@ user_agent = "librarian/0.1 (https://github.com/sealad886/librarian)"
 timeout_secs = 30
 max_pages = 100
 max_depth = 3
+rate_limit_per_host = 2.0
 respect_robots_txt = true
-request_delay_ms = 500
+auto_js_rendering = true
+js_page_load_timeout_ms = 30000
+js_render_wait_ms = 2000
+js_no_sandbox = false
 
 # Multimodal crawling (images)
 [crawl.multimodal]

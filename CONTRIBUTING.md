@@ -36,6 +36,9 @@ cargo test
 RUST_LOG=debug cargo run -- status
 ```text
 
+`librarian init` now runs an interactive configuration wizard. For scripted
+setups, use `librarian init --non-interactive` to write defaults.
+
 ### Running Qdrant Locally
 
 ```bash

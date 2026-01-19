@@ -12,6 +12,7 @@ use crate::models::{
     supported_multimodal_embedding_models, MultimodalStrategy,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
@@ -549,10 +550,358 @@ pub fn database_url(config: &Config) -> String {
     format!("sqlite://{}?mode=rwc", config.paths.db_file.display())
 }
 
+/// Render config TOML with defaults and irrelevant fields commented out.
+pub fn render_config_toml(
+    config: &Config,
+    defaults: &Config,
+    irrelevant: &HashSet<String>,
+) -> String {
+    let mut lines = Vec::new();
+
+    lines.push("# librarian configuration".to_string());
+    lines.push("".to_string());
+
+    push_kv(
+        &mut lines,
+        "qdrant_url",
+        toml_string(&config.qdrant_url),
+        config.qdrant_url == defaults.qdrant_url,
+        irrelevant.contains("qdrant_url"),
+    );
+    push_kv(
+        &mut lines,
+        "qdrant_api_key_env",
+        toml_string(&config.qdrant_api_key_env),
+        config.qdrant_api_key_env == defaults.qdrant_api_key_env,
+        irrelevant.contains("qdrant_api_key_env"),
+    );
+    push_kv(
+        &mut lines,
+        "collection_name",
+        toml_string(&config.collection_name),
+        config.collection_name == defaults.collection_name,
+        irrelevant.contains("collection_name"),
+    );
+
+    lines.push("".to_string());
+    lines.push("[embedding]".to_string());
+    push_kv(
+        &mut lines,
+        "model",
+        toml_string(&config.embedding.model),
+        config.embedding.model == defaults.embedding.model,
+        irrelevant.contains("embedding.model"),
+    );
+    push_kv(
+        &mut lines,
+        "dimension",
+        toml_integer(config.embedding.dimension as i64),
+        config.embedding.dimension == defaults.embedding.dimension,
+        irrelevant.contains("embedding.dimension"),
+    );
+    push_kv(
+        &mut lines,
+        "batch_size",
+        toml_integer(config.embedding.batch_size as i64),
+        config.embedding.batch_size == defaults.embedding.batch_size,
+        irrelevant.contains("embedding.batch_size"),
+    );
+
+    lines.push("".to_string());
+    lines.push("[chunk]".to_string());
+    push_kv(
+        &mut lines,
+        "max_chars",
+        toml_integer(config.chunk.max_chars as i64),
+        config.chunk.max_chars == defaults.chunk.max_chars,
+        irrelevant.contains("chunk.max_chars"),
+    );
+    push_kv(
+        &mut lines,
+        "min_chars",
+        toml_integer(config.chunk.min_chars as i64),
+        config.chunk.min_chars == defaults.chunk.min_chars,
+        irrelevant.contains("chunk.min_chars"),
+    );
+    push_kv(
+        &mut lines,
+        "overlap_chars",
+        toml_integer(config.chunk.overlap_chars as i64),
+        config.chunk.overlap_chars == defaults.chunk.overlap_chars,
+        irrelevant.contains("chunk.overlap_chars"),
+    );
+    push_kv(
+        &mut lines,
+        "prefer_heading_boundaries",
+        toml_bool(config.chunk.prefer_heading_boundaries),
+        config.chunk.prefer_heading_boundaries == defaults.chunk.prefer_heading_boundaries,
+        irrelevant.contains("chunk.prefer_heading_boundaries"),
+    );
+
+    lines.push("".to_string());
+    lines.push("[query]".to_string());
+    push_kv(
+        &mut lines,
+        "default_k",
+        toml_integer(config.query.default_k as i64),
+        config.query.default_k == defaults.query.default_k,
+        irrelevant.contains("query.default_k"),
+    );
+    push_kv(
+        &mut lines,
+        "max_results",
+        toml_integer(config.query.max_results as i64),
+        config.query.max_results == defaults.query.max_results,
+        irrelevant.contains("query.max_results"),
+    );
+    push_kv(
+        &mut lines,
+        "min_score",
+        toml_float(config.query.min_score as f64),
+        config.query.min_score == defaults.query.min_score,
+        irrelevant.contains("query.min_score"),
+    );
+    push_kv(
+        &mut lines,
+        "hybrid_search",
+        toml_bool(config.query.hybrid_search),
+        config.query.hybrid_search == defaults.query.hybrid_search,
+        irrelevant.contains("query.hybrid_search"),
+    );
+    push_kv(
+        &mut lines,
+        "bm25_weight",
+        toml_float(config.query.bm25_weight as f64),
+        config.query.bm25_weight == defaults.query.bm25_weight,
+        irrelevant.contains("query.bm25_weight"),
+    );
+
+    lines.push("".to_string());
+    lines.push("[reranker]".to_string());
+    push_kv(
+        &mut lines,
+        "enabled",
+        toml_bool(config.reranker.enabled),
+        config.reranker.enabled == defaults.reranker.enabled,
+        irrelevant.contains("reranker.enabled"),
+    );
+    push_kv(
+        &mut lines,
+        "model",
+        toml_string(&config.reranker.model),
+        config.reranker.model == defaults.reranker.model,
+        irrelevant.contains("reranker.model"),
+    );
+    push_kv(
+        &mut lines,
+        "top_k",
+        toml_integer(config.reranker.top_k as i64),
+        config.reranker.top_k == defaults.reranker.top_k,
+        irrelevant.contains("reranker.top_k"),
+    );
+
+    lines.push("".to_string());
+    lines.push("[crawl]".to_string());
+    push_kv(
+        &mut lines,
+        "max_depth",
+        toml_integer(config.crawl.max_depth as i64),
+        config.crawl.max_depth == defaults.crawl.max_depth,
+        irrelevant.contains("crawl.max_depth"),
+    );
+    push_kv(
+        &mut lines,
+        "max_pages",
+        toml_integer(config.crawl.max_pages as i64),
+        config.crawl.max_pages == defaults.crawl.max_pages,
+        irrelevant.contains("crawl.max_pages"),
+    );
+    push_kv(
+        &mut lines,
+        "allowed_domains",
+        toml_array(&config.crawl.allowed_domains),
+        config.crawl.allowed_domains == defaults.crawl.allowed_domains,
+        irrelevant.contains("crawl.allowed_domains"),
+    );
+    push_kv(
+        &mut lines,
+        "path_prefix",
+        toml_string(config.crawl.path_prefix.as_deref().unwrap_or("")),
+        config.crawl.path_prefix == defaults.crawl.path_prefix,
+        irrelevant.contains("crawl.path_prefix"),
+    );
+    push_kv(
+        &mut lines,
+        "rate_limit_per_host",
+        toml_float(config.crawl.rate_limit_per_host),
+        config.crawl.rate_limit_per_host == defaults.crawl.rate_limit_per_host,
+        irrelevant.contains("crawl.rate_limit_per_host"),
+    );
+    push_kv(
+        &mut lines,
+        "user_agent",
+        toml_string(&config.crawl.user_agent),
+        config.crawl.user_agent == defaults.crawl.user_agent,
+        irrelevant.contains("crawl.user_agent"),
+    );
+    push_kv(
+        &mut lines,
+        "timeout_secs",
+        toml_integer(config.crawl.timeout_secs as i64),
+        config.crawl.timeout_secs == defaults.crawl.timeout_secs,
+        irrelevant.contains("crawl.timeout_secs"),
+    );
+    push_kv(
+        &mut lines,
+        "respect_robots_txt",
+        toml_bool(config.crawl.respect_robots_txt),
+        config.crawl.respect_robots_txt == defaults.crawl.respect_robots_txt,
+        irrelevant.contains("crawl.respect_robots_txt"),
+    );
+    push_kv(
+        &mut lines,
+        "auto_js_rendering",
+        toml_bool(config.crawl.auto_js_rendering),
+        config.crawl.auto_js_rendering == defaults.crawl.auto_js_rendering,
+        irrelevant.contains("crawl.auto_js_rendering"),
+    );
+    push_kv(
+        &mut lines,
+        "js_page_load_timeout_ms",
+        toml_integer(config.crawl.js_page_load_timeout_ms as i64),
+        config.crawl.js_page_load_timeout_ms == defaults.crawl.js_page_load_timeout_ms,
+        irrelevant.contains("crawl.js_page_load_timeout_ms"),
+    );
+    push_kv(
+        &mut lines,
+        "js_render_wait_ms",
+        toml_integer(config.crawl.js_render_wait_ms as i64),
+        config.crawl.js_render_wait_ms == defaults.crawl.js_render_wait_ms,
+        irrelevant.contains("crawl.js_render_wait_ms"),
+    );
+    push_kv(
+        &mut lines,
+        "js_no_sandbox",
+        toml_bool(config.crawl.js_no_sandbox),
+        config.crawl.js_no_sandbox == defaults.crawl.js_no_sandbox,
+        irrelevant.contains("crawl.js_no_sandbox"),
+    );
+
+    lines.push("".to_string());
+    lines.push("[crawl.multimodal]".to_string());
+    push_kv(
+        &mut lines,
+        "enabled",
+        toml_bool(config.crawl.multimodal.enabled),
+        config.crawl.multimodal.enabled == defaults.crawl.multimodal.enabled,
+        irrelevant.contains("crawl.multimodal.enabled"),
+    );
+    push_kv(
+        &mut lines,
+        "include_images",
+        toml_bool(config.crawl.multimodal.include_images),
+        config.crawl.multimodal.include_images == defaults.crawl.multimodal.include_images,
+        irrelevant.contains("crawl.multimodal.include_images"),
+    );
+    push_kv(
+        &mut lines,
+        "include_audio",
+        toml_bool(config.crawl.multimodal.include_audio),
+        config.crawl.multimodal.include_audio == defaults.crawl.multimodal.include_audio,
+        irrelevant.contains("crawl.multimodal.include_audio"),
+    );
+    push_kv(
+        &mut lines,
+        "include_video",
+        toml_bool(config.crawl.multimodal.include_video),
+        config.crawl.multimodal.include_video == defaults.crawl.multimodal.include_video,
+        irrelevant.contains("crawl.multimodal.include_video"),
+    );
+    push_kv(
+        &mut lines,
+        "max_asset_bytes",
+        toml_integer(config.crawl.multimodal.max_asset_bytes as i64),
+        config.crawl.multimodal.max_asset_bytes == defaults.crawl.multimodal.max_asset_bytes,
+        irrelevant.contains("crawl.multimodal.max_asset_bytes"),
+    );
+    push_kv(
+        &mut lines,
+        "min_asset_bytes",
+        toml_integer(config.crawl.multimodal.min_asset_bytes as i64),
+        config.crawl.multimodal.min_asset_bytes == defaults.crawl.multimodal.min_asset_bytes,
+        irrelevant.contains("crawl.multimodal.min_asset_bytes"),
+    );
+    push_kv(
+        &mut lines,
+        "max_assets_per_page",
+        toml_integer(config.crawl.multimodal.max_assets_per_page as i64),
+        config.crawl.multimodal.max_assets_per_page
+            == defaults.crawl.multimodal.max_assets_per_page,
+        irrelevant.contains("crawl.multimodal.max_assets_per_page"),
+    );
+    push_kv(
+        &mut lines,
+        "allowed_mime_prefixes",
+        toml_array(&config.crawl.multimodal.allowed_mime_prefixes),
+        config.crawl.multimodal.allowed_mime_prefixes
+            == defaults.crawl.multimodal.allowed_mime_prefixes,
+        irrelevant.contains("crawl.multimodal.allowed_mime_prefixes"),
+    );
+    push_kv(
+        &mut lines,
+        "min_relevance_score",
+        toml_float(config.crawl.multimodal.min_relevance_score as f64),
+        config.crawl.multimodal.min_relevance_score
+            == defaults.crawl.multimodal.min_relevance_score,
+        irrelevant.contains("crawl.multimodal.min_relevance_score"),
+    );
+    push_kv(
+        &mut lines,
+        "include_css_background_images",
+        toml_bool(config.crawl.multimodal.include_css_background_images),
+        config.crawl.multimodal.include_css_background_images
+            == defaults.crawl.multimodal.include_css_background_images,
+        irrelevant.contains("crawl.multimodal.include_css_background_images"),
+    );
+
+    lines.join("\n") + "\n"
+}
+
+fn push_kv(lines: &mut Vec<String>, key: &str, value: String, is_default: bool, is_irrelevant: bool) {
+    let prefix = if is_default || is_irrelevant { "# " } else { "" };
+    lines.push(format!("{}{} = {}", prefix, key, value));
+}
+
+fn toml_string(value: &str) -> String {
+    toml::Value::String(value.to_string()).to_string()
+}
+
+fn toml_integer(value: i64) -> String {
+    toml::Value::Integer(value).to_string()
+}
+
+fn toml_float(value: f64) -> String {
+    toml::Value::Float(value).to_string()
+}
+
+fn toml_bool(value: bool) -> String {
+    toml::Value::Boolean(value).to_string()
+}
+
+fn toml_array(values: &[String]) -> String {
+    let items = values
+        .iter()
+        .cloned()
+        .map(toml::Value::String)
+        .collect::<Vec<_>>();
+    toml::Value::Array(items).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use std::collections::HashSet;
 
     #[test]
     fn test_default_config() {
@@ -642,5 +991,44 @@ mod tests {
         config.crawl.multimodal.min_asset_bytes = config.crawl.multimodal.max_asset_bytes + 1;
 
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_render_config_comments_defaults() {
+        let config = Config::default();
+        let defaults = Config::default();
+        let irrelevant = HashSet::new();
+        let rendered = render_config_toml(&config, &defaults, &irrelevant);
+
+        assert!(rendered.contains("# qdrant_url ="));
+        assert!(rendered.contains("[embedding]"));
+        assert!(rendered.contains("# model = \"BAAI/bge-small-en-v1.5\""));
+    }
+
+    #[test]
+    fn test_render_config_uncomments_custom_values() {
+        let mut config = Config::default();
+        config.collection_name = "custom_collection".to_string();
+        let defaults = Config::default();
+        let irrelevant = HashSet::new();
+        let rendered = render_config_toml(&config, &defaults, &irrelevant);
+
+        assert!(rendered.contains("collection_name = \"custom_collection\""));
+        assert!(!rendered.contains("# collection_name = \"custom_collection\""));
+    }
+
+    #[test]
+    fn test_render_config_comments_irrelevant_fields() {
+        let config = Config::default();
+        let defaults = Config::default();
+        let mut irrelevant = HashSet::new();
+        irrelevant.insert("reranker.model".to_string());
+        let rendered = render_config_toml(&config, &defaults, &irrelevant);
+
+        let reranker_section = rendered
+            .split("[reranker]")
+            .nth(1)
+            .unwrap_or("");
+        assert!(reranker_section.contains("# model = \"BAAI/bge-reranker-base\""));
     }
 }

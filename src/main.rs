@@ -49,6 +49,14 @@ enum Commands {
         /// Force overwrite existing config
         #[arg(long)]
         force: bool,
+
+        /// Run without interactive prompts (writes defaults)
+        #[arg(long)]
+        non_interactive: bool,
+
+        /// Accept defaults and skip confirmation
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 
     /// Ingest documentation into the RAG index
@@ -532,7 +540,12 @@ fn print_completion_extras(shell: Shell) {
 }
 
 async fn handle_init(cli: Cli) -> Result<()> {
-    let Commands::Init { force } = cli.command else {
+    let Commands::Init {
+        force,
+        non_interactive,
+        yes,
+    } = cli.command
+    else {
         unreachable!()
     };
 
@@ -554,22 +567,14 @@ async fn handle_init(cli: Cli) -> Result<()> {
         (base.clone(), base.join("config.toml"))
     };
 
-    if config_path.exists() && !force {
-        eprintln!(
-            "Config file already exists at: {}\nUse --force to overwrite.",
-            config_path.display()
-        );
-        std::process::exit(1);
-    }
-
-    cmd_init(Some(base_dir), force).await?;
-
-    println!("✓ librarian initialized successfully");
-    println!("  Config: {}", config_path.display());
-    println!("\nNext steps:");
-    println!("  1. Edit the config file to customize settings");
-    println!("  2. Start Qdrant: docker run -p 6333:6333 qdrant/qdrant");
-    println!("  3. Ingest docs: librarian ingest dir /path/to/docs");
+    cmd_init(librarian::commands::InitOptions {
+        base_dir,
+        config_path,
+        force,
+        non_interactive,
+        yes,
+    })
+    .await?;
 
     Ok(())
 }
