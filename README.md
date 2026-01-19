@@ -44,7 +44,7 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
 git clone https://github.com/sealad886/librarian.git
 cd librarian/librarian
 cargo build --release --all-features
-# optionally add to the executable to your PATH
+# optionally add the executable to your PATH
 #   [ ! -d /usr/local/bin ] && mkdir -p /usr/local/bin
 #   ln -s -F "$(pwd)/target/release/librarian" /usr/local/bin/  # if symlinks are supported on your system
 #   cp "$(pwd)/target/release/librarian" /usr/local/bin/  # to copy the executable directly
