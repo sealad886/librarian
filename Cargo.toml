@@ -54,6 +54,9 @@ scraper = "0.22"
 pulldown-cmark = "0.12"
 html2text = "0.13"
 
+# Image decoding (perceptual hash dedupe)
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "avif"] }
+
 # Hashing
 blake3 = "1.5"
 

@@ -4,6 +4,7 @@ use crate::config::Config;
 use crate::embed::{embed_images_in_batches, Embedder};
 use crate::error::Result;
 use crate::meta::{MetaDb, RunOperation, RunStatus};
+use crate::models::is_multimodal_embedding_model;
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -213,8 +214,8 @@ async fn reindex_document<E: Embedder>(
     }
 
     if !image_chunks.is_empty() {
-        if !config.embedding.supports_multimodal {
-            warn!(doc_id = %doc_id, "Skipping image reindex (embedding.supports_multimodal = false)");
+        if !is_multimodal_embedding_model(&config.embedding.model) {
+            warn!(doc_id = %doc_id, model = %config.embedding.model, "Skipping image reindex (model not multimodal)");
             if !points.is_empty() {
                 store.upsert_points(points).await?;
             }

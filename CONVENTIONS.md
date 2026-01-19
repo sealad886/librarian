@@ -60,16 +60,16 @@
 
 **Status:** REQUIRED  
 **Scope:** Configuration validation across crawl/embedding/reranker  
-**Rule:** Enabling multimodal crawling (`crawl.multimodal.enabled = true`) requires `embedding.supports_multimodal = true`. Audio/video ingestion is not yet supported and must remain disabled. If `reranker.supports_multimodal = true`, then `reranker.enabled` must also be `true`.  
+**Rule:** Enabling multimodal crawling (`crawl.multimodal.enabled = true`) requires `embedding.model` to be a registry-approved multimodal model (see `src/models.rs`) and must not use late-interaction strategies (e.g., ColPali/ColQwen2). Audio/video ingestion is not yet supported and must remain disabled. Multimodal reranker capability is inferred from the model registry (no manual `supports_multimodal` flags).  
 **Rationale (Why this exists):**  
 
 - Prevents configuration from enabling features unsupported by the current models.  
 - Fails fast with clear error messages to avoid silent partial ingestion.  
 - Keeps behavior deterministic and observability consistent.  
 **Examples:**  
-- Good: `embedding.supports_multimodal = true` with `crawl.multimodal.enabled = true` and `include_images = true`.  
-- Bad: `crawl.multimodal.enabled = true` while `embedding.supports_multimodal = false` (validation error).  
-- Bad: `reranker.supports_multimodal = true` with `reranker.enabled = false` (validation error).  
+- Good: `embedding.model = "jinaai/jina-clip-v2"` with `crawl.multimodal.enabled = true` and `include_images = true`.  
+- Bad: `crawl.multimodal.enabled = true` with a non-multimodal `embedding.model` (validation error).  
+- Bad: `crawl.multimodal.enabled = true` with late-interaction embeddings (validation error).  
 **Related Files / Modules:**  
 - `src/config/mod.rs`  
 - `src/config/defaults.rs`
@@ -104,3 +104,4 @@
 
 - 2026-01-19: Added conventions for RunOperation-aware ingestion and asynchronous MCP triggers with fresh connections.
 - 2026-01-19: Added convention for modality-aware image chunks and multimodal cleanup.
+- 2026-01-19: Updated multimodal gating to use the model registry and reject late-interaction ingestion.

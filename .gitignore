@@ -21,3 +21,4 @@ target
 #.idea/
 
 .fastembed_cache
+.copilot-tracking/

@@ -107,13 +107,44 @@ embeddings alongside text chunks.
 
 To enable:
 
-1. Set `embedding.supports_multimodal = true`.
+1. Set `embedding.model` to a supported multimodal embedding model (e.g., `Qwen/Qwen3-VL-Embedding-2B`, `Qwen/Qwen3-VL-Embedding-8B`, `jinaai/jina-clip-v2`, or `google/siglip2-*`).
 2. Set `crawl.multimodal.enabled = true` and tune thresholds/limits.
-3. Ensure your embedding dimensions are compatible with the image model.
+3. Ensure your embedding dimensions are compatible with the configured backend.
 
-Image embeddings currently use fastembed’s CLIP ViT-B/32 model (512 dimensions). If your configured
-embedding dimension does not match, image embeddings are skipped and a warning is logged. Cached
-assets are stored under `~/.librarian/assets`.
+Late-interaction models (e.g., `vidore/colpali`) are recognized but currently rejected for
+multimodal ingestion. Image discovery filters out SVGs, applies size thresholds, and deduplicates
+by URL plus perceptual hash. Cached assets are stored under `~/.librarian/assets`.
+
+### Multimodal Model Support
+
+Embedding models:
+
+| Model | Strategy | Status |
+| --- | --- | --- |
+| `Qwen/Qwen3-VL-Embedding-2B` | VL embedding | Supported |
+| `Qwen/Qwen3-VL-Embedding-8B` | VL embedding | Supported |
+| `jinaai/jina-clip-v2` | Dual encoder | Supported |
+| `google/siglip2-*` | Dual encoder | Supported (prefix match) |
+| `vidore/colpali` | Late interaction | Recognized, ingestion blocked |
+
+Reranker models:
+
+| Model | Inputs | Status |
+| --- | --- | --- |
+| `Qwen/Qwen3-VL-Reranker-2B` | Text + image | Supported |
+| `Qwen/Qwen3-VL-Reranker-8B` | Text + image | Supported |
+| `jinaai/jina-reranker-m0` | Text + image | Supported |
+| `lightonai/MonoQwen2-VL-v0.1` | Text + image | Supported |
+
+References:
+
+- Qwen3-VL embedding model cards: <https://huggingface.co/Qwen/Qwen3-VL-Embedding-2B>, <https://huggingface.co/Qwen/Qwen3-VL-Embedding-8B>
+- Qwen3-VL reranker model cards: <https://huggingface.co/Qwen/Qwen3-VL-Reranker-2B>, <https://huggingface.co/Qwen/Qwen3-VL-Reranker-8B>
+- Jina CLIP v2 model card: <https://huggingface.co/jinaai/jina-clip-v2>
+- SigLIP2 model card (example): <https://huggingface.co/google/siglip2-base-patch16-224>
+- ColPali model card: <https://huggingface.co/vidore/colpali>
+- Jina reranker m0 model card: <https://huggingface.co/jinaai/jina-reranker-m0>
+- MonoQwen2-VL model card: <https://huggingface.co/lightonai/MonoQwen2-VL-v0.1>
 
 ## Commands
 
@@ -288,7 +319,6 @@ collection_name = "librarian"
 [embedding]
 model = "BAAI/bge-small-en-v1.5"
 dimension = 384
-supports_multimodal = false
 
 # Chunking settings
 [chunk]
@@ -308,7 +338,6 @@ bm25_weight = 0.3
 enabled = false
 model = "BAAI/bge-reranker-base"
 top_k = 10
-supports_multimodal = false
 
 # Crawl settings
 [crawl]
@@ -326,6 +355,7 @@ include_images = true
 include_audio = false
 include_video = false
 max_asset_bytes = 5000000
+min_asset_bytes = 4096
 max_assets_per_page = 10
 allowed_mime_prefixes = ["image/"]
 min_relevance_score = 0.6

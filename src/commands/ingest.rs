@@ -6,12 +6,14 @@ use crate::crawl::{CrawledPage, Crawler};
 use crate::embed::{create_embedder, embed_images_in_batches, embed_in_batches, Embedder};
 use crate::error::{Error, Result};
 use crate::meta::{Chunk, Document, MetaDb, RunOperation, RunStatus, Source, SourceType};
+use crate::models::{embedding_model_capabilities, is_multimodal_embedding_model, MultimodalStrategy};
 use crate::parse::{is_binary_content, parse_content, should_skip_file, ContentType};
 use crate::parse::{ParsedDocument, ExtractedMedia};
 use crate::progress::add_progress_bar;
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
 use chrono::Utc;
 use ignore::WalkBuilder;
+use image::imageops::FilterType;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -54,7 +56,7 @@ fn url_is_allowed_image(url: &str, allowed_prefixes: &[String]) -> bool {
 
     // If allowed prefixes contain "image/", accept common image extensions
     let lower = url.to_lowercase();
-    let exts = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"];
+    let exts = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".avif"];
     let has_img_ext = exts.iter().any(|e| lower.ends_with(e));
     let allows_images = allowed_prefixes.iter().any(|p| p.starts_with("image/"));
     has_img_ext && allows_images
@@ -66,17 +68,32 @@ fn normalize_media_url(url: &str) -> String {
         .unwrap_or_else(|_| url.to_string())
 }
 
+fn is_svg_url(url: &str) -> bool {
+    Url::parse(url)
+        .ok()
+        .and_then(|u| {
+            std::path::Path::new(u.path())
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| matches!(ext.to_lowercase().as_str(), "svg" | "svgz"))
+        })
+        .unwrap_or(false)
+}
+
 /// Very simple relevance scoring for image candidates based on alt text and heading overlap
 fn score_image_candidate(doc: &ParsedDocument, media: &ExtractedMedia) -> f32 {
     let mut score: f32 = 0.0;
+    let mut has_main_signal = false;
     if let Some(ref alt) = media.alt {
         let trimmed = alt.trim();
         if !trimmed.is_empty() {
             score += 0.35;
+            has_main_signal = true;
         }
         let alt_lower = trimmed.to_lowercase();
         if doc.headings.iter().any(|h| alt_lower.contains(&h.text.to_lowercase())) {
             score += 0.2;
+            has_main_signal = true;
         }
         if doc
             .title
@@ -85,18 +102,48 @@ fn score_image_candidate(doc: &ParsedDocument, media: &ExtractedMedia) -> f32 {
             .unwrap_or(false)
         {
             score += 0.1;
+            has_main_signal = true;
         }
     }
 
     let url_lower = media.url.to_lowercase();
-    for kw in ["diagram", "architecture", "overview", "flow", "guide", "example", "schema"].iter() {
+    for kw in [
+        "diagram",
+        "architecture",
+        "overview",
+        "flow",
+        "guide",
+        "example",
+        "schema",
+        "chart",
+        "figure",
+        "graph",
+        "plot",
+        "screenshot",
+    ]
+    .iter()
+    {
         if url_lower.contains(kw) {
             score += 0.2;
+            has_main_signal = true;
             break;
         }
     }
 
-    for kw in ["logo", "icon", "sprite", "avatar", "placeholder", "spinner"].iter() {
+    for kw in [
+        "logo",
+        "icon",
+        "sprite",
+        "avatar",
+        "placeholder",
+        "spinner",
+        "favicon",
+        "badge",
+        "thumbnail",
+        "thumb",
+    ]
+    .iter()
+    {
         if url_lower.contains(kw) {
             score -= 0.3;
             break;
@@ -107,6 +154,10 @@ fn score_image_candidate(doc: &ParsedDocument, media: &ExtractedMedia) -> f32 {
         score -= 0.1;
     }
 
+    if !has_main_signal {
+        return 0.0;
+    }
+
     // Cap at 1.0
     score.min(1.0f32)
 }
@@ -115,11 +166,24 @@ fn score_image_candidate(doc: &ParsedDocument, media: &ExtractedMedia) -> f32 {
 fn select_image_candidates(config: &Config, doc: &ParsedDocument) -> Vec<(ExtractedMedia, f32)> {
     let mm = &config.crawl.multimodal;
     if !mm.enabled || !mm.include_images { return Vec::new(); }
+    if !is_multimodal_embedding_model(&config.embedding.model) {
+        debug!(model = %config.embedding.model, "Skipping image candidates (model not multimodal)");
+        return Vec::new();
+    }
+    if let Some(caps) = embedding_model_capabilities(&config.embedding.model) {
+        if caps.strategy == MultimodalStrategy::LateInteraction {
+            debug!(model = %config.embedding.model, "Skipping image candidates (late-interaction strategy not supported)");
+            return Vec::new();
+        }
+    }
 
     // Collect, filter, score, and dedupe by normalized URL (keep highest score)
     let mut by_url: HashMap<String, (ExtractedMedia, f32)> = HashMap::new();
     for m in &doc.media {
         if m.css_background && !mm.include_css_background_images {
+            continue;
+        }
+        if is_svg_url(&m.url) {
             continue;
         }
         if !url_is_allowed_image(&m.url, &mm.allowed_mime_prefixes) {
@@ -151,8 +215,44 @@ fn select_image_candidates(config: &Config, doc: &ParsedDocument) -> Vec<(Extrac
     scored
 }
 
+const PERCEPTUAL_HASH_SIZE: u32 = 8;
+const PERCEPTUAL_HASH_MAX_DISTANCE: u32 = 5;
+
+fn compute_perceptual_hash(bytes: &[u8]) -> Option<u64> {
+    let image = image::load_from_memory(bytes).ok()?;
+    let gray = image.to_luma8();
+    let resized = image::imageops::resize(
+        &gray,
+        PERCEPTUAL_HASH_SIZE,
+        PERCEPTUAL_HASH_SIZE,
+        FilterType::Triangle,
+    );
+    let mut total: u32 = 0;
+    for pixel in resized.pixels() {
+        total += pixel[0] as u32;
+    }
+    let avg = total / (PERCEPTUAL_HASH_SIZE * PERCEPTUAL_HASH_SIZE) as u32;
+    let mut hash: u64 = 0;
+    for (idx, pixel) in resized.pixels().enumerate() {
+        if pixel[0] as u32 >= avg {
+            hash |= 1u64 << idx;
+        }
+    }
+    Some(hash)
+}
+
+fn hamming_distance(a: u64, b: u64) -> u32 {
+    (a ^ b).count_ones()
+}
+
+fn is_perceptual_duplicate(hash: u64, seen: &[u64]) -> bool {
+    seen.iter()
+        .any(|seen_hash| hamming_distance(*seen_hash, hash) <= PERCEPTUAL_HASH_MAX_DISTANCE)
+}
+
 /// Fetch accepted image candidates and cache them under base_dir/assets
 async fn fetch_and_cache_images(config: &Config, images: &[(ExtractedMedia, f32)]) -> Vec<CachedAsset> {
+    use reqwest::header::CONTENT_TYPE;
     use reqwest::Client;
     use tokio::fs;
 
@@ -180,6 +280,7 @@ async fn fetch_and_cache_images(config: &Config, images: &[(ExtractedMedia, f32)
 
     let mut cached = Vec::new();
     let mut seen_hashes: HashSet<String> = HashSet::new();
+    let mut seen_phashes: Vec<u64> = Vec::new();
 
     for (m, _score) in images.iter() {
         if Url::parse(&m.url).map(|u| u.scheme().to_string()).map(|s| s != "http" && s != "https").unwrap_or(true) {
@@ -188,8 +289,22 @@ async fn fetch_and_cache_images(config: &Config, images: &[(ExtractedMedia, f32)
         // Fetch
         match client.get(&m.url).send().await {
             Ok(resp) => {
+                if let Some(content_type) = resp.headers().get(CONTENT_TYPE) {
+                    if content_type
+                        .to_str()
+                        .map(|ct| ct.contains("image/svg"))
+                        .unwrap_or(false)
+                    {
+                        debug!(url = %m.url, "Skipping image (SVG content-type)");
+                        continue;
+                    }
+                }
                 // Content length check
                 if let Some(len) = resp.content_length() {
+                    if len < mm.min_asset_bytes as u64 {
+                        debug!(url = %m.url, size = len, min = mm.min_asset_bytes, "Skipping image (content-length below minimum)");
+                        continue;
+                    }
                     if len as usize > mm.max_asset_bytes {
                         debug!(url = %m.url, size = len, limit = mm.max_asset_bytes, "Skipping image (content-length exceeds limit)");
                         continue;
@@ -197,6 +312,10 @@ async fn fetch_and_cache_images(config: &Config, images: &[(ExtractedMedia, f32)
                 }
                 match resp.bytes().await {
                     Ok(bytes) => {
+                        if bytes.len() < mm.min_asset_bytes {
+                            debug!(url = %m.url, size = bytes.len(), min = mm.min_asset_bytes, "Skipping image (downloaded size below minimum)");
+                            continue;
+                        }
                         if bytes.len() > mm.max_asset_bytes {
                             debug!(url = %m.url, size = bytes.len(), limit = mm.max_asset_bytes, "Skipping image (downloaded size exceeds limit)");
                             continue;
@@ -204,6 +323,13 @@ async fn fetch_and_cache_images(config: &Config, images: &[(ExtractedMedia, f32)
                         let hash = compute_content_hash(&bytes);
                         if !seen_hashes.insert(hash.clone()) {
                             continue;
+                        }
+                        if let Some(phash) = compute_perceptual_hash(&bytes) {
+                            if is_perceptual_duplicate(phash, &seen_phashes) {
+                                debug!(url = %m.url, "Skipping image (perceptual duplicate)");
+                                continue;
+                            }
+                            seen_phashes.push(phash);
                         }
                         // Determine extension from URL (best-effort)
                         let ext = if let Some(pos) = m.url.rfind('.') { m.url[pos..].to_string() } else { ".bin".to_string() };
@@ -251,8 +377,8 @@ async fn embed_cached_images(
         return Ok((0, 0));
     }
 
-    if !config.embedding.supports_multimodal {
-        debug!(uri = %doc_uri, "Skipping image embedding (embedding.supports_multimodal = false)");
+    if !is_multimodal_embedding_model(&config.embedding.model) {
+        debug!(uri = %doc_uri, model = %config.embedding.model, "Skipping image embedding (model not multimodal)");
         return Ok((0, 0));
     }
 
@@ -1407,7 +1533,7 @@ mod tests {
     fn multimodal_config() -> Config {
         let mut config = Config::default();
         config.crawl.multimodal.enabled = true;
-        config.embedding.supports_multimodal = true;
+        config.embedding.model = "jinaai/jina-clip-v2".to_string();
         config.crawl.multimodal.min_relevance_score = 0.0;
         config
     }
@@ -1457,5 +1583,47 @@ mod tests {
 
         let candidates = select_image_candidates(&config, &doc);
         assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn test_select_image_candidates_skips_late_interaction() {
+        let mut config = multimodal_config();
+        config.embedding.model = "vidore/colpali".to_string();
+
+        let mut doc = ParsedDocument::new("text".to_string(), ContentType::Html);
+        doc.media = vec![ExtractedMedia {
+            url: "https://example.com/diagram.png".to_string(),
+            alt: Some("Diagram".to_string()),
+            tag: "img".to_string(),
+            css_background: false,
+        }];
+
+        let candidates = select_image_candidates(&config, &doc);
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn test_url_is_allowed_image_filters_svg() {
+        let allowed = vec!["image/".to_string()];
+        assert!(!url_is_allowed_image("https://example.com/icon.svg", &allowed));
+        assert!(url_is_allowed_image("https://example.com/photo.png", &allowed));
+    }
+
+    #[test]
+    fn test_is_svg_url_detects_svg_and_svgz() {
+        assert!(is_svg_url("https://example.com/icon.svg"));
+        assert!(is_svg_url("https://example.com/icon.svgz"));
+        assert!(!is_svg_url("https://example.com/photo.png"));
+    }
+
+    #[test]
+    fn test_perceptual_duplicate_threshold() {
+        let base: u64 = 0b1010_1010;
+        let near = base ^ 0b11; // distance 2
+        let far = base ^ 0b1111_1111; // distance 8
+        let seen = vec![base];
+
+        assert!(is_perceptual_duplicate(near, &seen));
+        assert!(!is_perceptual_duplicate(far, &seen));
     }
 }

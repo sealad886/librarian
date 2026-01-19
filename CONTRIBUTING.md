@@ -299,7 +299,7 @@ Query → Embed → Search (Qdrant) → Rank → Return Results
 
 - `Reranker` trait for cross-encoder reranking
 - `FastEmbedReranker` for local reranking
-- Multimodal gating via `reranker.supports_multimodal`
+- Multimodal gating inferred from the model registry (`src/models.rs`)
 
 #### MCP (`mcp/`)
 

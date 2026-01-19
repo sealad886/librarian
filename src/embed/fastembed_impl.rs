@@ -3,6 +3,7 @@
 use super::Embedder;
 use crate::config::EmbeddingConfig;
 use crate::error::{Error, Result};
+use crate::models::is_multimodal_embedding_model;
 use async_trait::async_trait;
 use fastembed::{EmbeddingModel, ImageEmbedding, ImageEmbeddingModel, ImageInitOptions, InitOptions, TextEmbedding};
 use std::sync::Arc;
@@ -45,7 +46,7 @@ impl FastEmbedder {
 
         info!("FastEmbed model loaded successfully");
 
-        let image_model = if config.supports_multimodal {
+        let image_model = if is_multimodal_embedding_model(&config.model) {
             info!("Initializing FastEmbed image model for multimodal embeddings");
             let image_options =
                 ImageInitOptions::new(ImageEmbeddingModel::ClipVitB32).with_show_download_progress(true);
@@ -144,7 +145,6 @@ mod tests {
             model: "BAAI/bge-small-en-v1.5".to_string(),
             dimension: 384,
             batch_size: 32,
-            supports_multimodal: false,
         };
 
         let embedder = FastEmbedder::new(&config).unwrap();

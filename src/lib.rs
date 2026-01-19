@@ -12,6 +12,7 @@ pub mod crawl;
 pub mod embed;
 pub mod error;
 pub mod mcp;
+pub mod models;
 pub mod meta;
 pub mod parse;
 pub mod progress;

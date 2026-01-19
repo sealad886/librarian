@@ -4,6 +4,7 @@ use crate::config::Config;
 use crate::embed::create_embedder;
 use crate::error::Result;
 use crate::meta::MetaDb;
+use crate::models::is_multimodal_reranker_model;
 use crate::rank::{RankedResult, Ranker};
 use crate::rerank::{create_reranker, Reranker};
 use crate::store::{QdrantStore, SearchFilter};
@@ -91,7 +92,7 @@ pub async fn cmd_query(
     // Optional reranking
     if config.reranker.enabled && !ranked.is_empty() {
         let reranker = create_reranker(&config.reranker)?;
-        if config.reranker.supports_multimodal {
+        if is_multimodal_reranker_model(&config.reranker.model) {
             ranked = apply_reranker(reranker.as_ref(), query, ranked, config.reranker.top_k).await?;
         } else {
             let (text_results, other_results): (Vec<_>, Vec<_>) = ranked

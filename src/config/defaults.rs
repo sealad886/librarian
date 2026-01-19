@@ -30,11 +30,6 @@ pub fn default_embedding_batch_size() -> usize {
     32
 }
 
-/// Default: embedding backend does not support multimodal
-pub fn default_embedding_supports_multimodal() -> bool {
-    false
-}
-
 /// Default maximum characters per chunk
 pub fn default_chunk_max_chars() -> usize {
     1500
@@ -118,11 +113,6 @@ pub fn default_reranker_enabled() -> bool {
     false
 }
 
-/// Default: reranker backend does not support multimodal
-pub fn default_reranker_supports_multimodal() -> bool {
-    false
-}
-
 /// Default number of results to return after reranking
 pub fn default_reranker_top_k() -> usize {
     10
@@ -158,6 +148,9 @@ pub fn default_multimodal_include_video() -> bool { false }
 /// Default: maximum asset bytes (5 MB)
 pub fn default_multimodal_max_asset_bytes() -> usize { 5_000_000 }
 
+/// Default: minimum asset bytes (4 KB)
+pub fn default_multimodal_min_asset_bytes() -> usize { 4_096 }
+
 /// Default: maximum assets per page
 pub fn default_multimodal_max_assets_per_page() -> usize { 10 }
 
@@ -169,3 +162,4 @@ pub fn default_multimodal_min_relevance_score() -> f32 { 0.6 }
 
 /// Default: include CSS background images disabled
 pub fn default_multimodal_include_css_background_images() -> bool { false }
+

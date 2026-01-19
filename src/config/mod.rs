@@ -7,6 +7,10 @@ mod defaults;
 pub use defaults::*;
 
 use crate::error::{Error, Result};
+use crate::models::{
+    embedding_model_capabilities, is_multimodal_embedding_model,
+    supported_multimodal_embedding_models, MultimodalStrategy,
+};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
@@ -65,10 +69,6 @@ pub struct EmbeddingConfig {
     /// Batch size for embedding
     #[serde(default = "default_embedding_batch_size")]
     pub batch_size: usize,
-
-    /// Whether the embedding model supports multimodal (image/audio/video) embeddings
-    #[serde(default = "default_embedding_supports_multimodal")]
-    pub supports_multimodal: bool,
 }
 
 /// Lookup the expected embedding dimension for a known model
@@ -214,10 +214,6 @@ pub struct RerankerConfig {
     /// Number of results to return after reranking
     #[serde(default = "default_reranker_top_k")]
     pub top_k: usize,
-
-    /// Whether the reranker supports multimodal (cross-encoder over images)
-    #[serde(default = "default_reranker_supports_multimodal")]
-    pub supports_multimodal: bool,
 }
 
 /// Multimodal crawling configuration
@@ -242,6 +238,10 @@ pub struct MultimodalCrawlConfig {
     /// Maximum allowed asset size in bytes
     #[serde(default = "default_multimodal_max_asset_bytes")]
     pub max_asset_bytes: usize,
+
+    /// Minimum allowed asset size in bytes
+    #[serde(default = "default_multimodal_min_asset_bytes")]
+    pub min_asset_bytes: usize,
 
     /// Maximum assets per page
     #[serde(default = "default_multimodal_max_assets_per_page")]
@@ -295,7 +295,6 @@ impl Default for EmbeddingConfig {
             model: default_embedding_model(),
             dimension: default_embedding_dimension(),
             batch_size: default_embedding_batch_size(),
-            supports_multimodal: default_embedding_supports_multimodal(),
         }
     }
 }
@@ -349,7 +348,6 @@ impl Default for RerankerConfig {
             enabled: default_reranker_enabled(),
             model: default_reranker_model(),
             top_k: default_reranker_top_k(),
-            supports_multimodal: default_reranker_supports_multimodal(),
         }
     }
 }
@@ -362,6 +360,7 @@ impl Default for MultimodalCrawlConfig {
             include_audio: default_multimodal_include_audio(),
             include_video: default_multimodal_include_video(),
             max_asset_bytes: default_multimodal_max_asset_bytes(),
+            min_asset_bytes: default_multimodal_min_asset_bytes(),
             max_assets_per_page: default_multimodal_max_assets_per_page(),
             allowed_mime_prefixes: default_multimodal_allowed_mime_prefixes(),
             min_relevance_score: default_multimodal_min_relevance_score(),
@@ -499,11 +498,23 @@ impl Config {
 
         // Multimodal validation
         if self.crawl.multimodal.enabled {
-            if !self.embedding.supports_multimodal {
-                return Err(Error::Config(
-                    "crawl.multimodal.enabled requires embedding.supports_multimodal = true"
-                        .to_string(),
-                ));
+            // Check if the embedding model supports multimodal via the model registry
+            if !is_multimodal_embedding_model(&self.embedding.model) {
+                let supported = supported_multimodal_embedding_models().join(", ");
+                return Err(Error::Config(format!(
+                    "crawl.multimodal.enabled requires a multimodal embedding model. '{}' is not supported. Allowed: {}",
+                    self.embedding.model, supported
+                )));
+            }
+
+            // Reject late-interaction strategy for multimodal (not yet supported)
+            if let Some(caps) = embedding_model_capabilities(&self.embedding.model) {
+                if caps.strategy == MultimodalStrategy::LateInteraction {
+                    return Err(Error::Config(format!(
+                        "Late-interaction embedding models like '{}' are not yet supported for multimodal crawling",
+                        self.embedding.model
+                    )));
+                }
             }
 
             if self.crawl.multimodal.include_audio || self.crawl.multimodal.include_video {
@@ -521,12 +532,12 @@ impl Config {
                         .to_string(),
                 ));
             }
-        }
 
-        if self.reranker.supports_multimodal && !self.reranker.enabled {
-            return Err(Error::Config(
-                "reranker.supports_multimodal requires reranker.enabled = true".to_string(),
-            ));
+            if self.crawl.multimodal.min_asset_bytes > self.crawl.multimodal.max_asset_bytes {
+                return Err(Error::Config(
+                    "crawl.multimodal.min_asset_bytes must be <= max_asset_bytes".to_string(),
+                ));
+            }
         }
 
         Ok(())
@@ -604,26 +615,32 @@ mod tests {
     #[test]
     fn test_multimodal_validation_requires_embedding_support() {
         let mut config = Config::default();
-        // By default, embedding.supports_multimodal = false
         config.crawl.multimodal.enabled = true;
         config.crawl.multimodal.include_images = true;
         assert!(config.validate().is_err());
 
         // Enable model support, now validation should pass
-        config.embedding.supports_multimodal = true;
+        config.embedding.model = "jinaai/jina-clip-v2".to_string();
         assert!(config.validate().is_ok());
     }
 
     #[test]
-    fn test_reranker_multimodal_requires_enabled() {
+    fn test_multimodal_validation_rejects_late_interaction() {
         let mut config = Config::default();
-        // If reranker supports multimodal but reranker is disabled, it's invalid
-        config.reranker.supports_multimodal = true;
-        config.reranker.enabled = false;
+        config.crawl.multimodal.enabled = true;
+        config.crawl.multimodal.include_images = true;
+        config.embedding.model = "vidore/colpali".to_string();
         assert!(config.validate().is_err());
+    }
 
-        // Enabling reranker should make it valid
-        config.reranker.enabled = true;
-        assert!(config.validate().is_ok());
+    #[test]
+    fn test_multimodal_min_asset_bytes_validation() {
+        let mut config = Config::default();
+        config.crawl.multimodal.enabled = true;
+        config.crawl.multimodal.include_images = true;
+        config.embedding.model = "jinaai/jina-clip-v2".to_string();
+        config.crawl.multimodal.min_asset_bytes = config.crawl.multimodal.max_asset_bytes + 1;
+
+        assert!(config.validate().is_err());
     }
 }

@@ -2232,6 +2232,7 @@ dependencies = [
  "governor",
  "html2text",
  "ignore",
+ "image",
  "indicatif",
  "mime_guess",
  "nonzero_ext",
