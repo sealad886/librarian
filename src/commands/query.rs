@@ -1,7 +1,7 @@
 //! Query command implementation
 
-use crate::config::Config;
-use crate::embed::create_embedder;
+use crate::config::{Config, ResolvedEmbeddingConfig};
+use crate::embed::Embedder;
 use crate::error::Result;
 use crate::meta::MetaDb;
 use crate::models::is_multimodal_reranker_model;
@@ -39,6 +39,8 @@ pub struct QueryResult {
 /// Execute a query
 pub async fn cmd_query(
     config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
+    embedder: &dyn Embedder,
     db: &MetaDb,
     store: &QdrantStore,
     query: &str,
@@ -49,8 +51,6 @@ pub async fn cmd_query(
     let k = options.k.unwrap_or(config.query.default_k);
     let min_score = options.min_score.unwrap_or(config.query.min_score);
 
-    // Create embedder and embed query
-    let embedder = create_embedder(&config.embedding)?;
     let query_embeddings = embedder.embed(vec![query.to_string()]).await?;
     let query_vector = query_embeddings
         .into_iter()
@@ -91,7 +91,7 @@ pub async fn cmd_query(
 
     // Optional reranking
     if config.reranker.enabled && !ranked.is_empty() {
-        let reranker = create_reranker(&config.reranker)?;
+        let reranker = create_reranker(&config.reranker, &embedding.backend.url)?;
         if is_multimodal_reranker_model(&config.reranker.model) {
             ranked = apply_reranker(reranker.as_ref(), query, ranked, config.reranker.top_k).await?;
         } else {

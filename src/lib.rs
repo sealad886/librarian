@@ -9,6 +9,7 @@ pub mod chunk;
 pub mod commands;
 pub mod config;
 pub mod crawl;
+pub mod embedding_backend;
 pub mod embed;
 pub mod error;
 pub mod mcp;

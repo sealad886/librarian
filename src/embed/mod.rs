@@ -2,18 +2,40 @@
 //!
 //! This module provides an abstraction over embedding models with:
 //! - A trait for different embedding backends
-//! - Local embedding support via fastembed
+//! - HTTP embedding backend
 //! - Batch processing for efficiency
 
-#[cfg(feature = "local-embed")]
-mod fastembed_impl;
+mod http_backend;
 
-#[cfg(feature = "local-embed")]
-pub use fastembed_impl::*;
+pub use http_backend::*;
 
-use crate::config::EmbeddingConfig;
+use crate::config::ResolvedEmbeddingConfig;
 use crate::error::{Error, Result};
 use async_trait::async_trait;
+
+#[derive(Debug, Clone)]
+pub struct ImageEmbedInput {
+    pub image_path: String,
+    pub text: Option<String>,
+}
+
+pub fn normalize_embedding(vector: &[f32]) -> Vec<f32> {
+    let norm = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if norm == 0.0 {
+        return vector.to_vec();
+    }
+    vector.iter().map(|v| v / norm).collect()
+}
+
+pub fn fuse_embeddings(image: &[f32], text: &[f32]) -> Vec<f32> {
+    let image_norm = normalize_embedding(image);
+    let text_norm = normalize_embedding(text);
+    let mut combined = Vec::with_capacity(image.len());
+    for (i, t) in image_norm.iter().zip(text_norm.iter()) {
+        combined.push((i + t) / 2.0);
+    }
+    normalize_embedding(&combined)
+}
 
 /// Trait for embedding providers
 #[async_trait]
@@ -28,6 +50,13 @@ pub trait Embedder: Send + Sync {
         ))
     }
 
+    /// Embed a batch of image + optional text inputs (joint models)
+    async fn embed_image_text(&self, _inputs: Vec<ImageEmbedInput>) -> Result<Vec<Vec<f32>>> {
+        Err(Error::Embedding(
+            "Image+text embedding is not supported by this backend".to_string(),
+        ))
+    }
+
     /// Get the embedding dimension
     fn dimension(&self) -> usize;
 
@@ -36,19 +65,9 @@ pub trait Embedder: Send + Sync {
 }
 
 /// Create an embedder based on configuration
-pub fn create_embedder(config: &EmbeddingConfig) -> Result<Box<dyn Embedder>> {
-    #[cfg(feature = "local-embed")]
-    {
-        let embedder = FastEmbedder::new(config)?;
-        Ok(Box::new(embedder))
-    }
-
-    #[cfg(not(feature = "local-embed"))]
-    {
-        Err(Error::Embedding(
-            "No embedding backend available. Enable 'local-embed' feature.".to_string(),
-        ))
-    }
+pub fn create_embedder(config: &ResolvedEmbeddingConfig) -> Result<Box<dyn Embedder>> {
+    let embedder = HttpEmbedder::new(config)?;
+    Ok(Box::new(embedder))
 }
 
 /// Helper to embed in batches with progress
@@ -79,6 +98,23 @@ pub async fn embed_images_in_batches(
     for chunk in images.chunks(batch_size) {
         let batch_images: Vec<String> = chunk.to_vec();
         let embeddings = embedder.embed_images(batch_images).await?;
+        all_embeddings.extend(embeddings);
+    }
+
+    Ok(all_embeddings)
+}
+
+/// Helper to embed image+text inputs in batches
+pub async fn embed_image_text_in_batches(
+    embedder: &dyn Embedder,
+    inputs: Vec<ImageEmbedInput>,
+    batch_size: usize,
+) -> Result<Vec<Vec<f32>>> {
+    let mut all_embeddings = Vec::with_capacity(inputs.len());
+
+    for chunk in inputs.chunks(batch_size) {
+        let batch_inputs: Vec<ImageEmbedInput> = chunk.to_vec();
+        let embeddings = embedder.embed_image_text(batch_inputs).await?;
         all_embeddings.extend(embeddings);
     }
 

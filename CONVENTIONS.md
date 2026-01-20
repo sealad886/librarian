@@ -92,6 +92,25 @@
 - `src/commands/ingest.rs`  
 - `src/commands/reindex.rs`
 
+### Embedding backends must implement the probe contract
+
+**Status:** REQUIRED  
+**Scope:** Embedding backend implementations and configuration resolution  
+**Rule:** Embedding backends must expose `/capabilities`, `/probe`, `/v1/embed/text`, and `/v1/embed/image_text`. `resolve_embedding_config` must call `/probe` and enforce that returned embeddings and dimensions match the configured model; custom backends must advertise the model id in `/capabilities` when the model list is non-empty.  
+**Rationale (Why this exists):**  
+
+- Prevents silent dimension mismatches that corrupt Qdrant vectors.  
+- Ensures allowlisted vs custom models are validated consistently.  
+- Makes multimodal behavior explicit (joint vs dual-encoder) before ingestion.  
+**Examples:**  
+- Good: Backend returns `text_embeddings` and (when multimodal) `image_embeddings` or `joint_embeddings` with consistent lengths; config validation fails fast when dimensions differ.  
+- Bad: Skipping `/probe` or returning embeddings with varying dimensions.  
+**Related Files / Modules:**  
+- `src/config/mod.rs`  
+- `src/embedding_backend.rs`  
+- `src/embed/http_backend.rs`  
+- `sidecar/app.py`
+
 ## 3. Rationale and Examples
 
 - See examples embedded within each convention above for concrete good/bad patterns that align status reporting and background execution with run tracking.
@@ -105,3 +124,4 @@
 - 2026-01-19: Added conventions for RunOperation-aware ingestion and asynchronous MCP triggers with fresh connections.
 - 2026-01-19: Added convention for modality-aware image chunks and multimodal cleanup.
 - 2026-01-19: Updated multimodal gating to use the model registry and reject late-interaction ingestion.
+- 2026-01-20: Added embedding backend probe contract convention.

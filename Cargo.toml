@@ -10,8 +10,7 @@ keywords = ["rag", "retrieval", "mcp", "qdrant", "embedding"]
 categories = ["command-line-utilities", "text-processing"]
 
 [features]
-default = ["local-embed"]
-local-embed = ["fastembed"]
+default = []
 pdf = ["pdf-extract"]
 js-rendering = ["chromiumoxide"]
 
@@ -48,9 +47,6 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "migrate"] }
 
 # Vector database
 qdrant-client = "1.12"
-
-# Embeddings
-fastembed = { version = "4", optional = true }
 
 # HTML/Markdown parsing
 scraper = "0.22"
@@ -99,6 +95,9 @@ chromiumoxide = { version = "0.8", optional = true, default-features = false, fe
 # Async utilities
 futures = "0.3"
 async-trait = "0.1"
+
+# Base64 encoding (embedding backend payloads)
+base64 = "0.22"
 
 # MIME type detection
 mime_guess = "2.0"

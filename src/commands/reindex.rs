@@ -1,10 +1,12 @@
 //! Reindex command - re-embed all documents
 
-use crate::config::Config;
-use crate::embed::{embed_images_in_batches, Embedder};
+use crate::config::{Config, ResolvedEmbeddingConfig};
+use crate::embed::{
+    embed_image_text_in_batches, embed_images_in_batches, embed_in_batches, Embedder,
+    ImageEmbedInput, fuse_embeddings,
+};
 use crate::error::{Error, Result};
 use crate::meta::{MetaDb, RunOperation, RunStatus};
-use crate::models::is_multimodal_embedding_model;
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -38,11 +40,12 @@ impl ReindexOptions {
 }
 
 /// Execute reindex command - re-embed all chunks
-pub async fn cmd_reindex<E: Embedder>(
+pub async fn cmd_reindex(
     config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
     db: &MetaDb,
     store: &QdrantStore,
-    embedder: &E,
+    embedder: &dyn Embedder,
     options: ReindexOptions,
 ) -> Result<ReindexStats> {
     info!("Starting reindex operation");
@@ -90,6 +93,7 @@ pub async fn cmd_reindex<E: Embedder>(
         for doc in documents {
             match reindex_document(
                 config,
+                embedding,
                 db,
                 store,
                 embedder,
@@ -153,11 +157,12 @@ pub async fn cmd_reindex<E: Embedder>(
 }
 
 /// Reindex a single document's chunks
-async fn reindex_document<E: Embedder>(
+async fn reindex_document(
     config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
     db: &MetaDb,
     store: &QdrantStore,
-    embedder: &E,
+    embedder: &dyn Embedder,
     source_id: &str,
     source_type: &str,
     source_uri: &str,
@@ -181,6 +186,8 @@ async fn reindex_document<E: Embedder>(
 
     let mut points = Vec::new();
     let mut total = 0usize;
+
+    let batch_size = embedding.effective_batch_size(batch_size);
 
     if !text_chunks.is_empty() {
         let texts: Vec<String> = text_chunks.iter().map(|c| c.text.clone()).collect();
@@ -224,12 +231,19 @@ async fn reindex_document<E: Embedder>(
     }
 
     if !image_chunks.is_empty() {
-        if !is_multimodal_embedding_model(&config.embedding.model) {
-            warn!(doc_id = %doc_id, model = %config.embedding.model, "Skipping image reindex (model not multimodal)");
+        if !embedding.supports_image_inputs() {
+            warn!(doc_id = %doc_id, model = %embedding.model_id, "Skipping image reindex (model not multimodal)");
             if !points.is_empty() {
                 store.upsert_points(points).await?;
             }
             return Ok(total);
+        }
+
+        if embedding.supports_multi_vector {
+            return Err(Error::Embedding(format!(
+                "Late-interaction embedding model '{}' does not support image reindex",
+                embedding.model_id
+            )));
         }
 
         let assets_dir = config.paths.base_dir.join("assets");
@@ -254,53 +268,110 @@ async fn reindex_document<E: Embedder>(
         }
 
         if !image_paths.is_empty() {
-            match embed_images_in_batches(embedder, image_paths, batch_size).await {
-                Ok(embeddings) => {
-                    if embeddings.is_empty() {
-                        warn!(doc_id = %doc_id, "No image embeddings returned");
-                    } else if embedder.dimension() != store.dimension()
-                        || embeddings[0].len() != store.dimension()
-                    {
-                        warn!(
-                            doc_id = %doc_id,
-                            image_dim = embeddings[0].len(),
-                            expected_dim = store.dimension(),
-                            "Skipping image embeddings (dimension mismatch)"
-                        );
-                    } else {
-                        for (chunk, embedding) in image_meta.iter().zip(embeddings.into_iter()) {
-                            let point_id = Uuid::try_parse(&chunk.id).unwrap_or_else(|_| {
-                                Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk.id.as_bytes())
-                            });
+            let expected_dim = store.dimension();
+            if embedder.dimension() != expected_dim {
+                return Err(Error::Embedding(format!(
+                    "Embedding dimension mismatch for model '{}' (family '{}', source {}): embedder {} != collection {}",
+                    embedding.model_id,
+                    embedding.family,
+                    embedding.dimension_source,
+                    embedder.dimension(),
+                    expected_dim
+                )));
+            }
 
-                            let mut payload = ChunkPayload::new(
-                                source_id.to_string(),
-                                source_type.to_string(),
-                                source_uri.to_string(),
-                                doc_id.to_string(),
-                                doc.uri.clone(),
-                                chunk.chunk_index,
-                                chunk.content_hash.clone(),
-                                chrono::Utc::now().to_rfc3339(),
-                            );
-                            payload.title = doc.title.clone();
-                            payload.modality = Some(chunk.modality.clone());
-                            payload.media_url = chunk.media_url.clone();
-                            payload.media_hash = chunk.media_hash.clone();
+            let batch_size = embedding.effective_batch_size(batch_size);
+            let contexts: Vec<Option<String>> = image_meta
+                .iter()
+                .map(|chunk| {
+                    let text = chunk.text.trim();
+                    if text.is_empty() { None } else { Some(text.to_string()) }
+                })
+                .collect();
 
-                            points.push(ChunkPoint {
-                                id: point_id,
-                                vector: embedding,
-                                payload,
-                            });
+            let embeddings = if embedding.supports_joint_inputs {
+                let inputs = image_paths
+                    .iter()
+                    .zip(contexts.iter())
+                    .map(|(path, text)| ImageEmbedInput {
+                        image_path: path.clone(),
+                        text: text.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                embed_image_text_in_batches(embedder, inputs, batch_size).await?
+            } else {
+                let image_embeddings = embed_images_in_batches(embedder, image_paths, batch_size).await?;
+                let mut fused_embeddings = image_embeddings.clone();
+
+                let mut text_inputs = Vec::new();
+                let mut text_indices = Vec::new();
+                for (idx, context) in contexts.iter().enumerate() {
+                    if let Some(text) = context {
+                        if !text.trim().is_empty() {
+                            text_indices.push(idx);
+                            text_inputs.push(text.clone());
                         }
-
-                        total += image_meta.len();
                     }
                 }
-                Err(e) => {
-                    warn!(doc_id = %doc_id, "Image reindex failed: {}", e);
+
+                if !text_inputs.is_empty() {
+                    let text_embeddings = embed_in_batches(embedder, text_inputs, batch_size).await?;
+                    for (offset, idx) in text_indices.iter().enumerate() {
+                        let image_vec = &image_embeddings[*idx];
+                        let text_vec = &text_embeddings[offset];
+                        if image_vec.len() != text_vec.len() {
+                            return Err(Error::Embedding(format!(
+                                "Dual-encoder fusion dimension mismatch for model '{}': image {} != text {}",
+                                embedding.model_id,
+                                image_vec.len(),
+                                text_vec.len()
+                            )));
+                        }
+                        fused_embeddings[*idx] = fuse_embeddings(image_vec, text_vec);
+                    }
                 }
+
+                fused_embeddings
+            };
+
+            if embeddings.is_empty() {
+                warn!(doc_id = %doc_id, "No image embeddings returned");
+            } else if embeddings[0].len() != expected_dim {
+                return Err(Error::Embedding(format!(
+                    "Image embedding dimension mismatch for model '{}': expected {}, got {}",
+                    embedding.model_id,
+                    expected_dim,
+                    embeddings[0].len()
+                )));
+            } else {
+                for (chunk, embedding_vec) in image_meta.iter().zip(embeddings.into_iter()) {
+                    let point_id = Uuid::try_parse(&chunk.id).unwrap_or_else(|_| {
+                        Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk.id.as_bytes())
+                    });
+
+                    let mut payload = ChunkPayload::new(
+                        source_id.to_string(),
+                        source_type.to_string(),
+                        source_uri.to_string(),
+                        doc_id.to_string(),
+                        doc.uri.clone(),
+                        chunk.chunk_index,
+                        chunk.content_hash.clone(),
+                        chrono::Utc::now().to_rfc3339(),
+                    );
+                    payload.title = doc.title.clone();
+                    payload.modality = Some(chunk.modality.clone());
+                    payload.media_url = chunk.media_url.clone();
+                    payload.media_hash = chunk.media_hash.clone();
+
+                    points.push(ChunkPoint {
+                        id: point_id,
+                        vector: embedding_vec,
+                        payload,
+                    });
+                }
+
+                total += image_meta.len();
             }
         }
     }

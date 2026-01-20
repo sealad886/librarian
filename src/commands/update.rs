@@ -4,7 +4,8 @@ use crate::commands::{
     cmd_ingest_dir, cmd_ingest_sitemap, cmd_ingest_url, CrawlOverrides, IngestStats,
 };
 use crate::commands::{cmd_prune, PruneOptions, PruneStats};
-use crate::config::Config;
+use crate::config::{Config, ResolvedEmbeddingConfig};
+use crate::embed::Embedder;
 use crate::error::Result;
 use crate::meta::{MetaDb, RunOperation, SourceType};
 use crate::store::QdrantStore;
@@ -41,6 +42,8 @@ impl Default for UpdateOptions {
 /// Execute update command - re-run ingestion for sources and prune orphaned vectors
 pub async fn cmd_update(
     config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
+    embedder: &dyn Embedder,
     db: &MetaDb,
     store: &QdrantStore,
     options: UpdateOptions,
@@ -73,6 +76,8 @@ pub async fn cmd_update(
                 let path = Path::new(&source.uri);
                 cmd_ingest_dir(
                     config,
+                    embedding,
+                    embedder,
                     db,
                     store,
                     path,
@@ -86,6 +91,8 @@ pub async fn cmd_update(
                 let overrides = CrawlOverrides::default();
                 cmd_ingest_url(
                     config,
+                    embedding,
+                    embedder,
                     db,
                     store,
                     &source.uri,
@@ -99,6 +106,8 @@ pub async fn cmd_update(
             SourceType::Sitemap => {
                 cmd_ingest_sitemap(
                     config,
+                    embedding,
+                    embedder,
                     db,
                     store,
                     &source.uri,

@@ -20,9 +20,36 @@ pub fn default_embedding_model() -> String {
     "BAAI/bge-small-en-v1.5".to_string()
 }
 
-/// Default embedding dimension for bge-small-en-v1.5
-pub fn default_embedding_dimension() -> usize {
-    384
+/// Allow custom embedding models
+pub fn default_embedding_allow_custom() -> bool {
+    false
+}
+
+/// Enable multimodal embeddings
+pub fn default_embedding_multimodal() -> bool {
+    false
+}
+
+/// Default embedding backend kind
+pub fn default_embedding_backend() -> String {
+    "http".to_string()
+}
+
+/// Default embedding backend URL
+pub fn default_embedding_backend_url() -> String {
+    std::env::var("LIBRARIAN_EMBEDDING_BACKEND_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:7997".to_string())
+}
+
+/// Default custom embedding backend kind
+pub fn default_embedding_custom_backend() -> String {
+    "http".to_string()
+}
+
+/// Default custom embedding backend URL
+pub fn default_embedding_custom_url() -> String {
+    std::env::var("LIBRARIAN_CUSTOM_EMBEDDING_BACKEND_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:7997".to_string())
 }
 
 /// Default batch size for embedding

@@ -6,7 +6,7 @@ use crate::commands::{
     cmd_update, CrawlOverrides, QueryOptions, ReindexOptions, UpdateOptions,
 };
 use crate::config::Config;
-use crate::embed::FastEmbedder;
+use crate::embed::create_embedder;
 use crate::error::Error;
 use crate::meta::{MetaDb, RunOperation, SourceType};
 use crate::store::QdrantStore;
@@ -215,8 +215,26 @@ async fn handle_search(
         ..Default::default()
     };
 
+    let embedding_config = match config.resolve_embedding_config().await {
+        Ok(cfg) => cfg,
+        Err(e) => return ToolResult::error(format!("Embedding config error: {}", e)),
+    };
+    let embedder = match create_embedder(&embedding_config) {
+        Ok(embedder) => embedder,
+        Err(e) => return ToolResult::error(format!("Embedding backend error: {}", e)),
+    };
+
     // Execute query
-    match cmd_query(config, db, store, &query, options).await {
+    match cmd_query(
+        config,
+        &embedding_config,
+        embedder.as_ref(),
+        db,
+        store,
+        &query,
+        options,
+    )
+    .await {
         Ok(result) => {
             if result.results.is_empty() {
                 return ToolResult::text("No results found matching your query.");
@@ -472,13 +490,17 @@ async fn run_ingest_background(
 ) -> AppResult<()> {
     let db = MetaDb::connect(&config).await?;
     db.init_schema().await?;
-    let store = QdrantStore::connect(&config).await?;
+    let embedding_config = config.resolve_embedding_config().await?;
+    let embedder = create_embedder(&embedding_config)?;
+    let store = QdrantStore::connect(&config, &embedding_config).await?;
 
     match source_type {
         SourceType::Dir => {
             let path = PathBuf::from(&uri);
             cmd_ingest_dir(
                 &config,
+                &embedding_config,
+                embedder.as_ref(),
                 &db,
                 &store,
                 &path,
@@ -496,6 +518,8 @@ async fn run_ingest_background(
             };
             cmd_ingest_url(
                 &config,
+                &embedding_config,
+                embedder.as_ref(),
                 &db,
                 &store,
                 &uri,
@@ -509,6 +533,8 @@ async fn run_ingest_background(
         SourceType::Sitemap => {
             cmd_ingest_sitemap(
                 &config,
+                &embedding_config,
+                embedder.as_ref(),
                 &db,
                 &store,
                 &uri,
@@ -531,14 +557,16 @@ async fn run_update_background(
 ) -> AppResult<()> {
     let db = MetaDb::connect(&config).await?;
     db.init_schema().await?;
-    let store = QdrantStore::connect(&config).await?;
+    let embedding_config = config.resolve_embedding_config().await?;
+    let embedder = create_embedder(&embedding_config)?;
+    let store = QdrantStore::connect(&config, &embedding_config).await?;
 
     let options = UpdateOptions {
         source_ids,
         prune_orphans,
     };
 
-    cmd_update(&config, &db, &store, options).await?;
+    cmd_update(&config, &embedding_config, embedder.as_ref(), &db, &store, options).await?;
     Ok(())
 }
 
@@ -549,14 +577,23 @@ async fn run_reindex_background(
 ) -> AppResult<()> {
     let db = MetaDb::connect(&config).await?;
     db.init_schema().await?;
-    let store = QdrantStore::connect(&config).await?;
-    let embedder = FastEmbedder::new(&config.embedding)?;
+    let embedding_config = config.resolve_embedding_config().await?;
+    let embedder = create_embedder(&embedding_config)?;
+    let store = QdrantStore::connect(&config, &embedding_config).await?;
 
     let options = ReindexOptions {
         source_ids,
         batch_size,
     };
 
-    cmd_reindex(&config, &db, &store, &embedder, options).await?;
+    cmd_reindex(
+        &config,
+        &embedding_config,
+        &db,
+        &store,
+        embedder.as_ref(),
+        options,
+    )
+    .await?;
     Ok(())
 }

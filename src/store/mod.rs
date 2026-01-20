@@ -9,7 +9,7 @@ mod payload;
 
 pub use payload::*;
 
-use crate::config::Config;
+use crate::config::{Config, EmbeddingDimensionSource, ResolvedEmbeddingConfig};
 use crate::error::{Error, Result};
 use qdrant_client::qdrant::{
     CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, GetCollectionInfoResponse,
@@ -33,21 +33,47 @@ pub struct QdrantStore {
     client: Qdrant,
     collection: String,
     dimension: usize,
+    embedding_context: Option<EmbeddingContext>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EmbeddingContext {
+    pub model_id: String,
+    pub family: String,
+    pub dimension: usize,
+    pub dimension_source: EmbeddingDimensionSource,
+}
+
+impl From<&ResolvedEmbeddingConfig> for EmbeddingContext {
+    fn from(config: &ResolvedEmbeddingConfig) -> Self {
+        Self {
+            model_id: config.model_id.clone(),
+            family: config.family.clone(),
+            dimension: config.dimension,
+            dimension_source: config.dimension_source,
+        }
+    }
 }
 
 impl QdrantStore {
     /// Connect to Qdrant using config
-    pub async fn connect(config: &Config) -> Result<Self> {
+    pub async fn connect(config: &Config, embedding: &ResolvedEmbeddingConfig) -> Result<Self> {
         Self::new(
             &config.qdrant_url,
             &config.collection_name,
-            config.embedding.resolved_dimension(),
+            embedding.dimension,
+            Some(embedding),
         )
         .await
     }
 
     /// Create a new store connection directly with URL and collection name
-    pub async fn new(url: &str, collection: &str, dimension: usize) -> Result<Self> {
+    pub async fn new(
+        url: &str,
+        collection: &str,
+        dimension: usize,
+        embedding: Option<&ResolvedEmbeddingConfig>,
+    ) -> Result<Self> {
         debug!("Connecting to Qdrant at {}", url);
 
         let client = Qdrant::from_url(url)
@@ -59,6 +85,7 @@ impl QdrantStore {
             client,
             collection: collection.to_string(),
             dimension,
+            embedding_context: embedding.map(EmbeddingContext::from),
         };
 
         Ok(store)
@@ -89,9 +116,17 @@ impl QdrantStore {
                 if let Some((_, size)) = sizes.first() {
                     let size = *size as usize;
                     if size != self.dimension {
+                        let detail = if let Some(ctx) = &self.embedding_context {
+                            format!(
+                                "model '{}' (family '{}') expects {} from {}",
+                                ctx.model_id, ctx.family, ctx.dimension, ctx.dimension_source
+                            )
+                        } else {
+                            format!("config expects {}", self.dimension)
+                        };
                         return Err(Error::Qdrant(format!(
-                            "Collection '{}' has vector size {}, but config expects {}. Ensure the embedding dimension matches the collection configuration.",
-                            self.collection, size, self.dimension
+                            "Collection '{}' has vector size {}, but {}. Remediation: set a new collection name or migrate/reindex with the expected dimension.",
+                            self.collection, size, detail
                         )));
                     }
                 }
@@ -176,10 +211,18 @@ impl QdrantStore {
         }
 
         if let Some(mismatch) = points.iter().find(|p| p.vector.len() != self.dimension) {
+            let detail = if let Some(ctx) = &self.embedding_context {
+                format!(
+                    "model '{}' (family '{}') expects {} from {}",
+                    ctx.model_id, ctx.family, ctx.dimension, ctx.dimension_source
+                )
+            } else {
+                format!("expected {}", self.dimension)
+            };
             return Err(Error::Qdrant(format!(
-                "Vector dimension mismatch for collection '{}': expected {}, got {}",
+                "Vector dimension mismatch for collection '{}': {} (got {})",
                 self.collection,
-                self.dimension,
+                detail,
                 mismatch.vector.len()
             )));
         }
@@ -497,7 +540,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_upsert_points_rejects_dimension_mismatch() {
-        let store = QdrantStore::new("http://127.0.0.1:6334", "test_collection", 3)
+        let store = QdrantStore::new("http://127.0.0.1:6334", "test_collection", 3, None)
             .await
             .expect("store should initialize");
 

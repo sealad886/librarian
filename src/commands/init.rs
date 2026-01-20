@@ -109,20 +109,31 @@ pub async fn cmd_init(options: InitOptions) -> Result<()> {
     db.init_schema().await?;
     info!("Created database at {:?}", config.paths.db_file);
 
-    match QdrantStore::connect(&config).await {
-        Ok(store) => match store.ensure_collection().await {
-            Ok(_) => info!("Qdrant collection '{}' ready", config.collection_name),
-            Err(e) => {
-                tracing::warn!(
-                    "Could not create Qdrant collection: {}. You can create it later.",
-                    e
-                );
+    // Attempt to resolve embedding config to get dimension for Qdrant collection
+    match config.resolve_embedding_config().await {
+        Ok(embedding_config) => {
+            match QdrantStore::connect(&config, &embedding_config).await {
+                Ok(store) => match store.ensure_collection().await {
+                    Ok(_) => info!("Qdrant collection '{}' ready", config.collection_name),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Could not create Qdrant collection: {}. You can create it later.",
+                            e
+                        );
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        "Could not connect to Qdrant at {}: {}. Make sure Qdrant is running.",
+                        config.qdrant_url,
+                        e
+                    );
+                }
             }
-        },
+        }
         Err(e) => {
             tracing::warn!(
-                "Could not connect to Qdrant at {}: {}. Make sure Qdrant is running.",
-                config.qdrant_url,
+                "Could not resolve embedding config: {}. Qdrant collection will be created on first ingest.",
                 e
             );
         }
@@ -664,21 +675,30 @@ fn prompt_select_with_custom(
 
 fn prompt_select_dimension(
     label: &str,
-    current: usize,
+    current: Option<usize>,
     options: &[usize],
-) -> Result<usize> {
-    let mut choices = options.iter().map(|v| v.to_string()).collect::<Vec<_>>();
-    let default_index = options
-        .iter()
-        .position(|v| *v == current)
-        .unwrap_or(choices.len());
+) -> Result<Option<usize>> {
+    let mut choices = vec!["Auto-detect from model".to_string()];
+    choices.extend(options.iter().map(|v| v.to_string()));
     choices.push("Custom...".to_string());
 
+    let default_index = current
+        .and_then(|c| options.iter().position(|v| *v == c).map(|i| i + 1))
+        .unwrap_or(0); // Default to "Auto-detect"
+
     let selection = prompt_select(label, &choices, default_index, false)?;
+
+    if selection == 0 {
+        // Auto-detect
+        return Ok(None);
+    }
+
     if selection == choices.len() - 1 {
+        // Custom
+        let default_val = current.unwrap_or(768);
         return prompt_usize(
             "Enter custom dimension",
-            current,
+            default_val,
             |value| {
                 if value == 0 {
                     Err("Dimension must be > 0".to_string())
@@ -687,11 +707,13 @@ fn prompt_select_dimension(
                 }
             },
             false,
-        );
+        )
+        .map(Some);
     }
 
     choices[selection]
         .parse::<usize>()
+        .map(Some)
         .map_err(|_| Error::Config("Invalid dimension selection".to_string()))
 }
 

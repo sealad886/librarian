@@ -1,12 +1,14 @@
 //! Ingest command implementation
 
 use crate::chunk::{chunk_document, compute_content_hash, TextChunk};
-use crate::config::Config;
+use crate::config::{Config, ResolvedEmbeddingConfig};
 use crate::crawl::{CrawledPage, Crawler};
-use crate::embed::{create_embedder, embed_images_in_batches, embed_in_batches, Embedder};
+use crate::embed::{
+    embed_image_text_in_batches, embed_images_in_batches, embed_in_batches, Embedder,
+    ImageEmbedInput, fuse_embeddings,
+};
 use crate::error::{Error, Result};
 use crate::meta::{Chunk, Document, MetaDb, RunOperation, RunStatus, Source, SourceType};
-use crate::models::{embedding_model_capabilities, is_multimodal_embedding_model, MultimodalStrategy};
 use crate::parse::{is_binary_content, parse_content, should_skip_file, ContentType};
 use crate::parse::{ParsedDocument, ExtractedMedia};
 use crate::progress::add_progress_bar;
@@ -162,19 +164,57 @@ fn score_image_candidate(doc: &ParsedDocument, media: &ExtractedMedia) -> f32 {
     score.min(1.0f32)
 }
 
+fn build_image_context(doc: &ParsedDocument, media: &ExtractedMedia) -> Option<String> {
+    let mut parts = Vec::new();
+
+    if let Some(ref alt) = media.alt {
+        let trimmed = alt.trim();
+        if !trimmed.is_empty() {
+            parts.push(trimmed.to_string());
+        }
+    }
+
+    if let Some(ref title) = doc.title {
+        let trimmed = title.trim();
+        if !trimmed.is_empty() {
+            parts.push(trimmed.to_string());
+        }
+    }
+
+    if !doc.headings.is_empty() {
+        let headings = doc
+            .headings
+            .iter()
+            .map(|h| h.text.trim())
+            .filter(|h| !h.is_empty())
+            .collect::<Vec<_>>();
+        if !headings.is_empty() {
+            parts.push(headings.join(" > "));
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" | "))
+    }
+}
+
 /// Select image candidates according to config thresholds and limits
-fn select_image_candidates(config: &Config, doc: &ParsedDocument) -> Vec<(ExtractedMedia, f32)> {
+fn select_image_candidates(
+    config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
+    doc: &ParsedDocument,
+) -> Vec<(ExtractedMedia, f32)> {
     let mm = &config.crawl.multimodal;
     if !mm.enabled || !mm.include_images { return Vec::new(); }
-    if !is_multimodal_embedding_model(&config.embedding.model) {
-        debug!(model = %config.embedding.model, "Skipping image candidates (model not multimodal)");
+    if !embedding.supports_image_inputs() {
+        debug!(model = %embedding.model_id, "Skipping image candidates (model not multimodal)");
         return Vec::new();
     }
-    if let Some(caps) = embedding_model_capabilities(&config.embedding.model) {
-        if caps.strategy == MultimodalStrategy::LateInteraction {
-            debug!(model = %config.embedding.model, "Skipping image candidates (late-interaction strategy not supported)");
-            return Vec::new();
-        }
+    if embedding.supports_multi_vector {
+        debug!(model = %embedding.model_id, "Skipping image candidates (late-interaction strategy not supported)");
+        return Vec::new();
     }
 
     // Collect, filter, score, and dedupe by normalized URL (keep highest score)
@@ -365,34 +405,104 @@ async fn fetch_and_cache_images(config: &Config, images: &[(ExtractedMedia, f32)
 
 async fn embed_cached_images(
     config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
     db: &MetaDb,
     store: &QdrantStore,
     embedder: &dyn Embedder,
     source: &Source,
     doc: &Document,
     doc_uri: &str,
+    parsed: &ParsedDocument,
     cached_images: Vec<CachedAsset>,
 ) -> Result<(i32, i32)> {
     if cached_images.is_empty() {
         return Ok((0, 0));
     }
 
-    if !is_multimodal_embedding_model(&config.embedding.model) {
-        debug!(uri = %doc_uri, model = %config.embedding.model, "Skipping image embedding (model not multimodal)");
+    if !embedding.supports_image_inputs() {
+        debug!(uri = %doc_uri, model = %embedding.model_id, "Skipping image embedding (model not multimodal)");
         return Ok((0, 0));
     }
 
-    let image_paths: Vec<String> = cached_images
+    if embedding.supports_multi_vector {
+        return Err(Error::Embedding(format!(
+            "Late-interaction embedding model '{}' does not support image ingestion",
+            embedding.model_id
+        )));
+    }
+
+    let batch_size = embedding.effective_batch_size(config.embedding.batch_size);
+    let contexts: Vec<Option<String>> = cached_images
         .iter()
-        .map(|c| c.path.to_string_lossy().to_string())
+        .map(|asset| build_image_context(parsed, &asset.media))
         .collect();
 
-    let embeddings = match embed_images_in_batches(embedder, image_paths, config.embedding.batch_size).await {
-        Ok(embeddings) => embeddings,
-        Err(e) => {
-            warn!(uri = %doc_uri, "Image embedding failed: {}", e);
-            return Ok((0, 0));
+    let embeddings = if embedding.supports_joint_inputs {
+        let inputs = cached_images
+            .iter()
+            .zip(contexts.iter())
+            .map(|(asset, text)| ImageEmbedInput {
+                image_path: asset.path.to_string_lossy().to_string(),
+                text: text.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        embed_image_text_in_batches(embedder, inputs, batch_size).await?
+    } else {
+        let image_paths: Vec<String> = cached_images
+            .iter()
+            .map(|c| c.path.to_string_lossy().to_string())
+            .collect();
+
+        let image_embeddings = embed_images_in_batches(embedder, image_paths, batch_size).await?;
+        if image_embeddings.len() != cached_images.len() {
+            return Err(Error::Embedding(format!(
+                "Image embedding count mismatch for model '{}': expected {}, got {}",
+                embedding.model_id,
+                cached_images.len(),
+                image_embeddings.len()
+            )));
         }
+
+        let mut fused_embeddings = image_embeddings.clone();
+        let mut text_inputs = Vec::new();
+        let mut text_indices = Vec::new();
+        for (idx, context) in contexts.iter().enumerate() {
+            if let Some(text) = context {
+                if !text.trim().is_empty() {
+                    text_indices.push(idx);
+                    text_inputs.push(text.clone());
+                }
+            }
+        }
+
+        if !text_inputs.is_empty() {
+            let text_embeddings = embed_in_batches(embedder, text_inputs, batch_size).await?;
+            if text_embeddings.len() != text_indices.len() {
+                return Err(Error::Embedding(format!(
+                    "Text context embedding count mismatch for model '{}': expected {}, got {}",
+                    embedding.model_id,
+                    text_indices.len(),
+                    text_embeddings.len()
+                )));
+            }
+
+            for (offset, idx) in text_indices.iter().enumerate() {
+                let image_vec = &image_embeddings[*idx];
+                let text_vec = &text_embeddings[offset];
+                if image_vec.len() != text_vec.len() {
+                    return Err(Error::Embedding(format!(
+                        "Dual-encoder fusion dimension mismatch for model '{}': image {} != text {}",
+                        embedding.model_id,
+                        image_vec.len(),
+                        text_vec.len()
+                    )));
+                }
+                fused_embeddings[*idx] = fuse_embeddings(image_vec, text_vec);
+            }
+        }
+
+        fused_embeddings
     };
 
     if embeddings.is_empty() {
@@ -401,32 +511,32 @@ async fn embed_cached_images(
 
     let expected_dim = store.dimension();
     if embedder.dimension() != expected_dim {
-        warn!(
-            uri = %doc_uri,
-            embedder_dim = embedder.dimension(),
-            store_dim = expected_dim,
-            "Skipping image embeddings (dimension mismatch)"
-        );
-        return Ok((0, 0));
+        return Err(Error::Embedding(format!(
+            "Embedding dimension mismatch for model '{}' (family '{}', source {}): embedder {} != collection {}",
+            embedding.model_id,
+            embedding.family,
+            embedding.dimension_source,
+            embedder.dimension(),
+            expected_dim
+        )));
     }
 
     if embeddings[0].len() != expected_dim {
-        warn!(
-            uri = %doc_uri,
-            image_dim = embeddings[0].len(),
+        return Err(Error::Embedding(format!(
+            "Image embedding dimension mismatch for model '{}': expected {}, got {}",
+            embedding.model_id,
             expected_dim,
-            "Skipping image embeddings (dimension mismatch)"
-        );
-        return Ok((0, 0));
+            embeddings[0].len()
+        )));
     }
 
     if embeddings.len() != cached_images.len() {
-        warn!(
-            uri = %doc_uri,
-            embeddings = embeddings.len(),
-            cached = cached_images.len(),
-            "Image embedding count mismatch; truncating to shortest"
-        );
+        return Err(Error::Embedding(format!(
+            "Image embedding count mismatch for model '{}': expected {}, got {}",
+            embedding.model_id,
+            cached_images.len(),
+            embeddings.len()
+        )));
     }
 
     let deleted_point_ids = db.delete_chunks_by_modality(&doc.id, "image").await?;
@@ -645,6 +755,8 @@ pub fn format_overlap_warnings(overlaps: &[SourceOverlap], new_uri: &str) -> Vec
 /// Ingest a local directory
 pub async fn cmd_ingest_dir(
     config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
+    embedder: &dyn Embedder,
     db: &MetaDb,
     store: &QdrantStore,
     path: &Path,
@@ -678,11 +790,12 @@ pub async fn cmd_ingest_dir(
     // Start ingestion run
     let run = db.start_ingestion_run(&source.id, operation).await?;
 
-    // Create embedder
-    let embedder = create_embedder(&config.embedding)?;
     if embedder.dimension() != store.dimension() {
         return Err(Error::Embedding(format!(
-            "Embedding dimension {} does not match Qdrant collection dimension {}",
+            "Embedding dimension mismatch for model '{}' (family '{}', source {}): embedder {} != collection {}",
+            embedding.model_id,
+            embedding.family,
+            embedding.dimension_source,
             embedder.dimension(),
             store.dimension()
         )));
@@ -717,7 +830,16 @@ pub async fn cmd_ingest_dir(
         let file_uri = file_path.display().to_string();
         current_uris.push(file_uri.clone());
 
-        match process_file(config, db, store, embedder.as_ref(), &source, &file_path).await {
+        match process_file(
+            config,
+            embedding,
+            db,
+            store,
+            embedder,
+            &source,
+            &file_path,
+        )
+        .await {
             Ok((created, updated)) => {
                 stats.docs_processed += 1;
                 stats.chunks_created += created;
@@ -789,6 +911,7 @@ pub async fn cmd_ingest_dir(
 /// Process a single file
 async fn process_file(
     config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
     db: &MetaDb,
     store: &QdrantStore,
     embedder: &dyn Embedder,
@@ -847,8 +970,18 @@ async fn process_file(
     }
 
     // Process chunks
-    let (created, updated) =
-        process_chunks(config, db, store, embedder, source, &doc, &file_uri, chunks).await?;
+    let (created, updated) = process_chunks(
+        config,
+        embedding,
+        db,
+        store,
+        embedder,
+        source,
+        &doc,
+        &file_uri,
+        chunks,
+    )
+    .await?;
 
     Ok((created, updated))
 }
@@ -856,6 +989,7 @@ async fn process_file(
 /// Process chunks for a document
 async fn process_chunks(
     config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
     db: &MetaDb,
     store: &QdrantStore,
     embedder: &dyn Embedder,
@@ -888,7 +1022,10 @@ async fn process_chunks(
     let expected_dim = store.dimension();
     if embedder.dimension() != expected_dim {
         return Err(Error::Embedding(format!(
-            "Embedding dimension {} does not match Qdrant collection dimension {}",
+            "Embedding dimension mismatch for model '{}' (family '{}', source {}): embedder {} != collection {}",
+            embedding.model_id,
+            embedding.family,
+            embedding.dimension_source,
             embedder.dimension(),
             expected_dim
         )));
@@ -905,7 +1042,8 @@ async fn process_chunks(
         .iter()
         .map(|(_, c)| c.text.clone())
         .collect();
-    let embeddings = embed_in_batches(embedder, texts, config.embedding.batch_size).await?;
+    let batch_size = embedding.effective_batch_size(config.embedding.batch_size);
+    let embeddings = embed_in_batches(embedder, texts, batch_size).await?;
 
     if embeddings
         .iter()
@@ -1003,6 +1141,8 @@ async fn process_chunks(
 /// Ingest from a URL
 pub async fn cmd_ingest_url(
     config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
+    embedder: &dyn Embedder,
     db: &MetaDb,
     store: &QdrantStore,
     url: &str,
@@ -1032,11 +1172,12 @@ pub async fn cmd_ingest_url(
     // Start ingestion run
     let run = db.start_ingestion_run(&source.id, operation).await?;
 
-    // Create embedder
-    let embedder = create_embedder(&config.embedding)?;
     if embedder.dimension() != store.dimension() {
         return Err(Error::Embedding(format!(
-            "Embedding dimension {} does not match Qdrant collection dimension {}",
+            "Embedding dimension mismatch for model '{}' (family '{}', source {}): embedder {} != collection {}",
+            embedding.model_id,
+            embedding.family,
+            embedding.dimension_source,
             embedder.dimension(),
             store.dimension()
         )));
@@ -1072,7 +1213,7 @@ pub async fn cmd_ingest_url(
     for page in pages {
         current_uris.push(page.url.clone());
 
-        match process_page(config, db, store, embedder.as_ref(), &source, &page).await {
+        match process_page(config, embedding, db, store, embedder, &source, &page).await {
             Ok((created, updated)) => {
                 stats.docs_processed += 1;
                 stats.chunks_created += created;
@@ -1143,6 +1284,8 @@ pub async fn cmd_ingest_url(
 /// Ingest from a sitemap URL
 pub async fn cmd_ingest_sitemap(
     config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
+    embedder: &dyn Embedder,
     db: &MetaDb,
     store: &QdrantStore,
     sitemap_url: &str,
@@ -1200,11 +1343,12 @@ pub async fn cmd_ingest_sitemap(
     // Start ingestion run
     let run = db.start_ingestion_run(&source.id, operation).await?;
 
-    // Create embedder and crawler
-    let embedder = create_embedder(&config.embedding)?;
     if embedder.dimension() != store.dimension() {
         return Err(Error::Embedding(format!(
-            "Embedding dimension {} does not match Qdrant collection dimension {}",
+            "Embedding dimension mismatch for model '{}' (family '{}', source {}): embedder {} != collection {}",
+            embedding.model_id,
+            embedding.family,
+            embedding.dimension_source,
             embedder.dimension(),
             store.dimension()
         )));
@@ -1221,7 +1365,7 @@ pub async fn cmd_ingest_sitemap(
         // Fetch the page
         match crawler.fetch(&entry.loc).await {
             Ok(page) => {
-                match process_page(config, db, store, embedder.as_ref(), &source, &page).await {
+                match process_page(config, embedding, db, store, embedder, &source, &page).await {
                     Ok((created, updated)) => {
                         stats.docs_processed += 1;
                         stats.chunks_created += created;
@@ -1300,6 +1444,7 @@ pub async fn cmd_ingest_sitemap(
 /// Process a crawled page
 async fn process_page(
     config: &Config,
+    embedding: &ResolvedEmbeddingConfig,
     db: &MetaDb,
     store: &QdrantStore,
     embedder: &dyn Embedder,
@@ -1340,7 +1485,7 @@ async fn process_page(
     let chunks = chunk_document(&parsed, &content_hash, &config.chunk)?;
 
     // Multimodal image selection + caching (optional)
-    let images = select_image_candidates(config, &parsed);
+    let images = select_image_candidates(config, embedding, &parsed);
     let cached_images = if images.is_empty() {
         Vec::new()
     } else {
@@ -1359,12 +1504,14 @@ async fn process_page(
 
         let (image_created, image_updated) = match embed_cached_images(
             config,
+            embedding,
             db,
             store,
             embedder,
             source,
             &doc,
             &page.url,
+            &parsed,
             cached_images,
         )
         .await
@@ -1381,7 +1528,7 @@ async fn process_page(
 
     // Process text chunks
     let (created, updated) =
-        process_chunks(config, db, store, embedder, source, &doc, &page.url, chunks).await?;
+        process_chunks(config, embedding, db, store, embedder, source, &doc, &page.url, chunks).await?;
 
     // Embed cached images after text processing
     let (image_created, image_updated) = if cached_images.is_empty() {
@@ -1389,12 +1536,14 @@ async fn process_page(
     } else {
         match embed_cached_images(
             config,
+            embedding,
             db,
             store,
             embedder,
             source,
             &doc,
             &page.url,
+            &parsed,
             cached_images,
         )
         .await
@@ -1590,6 +1739,9 @@ fn prompt_string(prompt: &str, default: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{EmbeddingDimensionSource, ResolvedEmbeddingConfig};
+    use crate::embedding_backend::{EmbeddingBackendConfig, EmbeddingBackendKind};
+    use crate::models::MultimodalStrategy;
     use crate::parse::{ContentType, ExtractedMedia, Heading, ParsedDocument};
 
     fn multimodal_config() -> Config {
@@ -1598,6 +1750,35 @@ mod tests {
         config.embedding.model = "jinaai/jina-clip-v2".to_string();
         config.crawl.multimodal.min_relevance_score = 0.0;
         config
+    }
+
+    fn test_embedding_config(supports_image: bool, multi_vector: bool) -> ResolvedEmbeddingConfig {
+        ResolvedEmbeddingConfig {
+            model_id: "test-model".to_string(),
+            family: "test".to_string(),
+            modalities: if supports_image {
+                vec!["text".to_string(), "image".to_string()]
+            } else {
+                vec!["text".to_string()]
+            },
+            dimension: 384,
+            dimension_source: EmbeddingDimensionSource::Config,
+            backend: EmbeddingBackendConfig {
+                kind: EmbeddingBackendKind::Http,
+                url: "http://localhost:7997".to_string(),
+            },
+            strategy: if multi_vector {
+                MultimodalStrategy::LateInteraction
+            } else {
+                MultimodalStrategy::DualEncoder
+            },
+            supports_text: true,
+            supports_image,
+            supports_joint_inputs: false,
+            supports_multi_vector: multi_vector,
+            supports_mrl: false,
+            max_batch: 32,
+        }
     }
 
     #[test]
@@ -1625,7 +1806,8 @@ mod tests {
             },
         ];
 
-        let candidates = select_image_candidates(&config, &doc);
+        let embedding = test_embedding_config(true, false);
+        let candidates = select_image_candidates(&config, &embedding, &doc);
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].0.url, "https://example.com/diagram.png");
     }
@@ -1643,14 +1825,14 @@ mod tests {
             css_background: true,
         }];
 
-        let candidates = select_image_candidates(&config, &doc);
+        let embedding = test_embedding_config(true, false);
+        let candidates = select_image_candidates(&config, &embedding, &doc);
         assert!(candidates.is_empty());
     }
 
     #[test]
     fn test_select_image_candidates_skips_late_interaction() {
-        let mut config = multimodal_config();
-        config.embedding.model = "vidore/colpali".to_string();
+        let config = multimodal_config();
 
         let mut doc = ParsedDocument::new("text".to_string(), ContentType::Html);
         doc.media = vec![ExtractedMedia {
@@ -1660,7 +1842,9 @@ mod tests {
             css_background: false,
         }];
 
-        let candidates = select_image_candidates(&config, &doc);
+        // Use late-interaction model config
+        let embedding = test_embedding_config(true, true);
+        let candidates = select_image_candidates(&config, &embedding, &doc);
         assert!(candidates.is_empty());
     }
 

@@ -1,0 +1,74 @@
+[
+  {
+    "id": "BAAI/bge-small-en-v1.5",
+    "family": "bge",
+    "modalities": ["text"],
+    "embedding_dim": 384,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 32
+  },
+  {
+    "id": "BAAI/bge-base-en-v1.5",
+    "family": "bge",
+    "modalities": ["text"],
+    "embedding_dim": 768,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 32
+  },
+  {
+    "id": "BAAI/bge-large-en-v1.5",
+    "family": "bge",
+    "modalities": ["text"],
+    "embedding_dim": 1024,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 16
+  },
+  {
+    "id": "sentence-transformers/all-MiniLM-L6-v2",
+    "family": "minilm",
+    "modalities": ["text"],
+    "embedding_dim": 384,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 32
+  },
+  {
+    "id": "Qwen/Qwen3-VL-Embedding-2B",
+    "family": "qwen3-vl",
+    "modalities": ["text", "image_text"],
+    "embedding_dim": 768,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 8
+  },
+  {
+    "id": "Qwen/Qwen3-VL-Embedding-8B",
+    "family": "qwen3-vl",
+    "modalities": ["text", "image_text"],
+    "embedding_dim": 1024,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 4
+  },
+  {
+    "id": "jinaai/jina-clip-v2",
+    "family": "jina-clip",
+    "modalities": ["text", "image"],
+    "embedding_dim": 768,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 16
+  },
+  {
+    "id": "google/siglip2-base-patch16-224",
+    "family": "siglip2",
+    "modalities": ["text", "image"],
+    "embedding_dim": 768,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 16
+  }
+]

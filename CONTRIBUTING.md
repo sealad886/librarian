@@ -62,6 +62,7 @@ librarian/
     ├── main.rs          # CLI entry point and argument parsing
     ├── lib.rs           # Library exports
     ├── error.rs         # Error types and Result alias
+   ├── embedding_backend.rs # HTTP embedding backend client
     ├── config/          # Configuration management
     │   ├── mod.rs       # Config struct and loading
     │   └── defaults.rs  # Default configuration values
@@ -88,7 +89,7 @@ librarian/
     │   └── boundaries.rs # Break point detection
     ├── embed/           # Embedding generation
     │   ├── mod.rs       # Embedder trait
-    │   └── fastembed_impl.rs # FastEmbed implementation
+   │   └── http_backend.rs # HTTP embedding backend
     ├── store/           # Qdrant integration
     │   ├── mod.rs       # QdrantStore wrapper
     │   └── payload.rs   # Chunk payload types
@@ -99,12 +100,13 @@ librarian/
     │   └── mod.rs       # Hybrid BM25 + vector ranking
    ├── rerank/          # Cross-encoder reranking
    │   ├── mod.rs       # Reranker trait
-   │   └── fastembed_impl.rs # FastEmbed reranker
-    └── mcp/             # MCP server
+   │   └── http_backend.rs # HTTP reranker backend
+   └── mcp/             # MCP server
         ├── mod.rs       # Module exports
         ├── server.rs    # stdio server loop
         ├── tools.rs     # Tool implementations
         └── types.rs     # MCP protocol types
+└── sidecar/              # Reference embedding backend (FastAPI)
 ```
 
 ## Code Style
@@ -276,7 +278,7 @@ Query → Embed → Search (Qdrant) → Rank → Return Results
 #### Embed (`embed/`)
 
 - `Embedder` trait for abstraction
-- `FastEmbedder`: Local ONNX embedding
+- `HttpEmbedder`: Calls the HTTP embedding backend
 - Batch processing support
 - Optional image embeddings when multimodal is enabled
 
@@ -301,7 +303,7 @@ Query → Embed → Search (Qdrant) → Rank → Return Results
 #### Rerank (`rerank/`)
 
 - `Reranker` trait for cross-encoder reranking
-- `FastEmbedReranker` for local reranking
+- `HttpReranker` for HTTP reranking
 - Multimodal gating inferred from the model registry (`src/models.rs`)
 
 #### MCP (`mcp/`)

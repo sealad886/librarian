@@ -1,13 +1,12 @@
 //! Reranking support for search results
 
-#[cfg(feature = "local-embed")]
-mod fastembed_impl;
+mod http_backend;
 
-#[cfg(feature = "local-embed")]
-pub use fastembed_impl::*;
+pub use http_backend::*;
 
 use crate::config::RerankerConfig;
-use crate::error::Result;
+use crate::error::{Error, Result};
+use crate::models::reranker_model_spec;
 use async_trait::async_trait;
 
 #[derive(Debug, Clone)]
@@ -22,17 +21,14 @@ pub trait Reranker: Send + Sync {
     fn model_name(&self) -> &str;
 }
 
-pub fn create_reranker(config: &RerankerConfig) -> Result<Box<dyn Reranker>> {
-    #[cfg(feature = "local-embed")]
-    {
-        let reranker = FastEmbedReranker::new(config)?;
-        Ok(Box::new(reranker))
+pub fn create_reranker(config: &RerankerConfig, backend_url: &str) -> Result<Box<dyn Reranker>> {
+    if reranker_model_spec(&config.model).is_none() {
+        return Err(Error::Embedding(format!(
+            "Reranker model '{}' is not allowlisted",
+            config.model
+        )));
     }
 
-    #[cfg(not(feature = "local-embed"))]
-    {
-        Err(crate::error::Error::Embedding(
-            "No reranker backend available. Enable 'local-embed' feature.".to_string(),
-        ))
-    }
+    let reranker = HttpReranker::new(config, backend_url)?;
+    Ok(Box::new(reranker))
 }

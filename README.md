@@ -26,8 +26,8 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
        ┌───────────────┼───────────────┐
        ▼               ▼               ▼
 ┌──────────┐    ┌──────────┐    ┌──────────┐
-│  SQLite  │    │  Qdrant  │    │ FastEmbed│
-│ Metadata │    │ Vectors  │    │ Embedder │
+│  SQLite  │    │  Qdrant  │    │ Embedding│
+│ Metadata │    │ Vectors  │    │ Backend  │
 └──────────┘    └──────────┘    └──────────┘
 ```
 
@@ -69,6 +69,11 @@ docker run -p 6333:6333 -p 6334:6334 \
 
 Or install natively: [Qdrant installation guide](https://qdrant.tech/documentation/guides/installation/)
 
+### Embedding Backend
+
+Librarian expects an HTTP embedding backend. A reference FastAPI sidecar lives in `sidecar/`.
+Start it (default port 7997) or point `embedding.url` at your own backend implementation.
+
 ## Quick Start
 
 ```bash
@@ -107,7 +112,7 @@ embeddings alongside text chunks.
 
 To enable:
 
-1. Set `embedding.model` to a supported multimodal embedding model (e.g., `Qwen/Qwen3-VL-Embedding-2B`, `Qwen/Qwen3-VL-Embedding-8B`, `jinaai/jina-clip-v2`, or `google/siglip2-*`).
+1. Set `embedding.model` to a supported multimodal embedding model (e.g., `Qwen/Qwen3-VL-Embedding-2B`, `Qwen/Qwen3-VL-Embedding-8B`, `jinaai/jina-clip-v2`, or `google/siglip2-base-patch16-224`).
 2. Set `crawl.multimodal.enabled = true` and tune thresholds/limits.
 3. Ensure your embedding dimensions are compatible with the configured backend.
 
@@ -124,7 +129,7 @@ Embedding models:
 | `Qwen/Qwen3-VL-Embedding-2B` | VL embedding | Supported |
 | `Qwen/Qwen3-VL-Embedding-8B` | VL embedding | Supported |
 | `jinaai/jina-clip-v2` | Dual encoder | Supported |
-| `google/siglip2-*` | Dual encoder | Supported (prefix match) |
+| `google/siglip2-base-patch16-224` | Dual encoder | Supported |
 | `vidore/colpali` | Late interaction | Recognized, ingestion blocked |
 
 Reranker models:
@@ -327,6 +332,10 @@ collection_name = "librarian"
 # Embedding model
 [embedding]
 model = "BAAI/bge-small-en-v1.5"
+backend = "http"
+url = "http://localhost:7997"
+allow_custom = false
+multimodal = false
 dimension = 384
 
 # Chunking settings
@@ -415,13 +424,11 @@ Then use the tools via GitHub Copilot or other MCP clients:
 
 ## Technical Details
 
-### Embedding Model
+### Embedding Backend
 
-Uses [FastEmbed](https://crates.io/crates/fastembed) with BAAI/bge-small-en-v1.5:
-
-- 384 dimensions
-- Optimized for retrieval tasks
-- Runs locally (no API calls)
+Embeddings are provided by an HTTP backend. Librarian probes `/capabilities` and `/probe` to
+verify model support, modalities, and dimensions before ingestion. A reference sidecar
+implementation lives in `sidecar/` for local development.
 
 ### Vector Database
 
@@ -470,8 +477,8 @@ librarian status
 
 ### Slow Embedding
 
-First run downloads the model (~50MB). Subsequent runs are fast.
-Consider reducing batch size if memory-constrained:
+Embedding latency depends on your backend. Verify the backend is running and warmed up.
+Consider reducing batch size if the backend is memory-constrained:
 
 ```bash
 librarian reindex --batch-size 16
@@ -491,6 +498,8 @@ librarian reindex
 LIBRARIAN_CONFIG=/path/to/config.toml  # Custom config path
 LIBRARIAN_LOG=debug                    # Log level (trace/debug/info/warn/error)
 QDRANT_URL=http://host:6333         # Override Qdrant URL
+LIBRARIAN_EMBEDDING_BACKEND_URL=http://host:7997  # Override embedding backend URL
+LIBRARIAN_CUSTOM_EMBEDDING_BACKEND_URL=http://host:7997  # Override custom backend URL
 ```
 
 ## License

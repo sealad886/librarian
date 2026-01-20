@@ -11,7 +11,7 @@ use librarian::{
         ReindexOptions, UpdateOptions,
     },
     config::Config,
-    embed::FastEmbedder,
+    embed::create_embedder,
     error::Result,
     mcp::McpServer,
     meta::{MetaDb, RunOperation},
@@ -285,12 +285,17 @@ async fn run() -> Result<()> {
     // Load configuration
     let config = load_config(cli.config.as_deref()).await?;
 
+    // Resolve embedding config and create embedder to get dimension
+    let embedding_config = config.resolve_embedding_config().await?;
+    let embedder = create_embedder(&embedding_config)?;
+
     // Initialize components
     let db = MetaDb::new(&config.paths.db_file).await?;
     let store = QdrantStore::new(
         &config.qdrant_url,
         &config.collection_name,
-        config.embedding.resolved_dimension(),
+        embedder.dimension(),
+        Some(&embedding_config),
     )
     .await?;
 
@@ -299,7 +304,7 @@ async fn run() -> Result<()> {
         Commands::Init { .. } => unreachable!(),
 
         Commands::Ingest { source } => {
-            handle_ingest(&config, &db, &store, source).await?;
+            handle_ingest(&config, &embedding_config, embedder.as_ref(), &db, &store, source).await?;
         }
 
         Commands::Query {
@@ -317,7 +322,9 @@ async fn run() -> Result<()> {
                 ..Default::default()
             };
 
-            let results = cmd_query(&config, &db, &store, &query, options).await?;
+            let results =
+                cmd_query(&config, &embedding_config, embedder.as_ref(), &db, &store, &query, options)
+                    .await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&results)?);
@@ -377,14 +384,14 @@ async fn run() -> Result<()> {
         }
 
         Commands::Reindex { source, batch_size } => {
-            let embedder = FastEmbedder::new(&config.embedding)?;
-
             let options = ReindexOptions {
                 source_ids: source,
                 batch_size,
             };
 
-            let stats = cmd_reindex(&config, &db, &store, &embedder, options).await?;
+            let stats =
+                cmd_reindex(&config, &embedding_config, &db, &store, embedder.as_ref(), options)
+                    .await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&stats)?);
@@ -399,7 +406,7 @@ async fn run() -> Result<()> {
                 prune_orphans: !skip_prune,
             };
 
-            let stats = cmd_update(&config, &db, &store, options).await?;
+            let stats = cmd_update(&config, &embedding_config, embedder.as_ref(), &db, &store, options).await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&stats)?);
@@ -580,7 +587,8 @@ async fn handle_init(cli: Cli) -> Result<()> {
 }
 
 async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Result<()> {
-    let store = QdrantStore::connect(config).await?;
+    let embedding_config = config.resolve_embedding_config().await?;
+    let store = QdrantStore::connect(config, &embedding_config).await?;
 
     match action {
         DbAction::Init => {
@@ -649,6 +657,8 @@ async fn load_config(path: Option<&std::path::Path>) -> Result<Config> {
 
 async fn handle_ingest(
     config: &Config,
+    embedding: &librarian::config::ResolvedEmbeddingConfig,
+    embedder: &dyn librarian::embed::Embedder,
     db: &MetaDb,
     store: &QdrantStore,
     source: IngestSource,
@@ -661,7 +671,7 @@ async fn handle_ingest(
             exclude: _,
         } => {
             let stats =
-                cmd_ingest_dir(config, db, store, &path, name, RunOperation::Ingest, true).await?;
+                cmd_ingest_dir(config, embedding, embedder, db, store, &path, name, RunOperation::Ingest, true).await?;
 
             // Display overlap warnings
             for warning in &stats.overlap_warnings {
@@ -690,6 +700,8 @@ async fn handle_ingest(
             };
             let stats = cmd_ingest_url(
                 config,
+                embedding,
+                embedder,
                 db,
                 store,
                 &url,
@@ -718,6 +730,8 @@ async fn handle_ingest(
         } => {
             let stats = cmd_ingest_sitemap(
                 config,
+                embedding,
+                embedder,
                 db,
                 store,
                 &url,
