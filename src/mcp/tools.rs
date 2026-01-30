@@ -234,8 +234,7 @@ async fn handle_search(
         &query,
         options,
     )
-    .await
-    {
+    .await {
         Ok(result) => {
             if result.results.is_empty() {
                 return ToolResult::text("No results found matching your query.");
@@ -281,7 +280,10 @@ async fn handle_sources(db: &MetaDb) -> ToolResult {
             output.push_str(&format!("Registered Sources ({}):\n\n", sources.len()));
 
             for source in &sources {
-                let display_name = source.name.as_deref().unwrap_or(source.uri.as_str());
+                let display_name = source
+                    .name
+                    .as_deref()
+                    .unwrap_or_else(|| source.uri.as_str());
                 let last_updated = source.last_updated.as_deref().unwrap_or("unknown");
                 let last_operation = source
                     .last_run
@@ -360,7 +362,7 @@ async fn handle_status(config: &Config, db: &MetaDb, store: &QdrantStore) -> Too
                 .unwrap_or_else(|| "none".to_string());
             output.push_str(&format!(
                 "- {} [{}]\n  - State: {}\n  - Last update: {}\n  - Last operation: {}\n  - Documents: {}, Chunks: {}\n",
-                source.name.as_deref().unwrap_or(source.uri.as_str()),
+                source.name.as_deref().unwrap_or_else(|| source.uri.as_str()),
                 source.source_type,
                 source.state,
                 last_updated,
@@ -566,15 +568,7 @@ async fn run_update_background(
         prune_orphans,
     };
 
-    cmd_update(
-        &config,
-        &embedding_config,
-        embedder.as_ref(),
-        &db,
-        &store,
-        options,
-    )
-    .await?;
+    cmd_update(&config, &embedding_config, embedder.as_ref(), &db, &store, options).await?;
     Ok(())
 }
 

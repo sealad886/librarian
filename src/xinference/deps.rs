@@ -74,13 +74,7 @@ pub fn install_xinference(python: &PathBuf) -> Result<()> {
     info!("Installing xinference[transformers]... This may take a few minutes.");
 
     let output = Command::new(python)
-        .args([
-            "-m",
-            "pip",
-            "install",
-            "--quiet",
-            "xinference[transformers]",
-        ])
+        .args(["-m", "pip", "install", "--quiet", "xinference[transformers]"])
         .output()
         .map_err(|e| Error::Embedding(format!("Failed to run pip install: {}", e)))?;
 
@@ -163,8 +157,7 @@ pub fn is_xinference_ready() -> bool {
         return false;
     };
 
-    check_xinference_installed(&python).unwrap_or(false)
-        && check_xinference_command().unwrap_or(false)
+    check_xinference_installed(&python).unwrap_or(false) && check_xinference_command().unwrap_or(false)
 }
 
 #[cfg(test)]

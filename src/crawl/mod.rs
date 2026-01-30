@@ -350,8 +350,8 @@ impl Crawler {
             .timeout_secs
             .max(self.config.js_page_load_timeout_ms / 1000)
             .max(1);
-        let max_crawl_seconds =
-            per_page_budget_secs.saturating_mul(self.config.max_pages.max(1) as u64);
+        let max_crawl_seconds = per_page_budget_secs
+            .saturating_mul(self.config.max_pages.max(1) as u64);
         let crawl_deadline = Instant::now() + Duration::from_secs(max_crawl_seconds);
         let max_attempts = self.config.max_pages.saturating_mul(5).max(1);
         let max_hash_routes = self.config.max_pages.max(1);
@@ -649,8 +649,8 @@ pub fn should_crawl_url(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::matchers::{method, path, path_regex};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+    use wiremock::matchers::{method, path, path_regex};
 
     #[test]
     fn test_normalize_url() {
@@ -726,9 +726,10 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/index.html"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_raw(html.clone().into_bytes(), "text/html"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                html.clone().into_bytes(),
+                "text/html",
+            ))
             .mount(&mock_server)
             .await;
 
@@ -739,14 +740,12 @@ mod tests {
             .await;
 
         let max_pages = 2;
-        let crawl_config = CrawlConfig {
-            max_pages,
-            max_depth: 2,
-            auto_js_rendering: false,
-            rate_limit_per_host: 1000.0,
-            timeout_secs: 5,
-            ..Default::default()
-        };
+        let mut crawl_config = CrawlConfig::default();
+        crawl_config.max_pages = max_pages;
+        crawl_config.max_depth = 2;
+        crawl_config.auto_js_rendering = false;
+        crawl_config.rate_limit_per_host = 1000.0;
+        crawl_config.timeout_secs = 5;
 
         let max_attempts = max_pages.saturating_mul(5).max(1);
         let crawler = Crawler::new(crawl_config).expect("crawler should build");
@@ -760,11 +759,7 @@ mod tests {
 
         assert_eq!(results[0].content_type, ContentType::Html);
         assert_eq!(
-            results[0]
-                .links
-                .iter()
-                .filter(|link| link.is_internal)
-                .count(),
+            results[0].links.iter().filter(|link| link.is_internal).count(),
             20
         );
 
