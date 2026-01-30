@@ -18,6 +18,7 @@ Thank you for your interest in contributing to librarian! This document provides
 - Rust 1.70+ (install via [rustup](https://rustup.rs/))
 - Qdrant (for integration testing)
 - Docker (optional, for running Qdrant)
+- ffmpeg + ffprobe (optional, for audio/video multimodal support)
 
 ### Initial Setup
 
@@ -281,6 +282,7 @@ Query → Embed → Search (Qdrant) → Rank → Return Results
 - `HttpEmbedder`: Calls the HTTP embedding backend
 - Batch processing support
 - Optional image embeddings when multimodal is enabled
+- Audio/video support via derived embeddings (transcripts → text, keyframes → images)
 
 #### Store (`store/`)
 

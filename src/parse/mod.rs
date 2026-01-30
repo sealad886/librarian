@@ -138,7 +138,28 @@ pub struct ExtractedLink {
     pub is_internal: bool,
 }
 
-/// An extracted media candidate (currently focused on images)
+/// Media modality type for extracted assets
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaModality {
+    /// Image assets (jpg, png, webp, svg, etc.)
+    Image,
+    /// Audio assets (mp3, wav, ogg, flac, etc.)
+    Audio,
+    /// Video assets (mp4, webm, mov, etc.)
+    Video,
+}
+
+impl std::fmt::Display for MediaModality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MediaModality::Image => write!(f, "image"),
+            MediaModality::Audio => write!(f, "audio"),
+            MediaModality::Video => write!(f, "video"),
+        }
+    }
+}
+
+/// An extracted media candidate (images, audio, video)
 #[derive(Debug, Clone)]
 pub struct ExtractedMedia {
     /// Media URL (resolved against base URL when possible)
@@ -147,11 +168,17 @@ pub struct ExtractedMedia {
     /// Alternative text for images if present
     pub alt: Option<String>,
 
-    /// Tag name where the media was found (e.g., "img", "source", "div")
+    /// Tag name where the media was found (e.g., "img", "audio", "video", "source", "div")
     pub tag: String,
 
     /// Whether this was extracted from a CSS background-image
     pub css_background: bool,
+
+    /// The modality/type of media (image, audio, video)
+    pub modality: MediaModality,
+
+    /// MIME type if available (e.g., from type attribute)
+    pub mime_type: Option<String>,
 }
 
 impl ParsedDocument {
@@ -261,6 +288,52 @@ pub fn normalize_whitespace(text: &str) -> String {
     }
 
     result.trim().to_string()
+}
+
+/// Audio file extensions
+pub const AUDIO_EXTENSIONS: &[&str] = &[
+    "mp3", "wav", "ogg", "flac", "aac", "m4a", "wma", "opus", "webm",
+];
+
+/// Video file extensions
+pub const VIDEO_EXTENSIONS: &[&str] = &[
+    "mp4", "webm", "mkv", "avi", "mov", "wmv", "flv", "m4v", "ogv",
+];
+
+/// Check if file is an audio file based on extension
+pub fn is_audio_file(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        AUDIO_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+    } else {
+        false
+    }
+}
+
+/// Check if file is a video file based on extension
+pub fn is_video_file(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        VIDEO_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+    } else {
+        false
+    }
+}
+
+/// Check if MIME type indicates audio content
+pub fn is_audio_mime(mime: &str) -> bool {
+    let mime_lower = mime.to_lowercase();
+    mime_lower.starts_with("audio/")
+}
+
+/// Check if MIME type indicates video content
+pub fn is_video_mime(mime: &str) -> bool {
+    let mime_lower = mime.to_lowercase();
+    mime_lower.starts_with("video/")
+}
+
+/// Check if MIME type indicates image content
+pub fn is_image_mime(mime: &str) -> bool {
+    let mime_lower = mime.to_lowercase();
+    mime_lower.starts_with("image/")
 }
 
 #[cfg(test)]

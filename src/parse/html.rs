@@ -2,7 +2,7 @@
 
 use super::{
     normalize_whitespace, CodeBlock, ContentType, ExtractedLink, ExtractedMedia, Heading,
-    ParsedDocument,
+    MediaModality, ParsedDocument,
 };
 use crate::error::Result;
 use regex::Regex;
@@ -153,6 +153,8 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
                         alt: alt.clone(),
                         tag: "img".to_string(),
                         css_background: false,
+                        modality: MediaModality::Image,
+                        mime_type: None,
                     });
                 }
             }
@@ -179,6 +181,8 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
                             alt: None,
                             tag: "source".to_string(),
                             css_background: false,
+                            modality: MediaModality::Image,
+                            mime_type: None,
                         });
                     }
                 }
@@ -214,6 +218,8 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
                                 alt: None,
                                 tag: "style".to_string(),
                                 css_background: true,
+                                modality: MediaModality::Image,
+                                mime_type: None,
                             });
                         }
                     }
@@ -221,6 +227,12 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
             }
         }
     }
+
+    // Extract <audio> elements with src or <source> children
+    extract_audio_elements(&document, base_url, &mut doc);
+
+    // Extract <video> elements with src or <source> children
+    extract_video_elements(&document, base_url, &mut doc);
 
     Ok(doc)
 }
@@ -249,6 +261,121 @@ fn parse_srcset_urls(srcset: &str) -> Vec<String> {
         }
     }
     urls
+}
+
+/// Extract audio elements from HTML document
+fn extract_audio_elements(document: &Html, base_url: Option<&str>, doc: &mut ParsedDocument) {
+    let base = base_url.and_then(|u| Url::parse(u).ok());
+
+    // <audio src="..."> with optional type attribute
+    if let Ok(selector) = Selector::parse("audio[src]") {
+        for elem in document.select(&selector) {
+            if let Some(src) = elem.value().attr("src") {
+                let resolved = resolve_url(&base, src);
+                let mime_type = elem.value().attr("type").map(|s| s.to_string());
+                doc.media.push(ExtractedMedia {
+                    url: resolved,
+                    alt: None,
+                    tag: "audio".to_string(),
+                    css_background: false,
+                    modality: MediaModality::Audio,
+                    mime_type,
+                });
+            }
+        }
+    }
+
+    // <audio> with <source> children
+    if let Ok(audio_selector) = Selector::parse("audio") {
+        if let Ok(source_selector) = Selector::parse("source") {
+            for audio_elem in document.select(&audio_selector) {
+                // Skip if the audio element itself has src (already handled above)
+                if audio_elem.value().attr("src").is_some() {
+                    continue;
+                }
+                let mut seen: HashSet<String> = HashSet::new();
+                for source_elem in audio_elem.select(&source_selector) {
+                    if let Some(src) = source_elem.value().attr("src") {
+                        let resolved = resolve_url(&base, src);
+                        if seen.insert(resolved.clone()) {
+                            let mime_type = source_elem.value().attr("type").map(|s| s.to_string());
+                            doc.media.push(ExtractedMedia {
+                                url: resolved,
+                                alt: None,
+                                tag: "audio-source".to_string(),
+                                css_background: false,
+                                modality: MediaModality::Audio,
+                                mime_type,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Extract video elements from HTML document
+fn extract_video_elements(document: &Html, base_url: Option<&str>, doc: &mut ParsedDocument) {
+    let base = base_url.and_then(|u| Url::parse(u).ok());
+
+    // <video src="..."> with optional type and poster attributes
+    if let Ok(selector) = Selector::parse("video[src]") {
+        for elem in document.select(&selector) {
+            if let Some(src) = elem.value().attr("src") {
+                let resolved = resolve_url(&base, src);
+                let mime_type = elem.value().attr("type").map(|s| s.to_string());
+                doc.media.push(ExtractedMedia {
+                    url: resolved,
+                    alt: elem.value().attr("poster").map(|s| s.to_string()),
+                    tag: "video".to_string(),
+                    css_background: false,
+                    modality: MediaModality::Video,
+                    mime_type,
+                });
+            }
+        }
+    }
+
+    // <video> with <source> children
+    if let Ok(video_selector) = Selector::parse("video") {
+        if let Ok(source_selector) = Selector::parse("source") {
+            for video_elem in document.select(&video_selector) {
+                // Skip if the video element itself has src (already handled above)
+                if video_elem.value().attr("src").is_some() {
+                    continue;
+                }
+                let mut seen: HashSet<String> = HashSet::new();
+                for source_elem in video_elem.select(&source_selector) {
+                    if let Some(src) = source_elem.value().attr("src") {
+                        let resolved = resolve_url(&base, src);
+                        if seen.insert(resolved.clone()) {
+                            let mime_type = source_elem.value().attr("type").map(|s| s.to_string());
+                            doc.media.push(ExtractedMedia {
+                                url: resolved,
+                                alt: video_elem.value().attr("poster").map(|s| s.to_string()),
+                                tag: "video-source".to_string(),
+                                css_background: false,
+                                modality: MediaModality::Video,
+                                mime_type,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Resolve a URL against a base URL
+fn resolve_url(base: &Option<Url>, raw: &str) -> String {
+    if let Some(ref base) = base {
+        base.join(raw)
+            .map(|u| u.to_string())
+            .unwrap_or_else(|_| raw.to_string())
+    } else {
+        raw.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -329,5 +456,87 @@ mod tests {
             .iter()
             .any(|m| m.url.ends_with("/images/diagram-2x.png")));
         assert!(doc.media.iter().any(|m| m.url.ends_with("/images/bg.jpg")));
+    }
+
+    #[test]
+    fn test_audio_extraction_basic() {
+        let html = r#"
+        <html><body>
+            <audio src="/audio/podcast.mp3" type="audio/mpeg"></audio>
+            <audio>
+                <source src="/audio/music.ogg" type="audio/ogg">
+                <source src="/audio/music.mp3" type="audio/mpeg">
+            </audio>
+        </body></html>
+        "#;
+        let doc = parse_html(html, Some("https://example.com")).expect("parse_html should succeed");
+
+        let audio_media: Vec<_> = doc
+            .media
+            .iter()
+            .filter(|m| m.modality == MediaModality::Audio)
+            .collect();
+
+        assert_eq!(audio_media.len(), 3);
+        assert!(audio_media
+            .iter()
+            .any(|m| m.url.ends_with("/audio/podcast.mp3")));
+        assert!(audio_media
+            .iter()
+            .any(|m| m.url.ends_with("/audio/music.ogg")));
+        assert!(audio_media
+            .iter()
+            .any(|m| m.url.ends_with("/audio/music.mp3")));
+
+        // Check MIME types are captured
+        let podcast = audio_media
+            .iter()
+            .find(|m| m.url.ends_with("/audio/podcast.mp3"))
+            .unwrap();
+        assert_eq!(podcast.mime_type, Some("audio/mpeg".to_string()));
+    }
+
+    #[test]
+    fn test_video_extraction_basic() {
+        let html = r#"
+        <html><body>
+            <video src="/video/intro.mp4" type="video/mp4" poster="/images/poster.jpg"></video>
+            <video poster="/images/poster2.jpg">
+                <source src="/video/demo.webm" type="video/webm">
+                <source src="/video/demo.mp4" type="video/mp4">
+            </video>
+        </body></html>
+        "#;
+        let doc = parse_html(html, Some("https://example.com")).expect("parse_html should succeed");
+
+        let video_media: Vec<_> = doc
+            .media
+            .iter()
+            .filter(|m| m.modality == MediaModality::Video)
+            .collect();
+
+        assert_eq!(video_media.len(), 3);
+        assert!(video_media
+            .iter()
+            .any(|m| m.url.ends_with("/video/intro.mp4")));
+        assert!(video_media
+            .iter()
+            .any(|m| m.url.ends_with("/video/demo.webm")));
+        assert!(video_media
+            .iter()
+            .any(|m| m.url.ends_with("/video/demo.mp4")));
+
+        // Check MIME types are captured
+        let intro = video_media
+            .iter()
+            .find(|m| m.url.ends_with("/video/intro.mp4"))
+            .unwrap();
+        assert_eq!(intro.mime_type, Some("video/mp4".to_string()));
+
+        // Check poster is captured as alt text
+        assert!(intro
+            .alt
+            .as_ref()
+            .is_some_and(|a| a.ends_with("/images/poster.jpg")));
     }
 }

@@ -46,5 +46,13 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Check for blocking TODOs in multimedia paths
+        run: |
+          if grep -rn "TODO.*\(audio\|video\|ffmpeg\|ffprobe\|transcri\)" src/ --include="*.rs" | grep -v "allow(dead_code)" | grep -v "test"; then
+            echo "ERROR: Found blocking TODO markers in multimedia code paths"
+            exit 1
+          fi
+          echo "No blocking TODOs found in multimedia paths"
+
       - name: Tests
         run: cargo test --workspace --all-features

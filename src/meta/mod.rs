@@ -257,6 +257,39 @@ impl Chunk {
         }
     }
 
+    /// Create a new chunk with a specific modality (audio, video, etc.)
+    pub fn new_with_modality(
+        doc_id: String,
+        chunk_index: i32,
+        chunk_hash: String,
+        chunk_text: String,
+        modality: &str,
+        media_url: Option<String>,
+        media_hash: Option<String>,
+    ) -> Self {
+        let now = Utc::now().to_rfc3339();
+        let point_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk_hash.as_bytes()).to_string();
+
+        let char_end = chunk_text.len() as i32;
+
+        Self {
+            id: Uuid::new_v4().to_string(),
+            doc_id,
+            chunk_index,
+            chunk_hash,
+            chunk_text,
+            char_start: 0,
+            char_end,
+            headings_json: None,
+            qdrant_point_id: point_id,
+            modality: modality.to_string(),
+            media_url,
+            media_hash,
+            created_at: now.clone(),
+            updated_at: now,
+        }
+    }
+
     pub fn headings(&self) -> Vec<String> {
         self.headings_json
             .as_ref()
@@ -840,6 +873,22 @@ impl MetaDb {
             .bind(point_id)
             .fetch_optional(&self.pool)
             .await?;
+        Ok(chunk)
+    }
+
+    /// Get chunk by document ID and content hash
+    pub async fn get_chunk_by_hash(
+        &self,
+        doc_id: &str,
+        content_hash: &str,
+    ) -> Result<Option<Chunk>> {
+        let chunk = sqlx::query_as::<_, Chunk>(
+            "SELECT * FROM chunks WHERE doc_id = ? AND content_hash = ?",
+        )
+        .bind(doc_id)
+        .bind(content_hash)
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(chunk)
     }
 

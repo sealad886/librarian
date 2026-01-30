@@ -9,10 +9,11 @@ use crate::embed::{
 };
 use crate::error::{Error, Result};
 use crate::meta::{Chunk, Document, MetaDb, RunOperation, RunStatus, Source, SourceType};
+use crate::parse::{is_audio_file, is_video_file, ExtractedMedia, ParsedDocument};
 use crate::parse::{is_binary_content, parse_content, should_skip_file, ContentType};
-use crate::parse::{ExtractedMedia, ParsedDocument};
 use crate::progress::add_progress_bar;
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
+use base64::Engine;
 use chrono::Utc;
 use ignore::WalkBuilder;
 use image::imageops::FilterType;
@@ -261,6 +262,876 @@ fn select_image_candidates(
         scored.truncate(mm.max_assets_per_page);
     }
     scored
+}
+
+/// Select audio candidates from parsed document media
+///
+/// Note: Currently infrastructure for future web crawl audio support.
+/// Web crawl audio processing is planned for a future release.
+#[allow(dead_code)]
+fn select_audio_candidates(config: &Config, doc: &ParsedDocument) -> Vec<ExtractedMedia> {
+    use crate::parse::MediaModality;
+
+    let mm = &config.crawl.multimodal;
+    if !mm.enabled || !mm.include_audio {
+        return Vec::new();
+    }
+
+    let audio_config = &mm.audio;
+    let mut candidates: Vec<ExtractedMedia> = Vec::new();
+    let mut seen_urls: HashSet<String> = HashSet::new();
+
+    for m in &doc.media {
+        if m.modality != MediaModality::Audio {
+            continue;
+        }
+
+        // Check MIME type if available
+        if let Some(ref mime) = m.mime_type {
+            if !audio_config
+                .allowed_mime_types
+                .iter()
+                .any(|allowed| mime.starts_with(allowed))
+            {
+                debug!(url = %m.url, mime = %mime, "Rejected audio candidate (MIME not allowed)");
+                continue;
+            }
+        }
+
+        // Dedupe by URL
+        let key = normalize_media_url(&m.url);
+        if seen_urls.contains(&key) {
+            continue;
+        }
+        seen_urls.insert(key);
+
+        candidates.push(m.clone());
+
+        // Limit to max_assets_per_page
+        if candidates.len() >= mm.max_assets_per_page {
+            break;
+        }
+    }
+
+    debug!(count = candidates.len(), "Selected audio candidates");
+    candidates
+}
+
+/// Select video candidates from parsed document media
+///
+/// Note: Currently infrastructure for future web crawl video support.
+/// Web crawl video processing is planned for a future release.
+#[allow(dead_code)]
+fn select_video_candidates(config: &Config, doc: &ParsedDocument) -> Vec<ExtractedMedia> {
+    use crate::parse::MediaModality;
+
+    let mm = &config.crawl.multimodal;
+    if !mm.enabled || !mm.include_video {
+        return Vec::new();
+    }
+
+    let video_config = &mm.video;
+    let mut candidates: Vec<ExtractedMedia> = Vec::new();
+    let mut seen_urls: HashSet<String> = HashSet::new();
+
+    for m in &doc.media {
+        if m.modality != MediaModality::Video {
+            continue;
+        }
+
+        // Check MIME type if available
+        if let Some(ref mime) = m.mime_type {
+            if !video_config
+                .allowed_mime_types
+                .iter()
+                .any(|allowed| mime.starts_with(allowed))
+            {
+                debug!(url = %m.url, mime = %mime, "Rejected video candidate (MIME not allowed)");
+                continue;
+            }
+        }
+
+        // Dedupe by URL
+        let key = normalize_media_url(&m.url);
+        if seen_urls.contains(&key) {
+            continue;
+        }
+        seen_urls.insert(key);
+
+        candidates.push(m.clone());
+
+        // Limit to max_assets_per_page
+        if candidates.len() >= mm.max_assets_per_page {
+            break;
+        }
+    }
+
+    debug!(count = candidates.len(), "Selected video candidates");
+    candidates
+}
+
+// =============================================================================
+// Audio/Video Processing Pipeline
+// =============================================================================
+
+/// Metadata extracted from audio/video files via ffprobe
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaMetadata {
+    /// Duration in seconds
+    pub duration_secs: f64,
+    /// Format name (e.g., "mp3", "wav", "mp4")
+    pub format_name: String,
+    /// Bitrate in bits/s (optional)
+    pub bit_rate: Option<i64>,
+    /// Number of audio streams
+    pub audio_streams: usize,
+    /// Number of video streams  
+    pub video_streams: usize,
+    /// Sample rate for audio (Hz)
+    pub sample_rate: Option<i64>,
+    /// Channel layout (e.g., "stereo", "mono")
+    pub channels: Option<i32>,
+}
+
+/// Run ffprobe to extract metadata from a media file
+async fn extract_media_metadata(path: &Path) -> Result<MediaMetadata> {
+    use std::process::Command;
+
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            path.to_str().ok_or_else(|| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid path encoding",
+                ))
+            })?,
+        ])
+        .output()
+        .map_err(|e| {
+            Error::Io(std::io::Error::other(format!(
+                "Failed to run ffprobe: {}. Is ffmpeg installed?",
+                e
+            )))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::Io(std::io::Error::other(format!(
+            "ffprobe failed: {}",
+            stderr
+        ))));
+    }
+
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|e| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Failed to parse ffprobe output: {}", e),
+        ))
+    })?;
+
+    // Extract format info
+    let format = json.get("format").ok_or_else(|| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ffprobe output missing format info",
+        ))
+    })?;
+
+    let duration_secs = format
+        .get("duration")
+        .and_then(|d| d.as_str())
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+
+    let format_name = format
+        .get("format_name")
+        .and_then(|f| f.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let bit_rate = format
+        .get("bit_rate")
+        .and_then(|b| b.as_str())
+        .and_then(|s| s.parse::<i64>().ok());
+
+    // Count streams by type
+    let streams = json
+        .get("streams")
+        .and_then(|s| s.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut audio_streams = 0;
+    let mut video_streams = 0;
+    let mut sample_rate = None;
+    let mut channels = None;
+
+    for stream in &streams {
+        let codec_type = stream.get("codec_type").and_then(|c| c.as_str());
+        match codec_type {
+            Some("audio") => {
+                audio_streams += 1;
+                if sample_rate.is_none() {
+                    sample_rate = stream
+                        .get("sample_rate")
+                        .and_then(|s| s.as_str())
+                        .and_then(|s| s.parse::<i64>().ok());
+                }
+                if channels.is_none() {
+                    channels = stream
+                        .get("channels")
+                        .and_then(|c| c.as_i64())
+                        .map(|c| c as i32);
+                }
+            }
+            Some("video") => video_streams += 1,
+            _ => {}
+        }
+    }
+
+    Ok(MediaMetadata {
+        duration_secs,
+        format_name,
+        bit_rate,
+        audio_streams,
+        video_streams,
+        sample_rate,
+        channels,
+    })
+}
+
+/// Transcription result from the API
+#[derive(Debug, Clone, Deserialize)]
+struct TranscriptionResponse {
+    text: String,
+}
+
+/// Call the transcription API to transcribe an audio file
+async fn transcribe_audio(
+    path: &Path,
+    transcription_url: &str,
+    http_client: &reqwest::Client,
+) -> Result<String> {
+    // Read the audio file
+    let file_bytes = tokio::fs::read(path).await?;
+    let filename = path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("audio.mp3")
+        .to_string();
+
+    // Create multipart form with file
+    let part = reqwest::multipart::Part::bytes(file_bytes)
+        .file_name(filename)
+        .mime_str("audio/mpeg")?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("file", part)
+        .text("model", "whisper-1"); // Standard OpenAI-compatible param
+
+    let response = http_client
+        .post(transcription_url)
+        .multipart(form)
+        .timeout(Duration::from_secs(300)) // 5 min timeout for long audio
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(Error::Io(std::io::Error::other(format!(
+            "Transcription API error {}: {}",
+            status, body
+        ))));
+    }
+
+    let result: TranscriptionResponse = response.json().await?;
+    Ok(result.text)
+}
+
+/// Process an audio file: extract metadata, transcribe, and create chunks
+#[allow(clippy::too_many_arguments)]
+async fn process_audio_file(
+    config: &Config,
+    db: &MetaDb,
+    store: &QdrantStore,
+    embedder: &dyn Embedder,
+    source: &Source,
+    path: &Path,
+    http_client: &reqwest::Client,
+) -> Result<(i32, i32)> {
+    let file_uri = path.display().to_string();
+    let audio_config = &config.crawl.multimodal.audio;
+
+    debug!(path = %file_uri, "Processing audio file");
+
+    // Extract metadata with ffprobe
+    let metadata = extract_media_metadata(path).await?;
+    debug!(
+        path = %file_uri,
+        duration = metadata.duration_secs,
+        format = %metadata.format_name,
+        "Extracted audio metadata"
+    );
+
+    // Check duration limit
+    if metadata.duration_secs > audio_config.max_duration_secs as f64 {
+        debug!(
+            path = %file_uri,
+            duration = metadata.duration_secs,
+            max = audio_config.max_duration_secs,
+            "Skipping audio file (exceeds max duration)"
+        );
+        return Ok((0, 0));
+    }
+
+    // Compute content hash from file
+    let file_bytes = std::fs::read(path)?;
+    let content_hash = compute_content_hash(&file_bytes);
+
+    // Check if content changed
+    let existing_doc = db.get_document_by_uri(&source.id, &file_uri).await?;
+    if let Some(ref doc) = existing_doc {
+        if doc.content_hash == content_hash {
+            debug!(path = %file_uri, "Audio file unchanged");
+            return Ok((0, 0));
+        }
+    }
+
+    // Create/update document
+    let mut doc = Document::new(source.id.clone(), file_uri.clone(), content_hash.clone());
+    doc.title = Some(
+        path.file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("audio")
+            .to_string(),
+    );
+    doc.content_type = Some(format!("audio/{}", metadata.format_name));
+    let doc = db.upsert_document(&doc).await?;
+
+    // Transcribe if enabled
+    let transcript = if audio_config.transcription_enabled {
+        match transcribe_audio(path, &audio_config.transcription_url, http_client).await {
+            Ok(text) => {
+                debug!(
+                    path = %file_uri,
+                    chars = text.len(),
+                    "Transcribed audio"
+                );
+                Some(text)
+            }
+            Err(e) => {
+                warn!(path = %file_uri, error = %e, "Failed to transcribe audio");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // If no transcript, create a minimal metadata chunk
+    let chunk_text = transcript.unwrap_or_else(|| {
+        format!(
+            "[Audio: {} | Duration: {:.1}s | Format: {}]",
+            path.file_name().and_then(|f| f.to_str()).unwrap_or("audio"),
+            metadata.duration_secs,
+            metadata.format_name
+        )
+    });
+
+    // Create chunk with audio modality
+    let chunk_hash = compute_content_hash(chunk_text.as_bytes());
+    let media_hash = Some(content_hash.clone());
+
+    let chunk = Chunk::new_with_modality(
+        doc.id.clone(),
+        0,
+        chunk_hash.clone(),
+        chunk_text.clone(),
+        "audio",
+        Some(file_uri.clone()),
+        media_hash,
+    );
+
+    // Check if chunk exists
+    let existing = db.get_chunk_by_hash(&doc.id, &chunk_hash).await?;
+    if existing.is_some() {
+        debug!(path = %file_uri, "Audio chunk unchanged");
+        return Ok((0, 0));
+    }
+
+    // Delete old audio chunks for this document
+    let old_chunks = db.get_chunks_by_modality(&doc.id, "audio").await?;
+    if !old_chunks.is_empty() {
+        let point_ids: Vec<Uuid> = old_chunks
+            .iter()
+            .filter_map(|c| Uuid::try_parse(&c.qdrant_point_id).ok())
+            .collect();
+        if !point_ids.is_empty() {
+            store.delete_points(&point_ids).await?;
+        }
+        db.delete_chunks_by_modality(&doc.id, "audio").await?;
+    }
+
+    // Embed the transcript text (audio chunks use text embeddings)
+    let embeddings = embed_in_batches(
+        embedder,
+        vec![chunk_text.clone()],
+        config.embedding.batch_size,
+    )
+    .await?;
+    if embeddings.is_empty() {
+        warn!(path = %file_uri, "Failed to embed audio transcript");
+        return Ok((0, 0));
+    }
+
+    // Create Qdrant point
+    let point_id = Uuid::try_parse(&chunk.qdrant_point_id)
+        .unwrap_or_else(|_| Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk.qdrant_point_id.as_bytes()));
+
+    let mut payload = ChunkPayload::new(
+        source.id.clone(),
+        source.source_type.clone(),
+        source.uri.clone(),
+        doc.id.clone(),
+        file_uri.clone(),
+        0, // chunk_index
+        chunk_hash.clone(),
+        Utc::now().to_rfc3339(),
+    );
+    payload.title = doc.title.clone();
+    payload.modality = Some("audio".to_string());
+    payload.media_url = Some(file_uri.clone());
+    payload.media_hash = Some(content_hash.clone());
+
+    let points = vec![ChunkPoint {
+        id: point_id,
+        vector: embeddings[0].clone(),
+        payload,
+    }];
+
+    store.upsert_points(points).await?;
+    db.upsert_chunk(&chunk).await?;
+
+    info!(
+        path = %file_uri,
+        duration = metadata.duration_secs,
+        "Processed audio file"
+    );
+
+    Ok((1, 0))
+}
+
+/// Extract keyframes from a video file using ffmpeg
+async fn extract_keyframes(
+    video_path: &Path,
+    output_dir: &Path,
+    max_keyframes: usize,
+) -> Result<Vec<PathBuf>> {
+    use std::process::Command;
+
+    // Create output directory if it doesn't exist
+    std::fs::create_dir_all(output_dir)?;
+
+    // Extract keyframes using ffmpeg's select filter for I-frames
+    // Output pattern: output_dir/keyframe_%03d.jpg
+    let output_pattern = output_dir.join("keyframe_%03d.jpg");
+
+    let output = Command::new("ffmpeg")
+        .args([
+            "-i",
+            video_path.to_str().ok_or_else(|| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid video path encoding",
+                ))
+            })?,
+            "-vf",
+            "select=eq(pict_type\\,I),scale=640:-1",
+            "-frames:v",
+            &max_keyframes.to_string(),
+            "-vsync",
+            "vfr",
+            "-q:v",
+            "2",
+            output_pattern.to_str().ok_or_else(|| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid output path encoding",
+                ))
+            })?,
+            "-y", // Overwrite existing files
+        ])
+        .output()
+        .map_err(|e| {
+            Error::Io(std::io::Error::other(format!(
+                "Failed to run ffmpeg for keyframe extraction: {}. Is ffmpeg installed?",
+                e
+            )))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::Io(std::io::Error::other(format!(
+            "ffmpeg keyframe extraction failed: {}",
+            stderr
+        ))));
+    }
+
+    // Collect the extracted keyframe paths
+    let mut keyframes = Vec::new();
+    for i in 1..=max_keyframes {
+        let frame_path = output_dir.join(format!("keyframe_{:03}.jpg", i));
+        if frame_path.exists() {
+            keyframes.push(frame_path);
+        } else {
+            break; // No more frames
+        }
+    }
+
+    Ok(keyframes)
+}
+
+/// Extract audio track from video file to a temporary file for transcription
+async fn extract_audio_track(video_path: &Path, output_path: &Path) -> Result<bool> {
+    use std::process::Command;
+
+    let output = Command::new("ffmpeg")
+        .args([
+            "-i",
+            video_path.to_str().ok_or_else(|| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid video path encoding",
+                ))
+            })?,
+            "-vn", // No video
+            "-acodec",
+            "libmp3lame",
+            "-q:a",
+            "4",
+            output_path.to_str().ok_or_else(|| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid output path encoding",
+                ))
+            })?,
+            "-y", // Overwrite existing files
+        ])
+        .output()
+        .map_err(|e| {
+            Error::Io(std::io::Error::other(format!(
+                "Failed to run ffmpeg for audio extraction: {}. Is ffmpeg installed?",
+                e
+            )))
+        })?;
+
+    // Return false if no audio stream (common for some video files)
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("does not contain any stream") || stderr.contains("Output file is empty")
+        {
+            return Ok(false);
+        }
+        return Err(Error::Io(std::io::Error::other(format!(
+            "ffmpeg audio extraction failed: {}",
+            stderr
+        ))));
+    }
+
+    // Check if output file was created and has content
+    Ok(output_path.exists() && output_path.metadata().map(|m| m.len() > 0).unwrap_or(false))
+}
+
+/// Process a video file: extract metadata, keyframes, audio track, and create chunks
+#[allow(clippy::too_many_arguments)]
+async fn process_video_file(
+    config: &Config,
+    db: &MetaDb,
+    store: &QdrantStore,
+    embedder: &dyn Embedder,
+    source: &Source,
+    path: &Path,
+    http_client: &reqwest::Client,
+    temp_dir: &Path,
+) -> Result<(i32, i32)> {
+    let file_uri = path.display().to_string();
+    let video_config = &config.crawl.multimodal.video;
+    let audio_config = &config.crawl.multimodal.audio;
+
+    debug!(path = %file_uri, "Processing video file");
+
+    // Extract metadata with ffprobe
+    let metadata = extract_media_metadata(path).await?;
+    debug!(
+        path = %file_uri,
+        duration = metadata.duration_secs,
+        format = %metadata.format_name,
+        video_streams = metadata.video_streams,
+        audio_streams = metadata.audio_streams,
+        "Extracted video metadata"
+    );
+
+    // Check duration limit
+    if metadata.duration_secs > video_config.max_duration_secs as f64 {
+        debug!(
+            path = %file_uri,
+            duration = metadata.duration_secs,
+            max = video_config.max_duration_secs,
+            "Skipping video file (exceeds max duration)"
+        );
+        return Ok((0, 0));
+    }
+
+    // Compute content hash from file
+    let file_bytes = std::fs::read(path)?;
+    let content_hash = compute_content_hash(&file_bytes);
+
+    // Check if content changed
+    let existing_doc = db.get_document_by_uri(&source.id, &file_uri).await?;
+    if let Some(ref doc) = existing_doc {
+        if doc.content_hash == content_hash {
+            debug!(path = %file_uri, "Video file unchanged");
+            return Ok((0, 0));
+        }
+    }
+
+    // Create/update document
+    let mut doc = Document::new(source.id.clone(), file_uri.clone(), content_hash.clone());
+    doc.title = Some(
+        path.file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("video")
+            .to_string(),
+    );
+    doc.content_type = Some(format!("video/{}", metadata.format_name));
+    let doc = db.upsert_document(&doc).await?;
+
+    // Delete old video chunks for this document before creating new ones
+    let old_chunks = db.get_chunks_by_modality(&doc.id, "video").await?;
+    if !old_chunks.is_empty() {
+        let point_ids: Vec<Uuid> = old_chunks
+            .iter()
+            .filter_map(|c| Uuid::try_parse(&c.qdrant_point_id).ok())
+            .collect();
+        if !point_ids.is_empty() {
+            store.delete_points(&point_ids).await?;
+        }
+        db.delete_chunks_by_modality(&doc.id, "video").await?;
+    }
+
+    let mut chunks_created = 0;
+    let video_temp_dir = temp_dir.join(format!("video_{}", Uuid::new_v4()));
+    std::fs::create_dir_all(&video_temp_dir)?;
+
+    // Extract keyframes if video has video streams
+    if metadata.video_streams > 0 && video_config.max_keyframes > 0 {
+        match extract_keyframes(path, &video_temp_dir, video_config.max_keyframes).await {
+            Ok(keyframe_paths) => {
+                debug!(
+                    path = %file_uri,
+                    keyframes = keyframe_paths.len(),
+                    "Extracted keyframes from video"
+                );
+
+                // Embed each keyframe
+                for (frame_idx, frame_path) in keyframe_paths.iter().enumerate() {
+                    let frame_bytes = match std::fs::read(frame_path) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            warn!(path = %frame_path.display(), error = %e, "Failed to read keyframe");
+                            continue;
+                        }
+                    };
+
+                    let frame_hash = compute_content_hash(&frame_bytes);
+                    let base64_img = base64::engine::general_purpose::STANDARD.encode(&frame_bytes);
+                    let data_url = format!("data:image/jpeg;base64,{}", base64_img);
+
+                    // Embed as image
+                    let embeddings = match embedder.embed_images(vec![data_url.clone()]).await {
+                        Ok(e) if !e.is_empty() => e,
+                        Ok(_) => {
+                            warn!(path = %file_uri, frame = frame_idx, "Failed to embed keyframe (empty result)");
+                            continue;
+                        }
+                        Err(e) => {
+                            warn!(path = %file_uri, frame = frame_idx, error = %e, "Failed to embed keyframe");
+                            continue;
+                        }
+                    };
+
+                    // Create chunk for keyframe with video modality
+                    let chunk = Chunk::new_with_modality(
+                        doc.id.clone(),
+                        frame_idx as i32,
+                        frame_hash.clone(),
+                        format!(
+                            "[Video keyframe {} from {}]",
+                            frame_idx + 1,
+                            path.file_name().and_then(|f| f.to_str()).unwrap_or("video")
+                        ),
+                        "video",
+                        Some(file_uri.clone()),
+                        Some(content_hash.clone()),
+                    );
+
+                    let point_id = Uuid::try_parse(&chunk.qdrant_point_id).unwrap_or_else(|_| {
+                        Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk.qdrant_point_id.as_bytes())
+                    });
+
+                    let mut payload = ChunkPayload::new(
+                        source.id.clone(),
+                        source.source_type.clone(),
+                        source.uri.clone(),
+                        doc.id.clone(),
+                        file_uri.clone(),
+                        frame_idx as i32,
+                        frame_hash.clone(),
+                        Utc::now().to_rfc3339(),
+                    );
+                    payload.title = doc.title.clone();
+                    payload.modality = Some("video".to_string());
+                    payload.media_url = Some(file_uri.clone());
+                    payload.media_hash = Some(content_hash.clone());
+
+                    let points = vec![ChunkPoint {
+                        id: point_id,
+                        vector: embeddings[0].clone(),
+                        payload,
+                    }];
+
+                    if let Err(e) = store.upsert_points(points).await {
+                        warn!(path = %file_uri, frame = frame_idx, error = %e, "Failed to store keyframe");
+                        continue;
+                    }
+
+                    if let Err(e) = db.upsert_chunk(&chunk).await {
+                        warn!(path = %file_uri, frame = frame_idx, error = %e, "Failed to save keyframe chunk");
+                        continue;
+                    }
+
+                    chunks_created += 1;
+                }
+            }
+            Err(e) => {
+                warn!(path = %file_uri, error = %e, "Failed to extract keyframes");
+            }
+        }
+    }
+
+    // Extract and transcribe audio track if enabled and video has audio
+    if metadata.audio_streams > 0
+        && video_config.extract_audio
+        && audio_config.transcription_enabled
+    {
+        let audio_path = video_temp_dir.join("audio_track.mp3");
+
+        match extract_audio_track(path, &audio_path).await {
+            Ok(true) => {
+                // Transcribe the extracted audio
+                match transcribe_audio(&audio_path, &audio_config.transcription_url, http_client)
+                    .await
+                {
+                    Ok(transcript) if !transcript.is_empty() => {
+                        debug!(
+                            path = %file_uri,
+                            chars = transcript.len(),
+                            "Transcribed video audio track"
+                        );
+
+                        // Create a text chunk for the transcript
+                        let transcript_hash = compute_content_hash(transcript.as_bytes());
+                        let chunk_index = chunks_created; // After keyframe chunks
+
+                        let chunk = Chunk::new_with_modality(
+                            doc.id.clone(),
+                            chunk_index,
+                            transcript_hash.clone(),
+                            transcript.clone(),
+                            "video", // Still video modality since it's from video
+                            Some(file_uri.clone()),
+                            Some(content_hash.clone()),
+                        );
+
+                        // Embed as text
+                        let embeddings = embed_in_batches(
+                            embedder,
+                            vec![transcript.clone()],
+                            config.embedding.batch_size,
+                        )
+                        .await?;
+                        if !embeddings.is_empty() {
+                            let point_id =
+                                Uuid::try_parse(&chunk.qdrant_point_id).unwrap_or_else(|_| {
+                                    Uuid::new_v5(
+                                        &Uuid::NAMESPACE_OID,
+                                        chunk.qdrant_point_id.as_bytes(),
+                                    )
+                                });
+
+                            let mut payload = ChunkPayload::new(
+                                source.id.clone(),
+                                source.source_type.clone(),
+                                source.uri.clone(),
+                                doc.id.clone(),
+                                file_uri.clone(),
+                                chunk_index,
+                                transcript_hash.clone(),
+                                Utc::now().to_rfc3339(),
+                            );
+                            payload.title = doc.title.clone();
+                            payload.modality = Some("video".to_string());
+                            payload.media_url = Some(file_uri.clone());
+                            payload.media_hash = Some(content_hash.clone());
+
+                            let points = vec![ChunkPoint {
+                                id: point_id,
+                                vector: embeddings[0].clone(),
+                                payload,
+                            }];
+
+                            store.upsert_points(points).await?;
+                            db.upsert_chunk(&chunk).await?;
+                            chunks_created += 1;
+                        }
+                    }
+                    Ok(_) => {
+                        debug!(path = %file_uri, "Video audio track transcription returned empty");
+                    }
+                    Err(e) => {
+                        warn!(path = %file_uri, error = %e, "Failed to transcribe video audio track");
+                    }
+                }
+            }
+            Ok(false) => {
+                debug!(path = %file_uri, "No audio track in video");
+            }
+            Err(e) => {
+                warn!(path = %file_uri, error = %e, "Failed to extract audio track from video");
+            }
+        }
+    }
+
+    // Clean up temp directory
+    if let Err(e) = std::fs::remove_dir_all(&video_temp_dir) {
+        debug!(path = %video_temp_dir.display(), error = %e, "Failed to clean up video temp directory");
+    }
+
+    info!(
+        path = %file_uri,
+        duration = metadata.duration_secs,
+        chunks = chunks_created,
+        "Processed video file"
+    );
+
+    Ok((chunks_created, 0))
 }
 
 const PERCEPTUAL_HASH_SIZE: u32 = 8;
@@ -945,6 +1816,13 @@ pub async fn cmd_ingest_dir(
 
     // Collect all files
     let mut files: Vec<std::path::PathBuf> = Vec::new();
+    let mut audio_files: Vec<std::path::PathBuf> = Vec::new();
+    let mut video_files: Vec<std::path::PathBuf> = Vec::new();
+
+    let mm = &config.crawl.multimodal;
+    let include_audio = mm.enabled && mm.include_audio;
+    let include_video = mm.enabled && mm.include_video;
+
     let walker = WalkBuilder::new(&canonical_path)
         .hidden(false)
         .git_ignore(true)
@@ -955,7 +1833,12 @@ pub async fn cmd_ingest_dir(
         match entry {
             Ok(e) if e.file_type().map(|t| t.is_file()).unwrap_or(false) => {
                 let path = e.path().to_path_buf();
-                if !should_skip_file(&path) {
+                // Check for audio/video files before the generic skip check
+                if include_audio && is_audio_file(&path) {
+                    audio_files.push(path);
+                } else if include_video && is_video_file(&path) {
+                    video_files.push(path);
+                } else if !should_skip_file(&path) {
                     files.push(path);
                 }
             }
@@ -963,10 +1846,16 @@ pub async fn cmd_ingest_dir(
         }
     }
 
-    info!("Found {} files to process", files.len());
+    info!(
+        "Found {} text files, {} audio files, {} video files to process",
+        files.len(),
+        audio_files.len(),
+        video_files.len()
+    );
 
     let mut current_uris: Vec<String> = Vec::new();
-    let file_progress = start_progress_bar(files.len(), "Processing files");
+    let total_files = files.len() + audio_files.len() + video_files.len();
+    let file_progress = start_progress_bar(total_files, "Processing files");
 
     for file_path in files {
         let file_uri = file_path.display().to_string();
@@ -987,6 +1876,84 @@ pub async fn cmd_ingest_dir(
         }
 
         advance_progress(&file_progress);
+    }
+
+    // Process audio files with ffprobe metadata and transcription
+    let http_client = reqwest::Client::new();
+    for audio_path in audio_files {
+        let file_uri = audio_path.display().to_string();
+        current_uris.push(file_uri.clone());
+
+        match process_audio_file(
+            config,
+            db,
+            store,
+            embedder,
+            &source,
+            &audio_path,
+            &http_client,
+        )
+        .await
+        {
+            Ok((created, updated)) => {
+                stats.chunks_created += created;
+                stats.chunks_updated += updated;
+                if created > 0 || updated > 0 {
+                    stats.docs_processed += 1;
+                } else {
+                    stats.docs_skipped += 1;
+                }
+            }
+            Err(e) => {
+                let msg = format!("Error processing audio {}: {}", file_uri, e);
+                warn!("{}", msg);
+                stats.errors.push(msg);
+            }
+        }
+        advance_progress(&file_progress);
+    }
+
+    // Create temp directory for video processing
+    let video_temp_dir = std::env::temp_dir().join(format!("librarian_video_{}", Uuid::new_v4()));
+
+    // Process video files with ffprobe metadata and keyframe extraction
+    for video_path in video_files {
+        let file_uri = video_path.display().to_string();
+        current_uris.push(file_uri.clone());
+
+        match process_video_file(
+            config,
+            db,
+            store,
+            embedder,
+            &source,
+            &video_path,
+            &http_client,
+            &video_temp_dir,
+        )
+        .await
+        {
+            Ok((created, updated)) => {
+                stats.chunks_created += created;
+                stats.chunks_updated += updated;
+                if created > 0 || updated > 0 {
+                    stats.docs_processed += 1;
+                } else {
+                    stats.docs_skipped += 1;
+                }
+            }
+            Err(e) => {
+                let msg = format!("Error processing video {}: {}", file_uri, e);
+                warn!("{}", msg);
+                stats.errors.push(msg);
+            }
+        }
+        advance_progress(&file_progress);
+    }
+
+    // Clean up video temp directory
+    if video_temp_dir.exists() {
+        let _ = std::fs::remove_dir_all(&video_temp_dir);
     }
 
     finish_progress(file_progress, "Files processed");
@@ -1872,7 +2839,7 @@ mod tests {
     use crate::config::{EmbeddingDimensionSource, ResolvedEmbeddingConfig};
     use crate::embedding_backend::{EmbeddingBackendConfig, EmbeddingBackendKind};
     use crate::models::MultimodalStrategy;
-    use crate::parse::{ContentType, ExtractedMedia, Heading, ParsedDocument};
+    use crate::parse::{ContentType, ExtractedMedia, Heading, MediaModality, ParsedDocument};
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn multimodal_config() -> Config {
@@ -1930,12 +2897,16 @@ mod tests {
                 alt: Some("Architecture diagram".to_string()),
                 tag: "img".to_string(),
                 css_background: false,
+                modality: MediaModality::Image,
+                mime_type: None,
             },
             ExtractedMedia {
                 url: "https://example.com/diagram.png".to_string(),
                 alt: Some("Diagram".to_string()),
                 tag: "img".to_string(),
                 css_background: false,
+                modality: MediaModality::Image,
+                mime_type: None,
             },
         ];
 
@@ -1956,6 +2927,8 @@ mod tests {
             alt: Some("Background".to_string()),
             tag: "div".to_string(),
             css_background: true,
+            modality: MediaModality::Image,
+            mime_type: None,
         }];
 
         let embedding = test_embedding_config(true, false);
@@ -1973,6 +2946,8 @@ mod tests {
             alt: Some("Diagram".to_string()),
             tag: "img".to_string(),
             css_background: false,
+            modality: MediaModality::Image,
+            mime_type: None,
         }];
 
         // Use late-interaction model config

@@ -1,6 +1,6 @@
 [package]
 name = "librarian"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 authors = ["Dr Andrew Cox"]
 description = "A CLI tool for local RAG (Retrieval-Augmented Generation) with MCP server support"
@@ -10,7 +10,7 @@ keywords = ["rag", "retrieval", "mcp", "qdrant", "embedding"]
 categories = ["command-line-utilities", "text-processing"]
 
 [features]
-default = []
+default = ["pdf-extract", "chromiumoxide"]
 pdf = ["pdf-extract"]
 js-rendering = ["chromiumoxide"]
 
@@ -23,7 +23,7 @@ clap_complete = "4.5"
 tokio = { version = "1.43", features = ["full"] }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json", "gzip", "brotli"] }
+reqwest = { version = "0.12", features = ["json", "gzip", "brotli", "multipart", "stream"] }
 
 # Logging
 tracing = "0.1"

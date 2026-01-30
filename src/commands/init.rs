@@ -1,6 +1,6 @@
 //! Init command implementation
 
-use crate::config::{render_config_toml, Config};
+use crate::config::{check_ffmpeg_deps_available, render_config_toml, Config};
 use crate::error::{Error, Result};
 use crate::meta::MetaDb;
 use crate::store::QdrantStore;
@@ -620,6 +620,114 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
                 false,
             )?;
         }
+
+        // Audio/video options
+        let (ffmpeg_ok, ffprobe_ok) = check_ffmpeg_deps_available();
+        let ffmpeg_available = ffmpeg_ok && ffprobe_ok;
+
+        if ffmpeg_available {
+            config.crawl.multimodal.include_audio = prompt_confirm(
+                "Include audio files? (requires transcription service)",
+                config.crawl.multimodal.include_audio,
+                false,
+            )?;
+            if config.crawl.multimodal.include_audio {
+                config.crawl.multimodal.audio.max_duration_secs = prompt_u64(
+                    "Max audio duration (seconds)",
+                    config.crawl.multimodal.audio.max_duration_secs,
+                    |value| {
+                        if value == 0 {
+                            Err("max_duration_secs must be > 0".to_string())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    false,
+                )?;
+                config.crawl.multimodal.audio.transcription_enabled = prompt_confirm(
+                    "Enable transcription?",
+                    config.crawl.multimodal.audio.transcription_enabled,
+                    false,
+                )?;
+                if config.crawl.multimodal.audio.transcription_enabled {
+                    config.crawl.multimodal.audio.transcription_url = prompt_string(
+                        "Transcription API URL",
+                        &config.crawl.multimodal.audio.transcription_url,
+                        |value| {
+                            if value.trim().is_empty() {
+                                Err("URL cannot be empty".to_string())
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        false,
+                    )?;
+                }
+            }
+
+            config.crawl.multimodal.include_video = prompt_confirm(
+                "Include video files? (extracts keyframes + audio track)",
+                config.crawl.multimodal.include_video,
+                false,
+            )?;
+            if config.crawl.multimodal.include_video {
+                config.crawl.multimodal.video.max_duration_secs = prompt_u64(
+                    "Max video duration (seconds)",
+                    config.crawl.multimodal.video.max_duration_secs,
+                    |value| {
+                        if value == 0 {
+                            Err("max_duration_secs must be > 0".to_string())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    false,
+                )?;
+                config.crawl.multimodal.video.keyframe_interval_secs = prompt_f64(
+                    "Keyframe extraction interval (seconds)",
+                    config.crawl.multimodal.video.keyframe_interval_secs,
+                    |value| {
+                        if value <= 0.0 {
+                            Err("keyframe_interval_secs must be > 0".to_string())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    false,
+                )?;
+                config.crawl.multimodal.video.max_keyframes = prompt_usize(
+                    "Max keyframes per video",
+                    config.crawl.multimodal.video.max_keyframes,
+                    |value| {
+                        if value == 0 {
+                            Err("max_keyframes must be > 0".to_string())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    false,
+                )?;
+                config.crawl.multimodal.video.extract_audio = prompt_confirm(
+                    "Extract and transcribe audio track?",
+                    config.crawl.multimodal.video.extract_audio,
+                    false,
+                )?;
+            }
+        } else if config.crawl.multimodal.include_audio || config.crawl.multimodal.include_video {
+            let mut missing = Vec::new();
+            if !ffmpeg_ok {
+                missing.push("ffmpeg");
+            }
+            if !ffprobe_ok {
+                missing.push("ffprobe");
+            }
+            println!(
+                "⚠ Audio/video disabled: {} not found in PATH",
+                missing.join(" and ")
+            );
+            config.crawl.multimodal.include_audio = false;
+            config.crawl.multimodal.include_video = false;
+        }
     }
 
     Ok(())
@@ -654,6 +762,17 @@ fn compute_irrelevant_paths(config: &Config) -> HashSet<String> {
             "crawl.multimodal.allowed_mime_prefixes",
             "crawl.multimodal.min_relevance_score",
             "crawl.multimodal.include_css_background_images",
+            // Audio config
+            "crawl.multimodal.audio.max_duration_secs",
+            "crawl.multimodal.audio.allowed_mime_types",
+            "crawl.multimodal.audio.transcription_enabled",
+            "crawl.multimodal.audio.transcription_url",
+            // Video config
+            "crawl.multimodal.video.max_duration_secs",
+            "crawl.multimodal.video.keyframe_interval_secs",
+            "crawl.multimodal.video.max_keyframes",
+            "crawl.multimodal.video.allowed_mime_types",
+            "crawl.multimodal.video.extract_audio",
         ] {
             irrelevant.insert(key.to_string());
         }
@@ -665,6 +784,33 @@ fn compute_irrelevant_paths(config: &Config) -> HashSet<String> {
             "crawl.multimodal.allowed_mime_prefixes",
             "crawl.multimodal.min_relevance_score",
             "crawl.multimodal.include_css_background_images",
+        ] {
+            irrelevant.insert(key.to_string());
+        }
+    }
+
+    // Audio-specific keys
+    if !config.crawl.multimodal.include_audio {
+        for key in [
+            "crawl.multimodal.audio.max_duration_secs",
+            "crawl.multimodal.audio.allowed_mime_types",
+            "crawl.multimodal.audio.transcription_enabled",
+            "crawl.multimodal.audio.transcription_url",
+        ] {
+            irrelevant.insert(key.to_string());
+        }
+    } else if !config.crawl.multimodal.audio.transcription_enabled {
+        irrelevant.insert("crawl.multimodal.audio.transcription_url".to_string());
+    }
+
+    // Video-specific keys
+    if !config.crawl.multimodal.include_video {
+        for key in [
+            "crawl.multimodal.video.max_duration_secs",
+            "crawl.multimodal.video.keyframe_interval_secs",
+            "crawl.multimodal.video.max_keyframes",
+            "crawl.multimodal.video.allowed_mime_types",
+            "crawl.multimodal.video.extract_audio",
         ] {
             irrelevant.insert(key.to_string());
         }

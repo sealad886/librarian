@@ -172,6 +172,23 @@ enum Commands {
         #[command(subcommand)]
         action: DbAction,
     },
+
+    /// Configuration management commands
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+/// Configuration management actions
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Print default configuration with all comments
+    Print {
+        /// Print all options including defaults (not just non-default values)
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 /// Database management actions
@@ -292,6 +309,11 @@ async fn run() -> Result<()> {
     // Handle init command specially (doesn't need existing config)
     if matches!(cli.command, Commands::Init { .. }) {
         return handle_init(cli).await;
+    }
+
+    // Handle config command (doesn't need existing config)
+    if let Commands::Config { action } = cli.command {
+        return handle_config_action(action);
     }
 
     // Handle completions command (doesn't need config/db/store)
@@ -567,12 +589,33 @@ async fn run() -> Result<()> {
             handle_db_action(&config, action, cli.json).await?;
         }
 
+        Commands::Config { action } => {
+            handle_config_action(action)?;
+        }
+
         Commands::Mcp => unreachable!(),
 
         Commands::Completions { .. } => unreachable!(),
     }
 
     Ok(())
+}
+
+fn handle_config_action(action: ConfigAction) -> Result<()> {
+    match action {
+        ConfigAction::Print { all: _ } => {
+            use librarian::config::render_config_toml;
+            use std::collections::HashSet;
+
+            let config = Config::default();
+            let defaults = Config::default();
+            // Show all fields as non-default by using empty irrelevant set
+            let irrelevant = HashSet::new();
+            let rendered = render_config_toml(&config, &defaults, &irrelevant);
+            println!("{}", rendered);
+            Ok(())
+        }
+    }
 }
 
 fn command_label(command: &Commands) -> &'static str {
@@ -590,6 +633,7 @@ fn command_label(command: &Commands) -> &'static str {
         Commands::Mcp => "mcp",
         Commands::Completions { .. } => "completions",
         Commands::Db { .. } => "db",
+        Commands::Config { .. } => "config",
     }
 }
 

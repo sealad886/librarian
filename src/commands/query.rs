@@ -96,9 +96,13 @@ pub async fn cmd_query(
             ranked =
                 apply_reranker(reranker.as_ref(), query, ranked, config.reranker.top_k).await?;
         } else {
+            // Partition by whether chunk has meaningful text content for reranking
+            // Audio/video transcript chunks have substantial text and should be reranked
+            // Image/video keyframe chunks have minimal text and should be skipped
+            const MIN_TEXT_LENGTH_FOR_RERANK: usize = 50;
             let (text_results, other_results): (Vec<_>, Vec<_>) = ranked
                 .into_iter()
-                .partition(|r| r.modality.as_deref().unwrap_or("text") == "text");
+                .partition(|r| r.chunk_text.len() >= MIN_TEXT_LENGTH_FOR_RERANK);
 
             let mut reranked_text = apply_reranker(
                 reranker.as_ref(),
@@ -185,16 +189,52 @@ pub fn print_query_results(result: &QueryResult) {
             }
         }
 
-        if r.modality.as_deref() == Some("image") {
-            let label = r.media_url.as_deref().unwrap_or(r.doc_uri.as_str());
-            println!("   [image] {}\n", label);
-        } else {
-            let preview = if r.chunk_text.len() > 200 {
-                format!("{}...", &r.chunk_text[..200].trim())
-            } else {
-                r.chunk_text.trim().to_string()
-            };
-            println!("   {}\n", preview.replace('\n', " "));
+        match r.modality.as_deref() {
+            Some("image") => {
+                let label = r.media_url.as_deref().unwrap_or(r.doc_uri.as_str());
+                println!("   [image] {}\n", label);
+            }
+            Some("audio") => {
+                let label = r.media_url.as_deref().unwrap_or(r.doc_uri.as_str());
+                println!("   [audio] {}", label);
+                // Show transcript preview
+                let preview = if r.chunk_text.len() > 200 {
+                    format!("{}...", &r.chunk_text[..200].trim())
+                } else {
+                    r.chunk_text.trim().to_string()
+                };
+                if !preview.is_empty() {
+                    println!("   Transcript: {}\n", preview.replace('\n', " "));
+                } else {
+                    println!();
+                }
+            }
+            Some("video") => {
+                let label = r.media_url.as_deref().unwrap_or(r.doc_uri.as_str());
+                // Distinguish keyframe vs transcript based on text content
+                if r.chunk_text.len() > 50 {
+                    // Likely a transcript chunk
+                    println!("   [video transcript] {}", label);
+                    let preview = if r.chunk_text.len() > 200 {
+                        format!("{}...", &r.chunk_text[..200].trim())
+                    } else {
+                        r.chunk_text.trim().to_string()
+                    };
+                    println!("   {}\n", preview.replace('\n', " "));
+                } else {
+                    // Likely a keyframe chunk
+                    println!("   [video keyframe] {}\n", label);
+                }
+            }
+            _ => {
+                // Text chunks (default)
+                let preview = if r.chunk_text.len() > 200 {
+                    format!("{}...", &r.chunk_text[..200].trim())
+                } else {
+                    r.chunk_text.trim().to_string()
+                };
+                println!("   {}\n", preview.replace('\n', " "));
+            }
         }
     }
 }

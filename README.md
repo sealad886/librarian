@@ -153,6 +153,69 @@ References:
 - Jina reranker m0 model card: <https://huggingface.co/jinaai/jina-reranker-m0>
 - MonoQwen2-VL model card: <https://huggingface.co/lightonai/MonoQwen2-VL-v0.1>
 
+### Audio/Video Indexing
+
+Librarian supports audio and video file ingestion when multimodal is enabled:
+
+**Audio files** (`.mp3`, `.wav`, `.flac`, `.m4a`, `.ogg`, `.aac`):
+
+- Metadata extraction via ffprobe (duration, format, bitrate)
+- Automatic transcription via OpenAI Whisper-compatible API
+- Transcript chunks stored with `modality = "audio"`
+- Text embeddings for search
+
+**Video files** (`.mp4`, `.webm`, `.mkv`, `.mov`, `.avi`):
+
+- Metadata extraction via ffprobe (duration, streams, format)
+- Keyframe extraction via ffmpeg (I-frames for representative content)
+- Optional audio track extraction and transcription
+- Keyframe chunks stored with `modality = "video"` + image embeddings
+- Audio transcript chunks stored with `modality = "video"` + text embeddings
+
+**Prerequisites**:
+
+Both `ffmpeg` and `ffprobe` must be installed and available in your `$PATH`:
+
+```bash
+# macOS
+brew install ffmpeg
+
+# Ubuntu/Debian
+sudo apt install ffmpeg
+
+# Verify installation
+ffmpeg -version
+ffprobe -version
+```
+
+**Configuration**:
+
+```toml
+[crawl.multimodal]
+enabled = true
+include_audio = true
+include_video = true
+
+[crawl.multimodal.audio]
+max_duration_secs = 600         # Max audio file duration (10 minutes)
+transcription_enabled = true
+transcription_url = "http://localhost:8000/v1/audio/transcriptions"
+allowed_mime_types = ["audio/mpeg", "audio/wav", "audio/flac", "audio/mp4", "audio/ogg"]
+
+[crawl.multimodal.video]
+max_duration_secs = 300         # Max video file duration (5 minutes)
+keyframe_interval_secs = 10.0   # Extract keyframe every N seconds
+max_keyframes = 30              # Maximum keyframes per video
+extract_audio = true            # Also transcribe the audio track
+allowed_mime_types = ["video/mp4", "video/webm", "video/x-matroska", "video/quicktime"]
+```
+
+**Notes**:
+
+- Audio/video processing uses a derived approach: transcripts → text embeddings, keyframes → image embeddings
+- All embeddings use the same dimension, so no separate vector storage is needed
+- Web crawl audio/video support (downloading from HTML pages) is planned for a future release
+
 ## Commands
 
 ### `init`

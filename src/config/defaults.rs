@@ -219,3 +219,73 @@ pub fn default_multimodal_min_relevance_score() -> f32 {
 pub fn default_multimodal_include_css_background_images() -> bool {
     false
 }
+
+// =============================================================================
+// Audio Processing Defaults
+// =============================================================================
+
+/// Default: maximum audio duration in seconds (10 minutes)
+pub fn default_audio_max_duration_secs() -> u64 {
+    600
+}
+
+/// Default: allowed audio MIME types
+pub fn default_audio_allowed_mime_types() -> Vec<String> {
+    vec![
+        "audio/mpeg".to_string(),
+        "audio/mp3".to_string(),
+        "audio/wav".to_string(),
+        "audio/x-wav".to_string(),
+        "audio/ogg".to_string(),
+        "audio/flac".to_string(),
+        "audio/aac".to_string(),
+        "audio/mp4".to_string(),
+        "audio/webm".to_string(),
+    ]
+}
+
+/// Default: transcription enabled
+pub fn default_audio_transcription_enabled() -> bool {
+    true
+}
+
+/// Default: transcription URL (local Whisper endpoint)
+pub fn default_audio_transcription_url() -> String {
+    "http://127.0.0.1:8000/v1/audio/transcriptions".to_string()
+}
+
+// =============================================================================
+// Video Processing Defaults
+// =============================================================================
+
+/// Default: maximum video duration in seconds (5 minutes)
+pub fn default_video_max_duration_secs() -> u64 {
+    300
+}
+
+/// Default: keyframe extraction interval (every 10 seconds)
+pub fn default_video_keyframe_interval_secs() -> f64 {
+    10.0
+}
+
+/// Default: maximum keyframes per video
+pub fn default_video_max_keyframes() -> usize {
+    30
+}
+
+/// Default: allowed video MIME types
+pub fn default_video_allowed_mime_types() -> Vec<String> {
+    vec![
+        "video/mp4".to_string(),
+        "video/webm".to_string(),
+        "video/ogg".to_string(),
+        "video/quicktime".to_string(),
+        "video/x-msvideo".to_string(),
+        "video/x-matroska".to_string(),
+    ]
+}
+
+/// Default: extract audio track from videos
+pub fn default_video_extract_audio() -> bool {
+    true
+}

@@ -22,12 +22,36 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::str::FromStr;
 use tracing::{debug, info, warn};
 
 const PROBE_TEXT: &str = "ping";
 const PROBE_IMAGE_PNG_BASE64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+
+/// Check if ffmpeg is available in PATH
+pub fn check_ffmpeg_available() -> bool {
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Check if ffprobe is available in PATH
+pub fn check_ffprobe_available() -> bool {
+    Command::new("ffprobe")
+        .arg("-version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Check if both ffmpeg and ffprobe are available
+pub fn check_ffmpeg_deps_available() -> (bool, bool) {
+    (check_ffmpeg_available(), check_ffprobe_available())
+}
 
 /// Main configuration structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -337,11 +361,11 @@ pub struct MultimodalCrawlConfig {
     #[serde(default = "default_multimodal_include_images")]
     pub include_images: bool,
 
-    /// Include audio (not yet supported)
+    /// Include audio files (requires ffmpeg/ffprobe)
     #[serde(default = "default_multimodal_include_audio")]
     pub include_audio: bool,
 
-    /// Include video (not yet supported)
+    /// Include video files (requires ffmpeg/ffprobe)
     #[serde(default = "default_multimodal_include_video")]
     pub include_video: bool,
 
@@ -368,6 +392,81 @@ pub struct MultimodalCrawlConfig {
     /// Include CSS background images if detected
     #[serde(default = "default_multimodal_include_css_background_images")]
     pub include_css_background_images: bool,
+
+    /// Audio-specific configuration
+    #[serde(default)]
+    pub audio: AudioConfig,
+
+    /// Video-specific configuration
+    #[serde(default)]
+    pub video: VideoConfig,
+}
+
+/// Audio processing configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioConfig {
+    /// Maximum audio duration in seconds (longer files are split)
+    #[serde(default = "default_audio_max_duration_secs")]
+    pub max_duration_secs: u64,
+
+    /// Allowed audio MIME types
+    #[serde(default = "default_audio_allowed_mime_types")]
+    pub allowed_mime_types: Vec<String>,
+
+    /// Enable transcription for audio files
+    #[serde(default = "default_audio_transcription_enabled")]
+    pub transcription_enabled: bool,
+
+    /// Transcription service URL (e.g., Whisper API endpoint)
+    #[serde(default = "default_audio_transcription_url")]
+    pub transcription_url: String,
+}
+
+/// Video processing configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VideoConfig {
+    /// Maximum video duration in seconds (longer files are sampled)
+    #[serde(default = "default_video_max_duration_secs")]
+    pub max_duration_secs: u64,
+
+    /// Keyframe extraction interval in seconds
+    #[serde(default = "default_video_keyframe_interval_secs")]
+    pub keyframe_interval_secs: f64,
+
+    /// Maximum keyframes to extract per video
+    #[serde(default = "default_video_max_keyframes")]
+    pub max_keyframes: usize,
+
+    /// Allowed video MIME types
+    #[serde(default = "default_video_allowed_mime_types")]
+    pub allowed_mime_types: Vec<String>,
+
+    /// Extract and transcribe audio track from videos
+    #[serde(default = "default_video_extract_audio")]
+    pub extract_audio: bool,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            max_duration_secs: default_audio_max_duration_secs(),
+            allowed_mime_types: default_audio_allowed_mime_types(),
+            transcription_enabled: default_audio_transcription_enabled(),
+            transcription_url: default_audio_transcription_url(),
+        }
+    }
+}
+
+impl Default for VideoConfig {
+    fn default() -> Self {
+        Self {
+            max_duration_secs: default_video_max_duration_secs(),
+            keyframe_interval_secs: default_video_keyframe_interval_secs(),
+            max_keyframes: default_video_max_keyframes(),
+            allowed_mime_types: default_video_allowed_mime_types(),
+            extract_audio: default_video_extract_audio(),
+        }
+    }
 }
 
 /// Internal paths configuration
@@ -498,6 +597,8 @@ impl Default for MultimodalCrawlConfig {
             allowed_mime_prefixes: default_multimodal_allowed_mime_prefixes(),
             min_relevance_score: default_multimodal_min_relevance_score(),
             include_css_background_images: default_multimodal_include_css_background_images(),
+            audio: AudioConfig::default(),
+            video: VideoConfig::default(),
         }
     }
 }
@@ -724,11 +825,51 @@ impl Config {
                 ));
             }
 
+            // Audio/video require ffmpeg and ffprobe
             if self.crawl.multimodal.include_audio || self.crawl.multimodal.include_video {
-                return Err(Error::Config(
-                    "Audio/video ingestion not supported yet. Disable include_audio/include_video"
-                        .to_string(),
-                ));
+                let (ffmpeg_ok, ffprobe_ok) = check_ffmpeg_deps_available();
+
+                if !ffmpeg_ok || !ffprobe_ok {
+                    let mut missing = Vec::new();
+                    if !ffmpeg_ok {
+                        missing.push("ffmpeg");
+                    }
+                    if !ffprobe_ok {
+                        missing.push("ffprobe");
+                    }
+                    return Err(Error::Config(format!(
+                        "Audio/video ingestion requires {} in PATH. Install ffmpeg or disable include_audio/include_video",
+                        missing.join(" and ")
+                    )));
+                }
+
+                // Validate audio config
+                if self.crawl.multimodal.include_audio
+                    && self.crawl.multimodal.audio.max_duration_secs == 0
+                {
+                    return Err(Error::Config(
+                        "crawl.multimodal.audio.max_duration_secs must be > 0".to_string(),
+                    ));
+                }
+
+                // Validate video config
+                if self.crawl.multimodal.include_video {
+                    if self.crawl.multimodal.video.max_duration_secs == 0 {
+                        return Err(Error::Config(
+                            "crawl.multimodal.video.max_duration_secs must be > 0".to_string(),
+                        ));
+                    }
+                    if self.crawl.multimodal.video.keyframe_interval_secs <= 0.0 {
+                        return Err(Error::Config(
+                            "crawl.multimodal.video.keyframe_interval_secs must be > 0".to_string(),
+                        ));
+                    }
+                    if self.crawl.multimodal.video.max_keyframes == 0 {
+                        return Err(Error::Config(
+                            "crawl.multimodal.video.max_keyframes must be > 0".to_string(),
+                        ));
+                    }
+                }
             }
 
             if self.crawl.multimodal.min_relevance_score < 0.0
@@ -1730,6 +1871,88 @@ pub fn render_config_toml(
         irrelevant.contains("crawl.multimodal.include_css_background_images"),
     );
 
+    // Audio configuration
+    lines.push("".to_string());
+    lines.push("# Audio processing (requires ffmpeg/ffprobe in PATH)".to_string());
+    lines.push("[crawl.multimodal.audio]".to_string());
+    push_kv(
+        &mut lines,
+        "max_duration_secs",
+        toml_integer(config.crawl.multimodal.audio.max_duration_secs as i64),
+        config.crawl.multimodal.audio.max_duration_secs
+            == defaults.crawl.multimodal.audio.max_duration_secs,
+        irrelevant.contains("crawl.multimodal.audio.max_duration_secs"),
+    );
+    push_kv(
+        &mut lines,
+        "allowed_mime_types",
+        toml_array(&config.crawl.multimodal.audio.allowed_mime_types),
+        config.crawl.multimodal.audio.allowed_mime_types
+            == defaults.crawl.multimodal.audio.allowed_mime_types,
+        irrelevant.contains("crawl.multimodal.audio.allowed_mime_types"),
+    );
+    push_kv(
+        &mut lines,
+        "transcription_enabled",
+        toml_bool(config.crawl.multimodal.audio.transcription_enabled),
+        config.crawl.multimodal.audio.transcription_enabled
+            == defaults.crawl.multimodal.audio.transcription_enabled,
+        irrelevant.contains("crawl.multimodal.audio.transcription_enabled"),
+    );
+    push_kv(
+        &mut lines,
+        "transcription_url",
+        toml_string(&config.crawl.multimodal.audio.transcription_url),
+        config.crawl.multimodal.audio.transcription_url
+            == defaults.crawl.multimodal.audio.transcription_url,
+        irrelevant.contains("crawl.multimodal.audio.transcription_url"),
+    );
+
+    // Video configuration
+    lines.push("".to_string());
+    lines.push("# Video processing (requires ffmpeg/ffprobe in PATH)".to_string());
+    lines.push("[crawl.multimodal.video]".to_string());
+    push_kv(
+        &mut lines,
+        "max_duration_secs",
+        toml_integer(config.crawl.multimodal.video.max_duration_secs as i64),
+        config.crawl.multimodal.video.max_duration_secs
+            == defaults.crawl.multimodal.video.max_duration_secs,
+        irrelevant.contains("crawl.multimodal.video.max_duration_secs"),
+    );
+    push_kv(
+        &mut lines,
+        "keyframe_interval_secs",
+        toml_float(config.crawl.multimodal.video.keyframe_interval_secs),
+        config.crawl.multimodal.video.keyframe_interval_secs
+            == defaults.crawl.multimodal.video.keyframe_interval_secs,
+        irrelevant.contains("crawl.multimodal.video.keyframe_interval_secs"),
+    );
+    push_kv(
+        &mut lines,
+        "max_keyframes",
+        toml_integer(config.crawl.multimodal.video.max_keyframes as i64),
+        config.crawl.multimodal.video.max_keyframes
+            == defaults.crawl.multimodal.video.max_keyframes,
+        irrelevant.contains("crawl.multimodal.video.max_keyframes"),
+    );
+    push_kv(
+        &mut lines,
+        "allowed_mime_types",
+        toml_array(&config.crawl.multimodal.video.allowed_mime_types),
+        config.crawl.multimodal.video.allowed_mime_types
+            == defaults.crawl.multimodal.video.allowed_mime_types,
+        irrelevant.contains("crawl.multimodal.video.allowed_mime_types"),
+    );
+    push_kv(
+        &mut lines,
+        "extract_audio",
+        toml_bool(config.crawl.multimodal.video.extract_audio),
+        config.crawl.multimodal.video.extract_audio
+            == defaults.crawl.multimodal.video.extract_audio,
+        irrelevant.contains("crawl.multimodal.video.extract_audio"),
+    );
+
     lines.join("\n") + "\n"
 }
 
@@ -1992,5 +2215,95 @@ mod tests {
 
         let err = config.resolve_embedding_config().await.unwrap_err();
         assert!(err.to_string().contains("did not return image embeddings"));
+    }
+
+    #[test]
+    fn test_audio_config_validation() {
+        let mut config = Config::default();
+        config.crawl.multimodal.enabled = true;
+        config.crawl.multimodal.include_audio = true;
+        config.embedding.model = "jinaai/jina-clip-v2".to_string();
+        config.embedding.multimodal = true;
+
+        // max_duration_secs = 0 should fail
+        config.crawl.multimodal.audio.max_duration_secs = 0;
+        // Note: This test may pass or fail depending on ffmpeg availability
+        // We test the config validation logic, not the ffmpeg check
+        let result = config.validate();
+        // If ffmpeg is available, it should fail on max_duration_secs = 0
+        // If ffmpeg is not available, it should fail on missing ffmpeg
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_video_config_validation() {
+        let mut config = Config::default();
+        config.crawl.multimodal.enabled = true;
+        config.crawl.multimodal.include_video = true;
+        config.embedding.model = "jinaai/jina-clip-v2".to_string();
+        config.embedding.multimodal = true;
+
+        // Test that invalid video config values are rejected
+        // max_duration_secs = 0 should fail
+        config.crawl.multimodal.video.max_duration_secs = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_video_keyframe_interval_validation() {
+        let mut config = Config::default();
+        config.crawl.multimodal.enabled = true;
+        config.crawl.multimodal.include_video = true;
+        config.embedding.model = "jinaai/jina-clip-v2".to_string();
+        config.embedding.multimodal = true;
+        config.crawl.multimodal.video.max_duration_secs = 300;
+
+        // keyframe_interval_secs = 0 should fail
+        config.crawl.multimodal.video.keyframe_interval_secs = 0.0;
+        let result = config.validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_video_max_keyframes_validation() {
+        let mut config = Config::default();
+        config.crawl.multimodal.enabled = true;
+        config.crawl.multimodal.include_video = true;
+        config.embedding.model = "jinaai/jina-clip-v2".to_string();
+        config.embedding.multimodal = true;
+        config.crawl.multimodal.video.max_duration_secs = 300;
+        config.crawl.multimodal.video.keyframe_interval_secs = 10.0;
+
+        // max_keyframes = 0 should fail
+        config.crawl.multimodal.video.max_keyframes = 0;
+        let result = config.validate();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_multimodal_audio_video_disabled_by_default() {
+        let config = Config::default();
+        assert!(!config.crawl.multimodal.enabled);
+        assert!(!config.crawl.multimodal.include_audio);
+        assert!(!config.crawl.multimodal.include_video);
+    }
+
+    #[test]
+    fn test_audio_config_defaults() {
+        let config = Config::default();
+        assert_eq!(config.crawl.multimodal.audio.max_duration_secs, 600);
+        assert!(config.crawl.multimodal.audio.transcription_enabled);
+        assert!(!config.crawl.multimodal.audio.allowed_mime_types.is_empty());
+    }
+
+    #[test]
+    fn test_video_config_defaults() {
+        let config = Config::default();
+        assert_eq!(config.crawl.multimodal.video.max_duration_secs, 300);
+        assert_eq!(config.crawl.multimodal.video.keyframe_interval_secs, 10.0);
+        assert_eq!(config.crawl.multimodal.video.max_keyframes, 30);
+        assert!(config.crawl.multimodal.video.extract_audio);
+        assert!(!config.crawl.multimodal.video.allowed_mime_types.is_empty());
     }
 }

@@ -60,7 +60,7 @@
 
 **Status:** REQUIRED  
 **Scope:** Configuration validation across crawl/embedding/reranker  
-**Rule:** Enabling multimodal crawling (`crawl.multimodal.enabled = true`) requires `embedding.model` to be a registry-approved multimodal model (see `src/models.rs`) and must not use late-interaction strategies (e.g., ColPali/ColQwen2). Audio/video ingestion is not yet supported and must remain disabled. Multimodal reranker capability is inferred from the model registry (no manual `supports_multimodal` flags).  
+**Rule:** Enabling multimodal crawling (`crawl.multimodal.enabled = true`) requires `embedding.model` to be a registry-approved multimodal model (see `src/models.rs`) and must not use late-interaction strategies (e.g., ColPali/ColQwen2). Audio/video ingestion requires ffmpeg/ffprobe in PATH (see separate convention). Multimodal reranker capability is inferred from the model registry (no manual `supports_multimodal` flags).  
 **Rationale (Why this exists):**  
 
 - Prevents configuration from enabling features unsupported by the current models.  
@@ -130,6 +130,63 @@
 - `src/main.rs`  
 - `src/mcp/tools.rs`
 
+### Audio/video ingestion requires ffmpeg/ffprobe dependency
+
+**Status:** REQUIRED  
+**Scope:** Configuration validation and init wizard when audio/video multimodal is enabled  
+**Rule:** When `crawl.multimodal.include_audio = true` or `crawl.multimodal.include_video = true`, the system must verify `ffmpeg` and `ffprobe` are available in `$PATH` before proceeding. Config validation must fail fast with a clear error message if dependencies are missing. The init wizard must prompt for multimedia settings only when multimodal is enabled and check for ffmpeg/ffprobe availability.  
+**Rationale (Why this exists):**  
+
+- Audio metadata extraction and transcription require ffprobe for format detection.  
+- Video keyframe extraction requires ffmpeg with filter support.  
+- Failing fast prevents silent ingestion failures or corrupt metadata.  
+- Dependency checks during init ensure the user knows what's required before starting ingestion.  
+**Examples:**  
+- Good: `which ffmpeg && which ffprobe` check during config validation; init wizard warns if missing.  
+- Bad: Enabling `include_audio = true` without checking ffmpeg availability (will fail at runtime).  
+**Related Files / Modules:**  
+- `src/config/mod.rs`  
+- `src/commands/init.rs`  
+- `src/commands/ingest.rs`
+
+### Audio/video chunks use derived modalities
+
+**Status:** REQUIRED  
+**Scope:** Audio and video ingestion flows (extraction, chunking, embedding)  
+**Rule:** Audio files produce text chunks via transcription with `modality = "audio"` containing the transcript text. Video files produce image chunks via keyframe extraction with `modality = "video"` plus optional text chunks from audio track transcription. All multimedia chunks must carry `media_url` pointing to the source asset and `media_hash` for deduplication. Text embeddings are used for transcript chunks; image embeddings for keyframe chunks.  
+**Rationale (Why this exists):**  
+
+- Derived modalities (transcript → text embedding, keyframe → image embedding) work with existing embedding backends.  
+- Explicit modality tagging enables modality-aware query routing and cleanup.  
+- Media URL/hash tracking supports deduplication and asset provenance.  
+**Examples:**  
+- Good: Audio file → ffprobe metadata → Whisper transcription → text chunks with `modality = "audio"`, `media_url = "file:///path/to/audio.mp3"`.  
+- Good: Video file → ffmpeg keyframes → image chunks with `modality = "video"`, plus transcript chunks from audio track.  
+- Bad: Storing video keyframes as `modality = "image"` (loses video provenance).  
+**Related Files / Modules:**  
+- `src/commands/ingest.rs`  
+- `src/meta/mod.rs`  
+- `src/store/payload.rs`
+
+### Qdrant storage uses named vectors for multimodal
+
+**Status:** REQUIRED  
+**Scope:** Qdrant collection creation and vector upsert when multiple modalities are enabled  
+**Rule:** When the configuration supports multiple modalities (text + image, or text + image + audio/video), the Qdrant collection must use named vectors (e.g., `"text"`, `"image"`) rather than a single unnamed vector. Each named vector has its own dimension and distance metric. Queries must specify the target vector space via the `using` parameter. The store must validate dimension consistency per vector name before upserting.  
+**Rationale (Why this exists):**  
+
+- Different modalities may have different embedding dimensions (e.g., text 768, image 512).  
+- Named vectors allow querying specific modalities or combining results.  
+- Dimension validation per vector name prevents silent data corruption.  
+**Examples:**  
+- Good: Collection with `vectors: { "text": { size: 768, distance: "Cosine" }, "image": { size: 512, distance: "Cosine" } }`.  
+- Good: Query with `using: "text"` for text search, `using: "image"` for image search.  
+- Bad: Single unnamed vector with mixed dimensions (corrupts index).  
+**Related Files / Modules:**  
+- `src/store/mod.rs`  
+- `src/commands/query.rs`  
+- `src/config/mod.rs`
+
 ## 3. Rationale and Examples
 
 - See examples embedded within each convention above for concrete good/bad patterns that align status reporting and background execution with run tracking.
@@ -145,3 +202,4 @@
 - 2026-01-19: Updated multimodal gating to use the model registry and reject late-interaction ingestion.
 - 2026-01-20: Added embedding backend probe contract convention.
 - 2026-01-30: Added convention for validated Qdrant connections on write operations.
+- 2026-01-30: Added conventions for audio/video ffmpeg dependency, derived modalities, and named vectors storage.
