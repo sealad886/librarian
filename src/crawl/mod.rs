@@ -755,12 +755,14 @@ mod tests {
             .await;
 
         let max_pages = 2;
-        let mut crawl_config = CrawlConfig::default();
-        crawl_config.max_pages = max_pages;
-        crawl_config.max_depth = 2;
-        crawl_config.auto_js_rendering = false;
-        crawl_config.rate_limit_per_host = 1000.0;
-        crawl_config.timeout_secs = 5;
+        let crawl_config = CrawlConfig {
+            max_pages,
+            max_depth: 2,
+            auto_js_rendering: false,
+            rate_limit_per_host: 1000.0,
+            timeout_secs: 5,
+            ..CrawlConfig::default()
+        };
 
         let max_attempts = max_pages.saturating_mul(5).max(1);
         // Allow localhost for tests using mock server
