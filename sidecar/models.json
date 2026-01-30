@@ -95,7 +95,7 @@
     "id": "OpenGVLab/InternVideo2-Stage2_1B-224p-f4",
     "family": "internvideo2",
     "modalities": ["text", "video"],
-    "embedding_dim": 1408,
+    "embedding_dim": 1024,
     "multivector": false,
     "supports_mrl": false,
     "max_batch": 4,
