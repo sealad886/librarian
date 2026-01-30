@@ -19,6 +19,7 @@ use image::imageops::FilterType;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -296,6 +297,125 @@ fn is_perceptual_duplicate(hash: u64, seen: &[u64]) -> bool {
         .any(|seen_hash| hamming_distance(*seen_hash, hash) <= PERCEPTUAL_HASH_MAX_DISTANCE)
 }
 
+/// Check if an IP address is in a private or reserved range to prevent SSRF attacks
+fn is_ip_address_safe(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => {
+            // Reject private IP ranges (RFC 1918)
+            if ipv4.is_private() {
+                return false;
+            }
+            // Reject loopback (127.0.0.0/8)
+            if ipv4.is_loopback() {
+                return false;
+            }
+            // Reject link-local (169.254.0.0/16)
+            if ipv4.is_link_local() {
+                return false;
+            }
+            // Reject broadcast
+            if ipv4.is_broadcast() {
+                return false;
+            }
+            // Reject documentation addresses (RFC 5737)
+            if ipv4.is_documentation() {
+                return false;
+            }
+            // Reject unspecified (0.0.0.0)
+            if ipv4.is_unspecified() {
+                return false;
+            }
+            // Reject multicast
+            if ipv4.is_multicast() {
+                return false;
+            }
+            // Reject reserved (240.0.0.0/4) - check for class E addresses
+            let octets = ipv4.octets();
+            if octets[0] >= 240 {
+                return false;
+            }
+            // AWS metadata endpoint (169.254.169.254)
+            if ipv4 == Ipv4Addr::new(169, 254, 169, 254) {
+                return false;
+            }
+            // Google Cloud metadata endpoint (169.254.169.254)
+            // Azure metadata endpoint (169.254.169.254)
+            // Already covered by link-local check above
+
+            true
+        }
+        IpAddr::V6(ipv6) => {
+            // Reject loopback (::1)
+            if ipv6.is_loopback() {
+                return false;
+            }
+            // Reject unspecified (::)
+            if ipv6.is_unspecified() {
+                return false;
+            }
+            // Reject multicast
+            if ipv6.is_multicast() {
+                return false;
+            }
+            // Reject unique local addresses (fc00::/7)
+            let segments = ipv6.segments();
+            if (segments[0] & 0xfe00) == 0xfc00 {
+                return false;
+            }
+            // Reject link-local (fe80::/10)
+            if (segments[0] & 0xffc0) == 0xfe80 {
+                return false;
+            }
+            // Reject documentation addresses (2001:db8::/32)
+            if segments[0] == 0x2001 && segments[1] == 0x0db8 {
+                return false;
+            }
+
+            true
+        }
+    }
+}
+
+/// Validate that a URL's resolved IP address is safe to request (not private/reserved)
+fn validate_url_safety(url: &str) -> std::result::Result<(), String> {
+    let parsed = Url::parse(url).map_err(|e| format!("Failed to parse URL: {}", e))?;
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "URL has no host".to_string())?;
+
+    // Only validate http/https URLs
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(format!("Unsupported URL scheme: {}", scheme));
+    }
+
+    // Resolve hostname to IP addresses
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let socket_addrs = format!("{}:{}", host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("Failed to resolve hostname '{}': {}", host, e))?;
+
+    // Check all resolved IPs - if any are unsafe, reject the URL
+    let mut has_valid_ip = false;
+    for socket_addr in socket_addrs {
+        let ip = socket_addr.ip();
+        if !is_ip_address_safe(ip) {
+            return Err(format!(
+                "URL resolves to unsafe IP address {}: private or reserved ranges are not allowed",
+                ip
+            ));
+        }
+        has_valid_ip = true;
+    }
+
+    if !has_valid_ip {
+        return Err("URL did not resolve to any IP addresses".to_string());
+    }
+
+    Ok(())
+}
+
 /// Fetch accepted image candidates and cache them under base_dir/assets
 async fn fetch_and_cache_images(
     config: &Config,
@@ -341,6 +461,13 @@ async fn fetch_and_cache_images(
         {
             continue;
         }
+
+        // Validate URL safety (SSRF protection)
+        if let Err(e) = validate_url_safety(&m.url) {
+            debug!(url = %m.url, reason = %e, "Skipping image (unsafe URL)");
+            continue;
+        }
+
         // Fetch
         match client.get(&m.url).send().await {
             Ok(resp) => {
