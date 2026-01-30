@@ -299,7 +299,7 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
         max_batch: 4,
     },
     EmbeddingModelSpec {
-        id: "microsoft/ImageBind",
+        id: "facebook/ImageBind",
         family: "imagebind",
         default_dimension: Some(1024),
         modalities: &["text", "image", "audio", "video"],

@@ -112,7 +112,7 @@
     "notes": "Multimodal model supporting image and video understanding"
   },
   {
-    "id": "microsoft/ImageBind",
+    "id": "facebook/ImageBind",
     "family": "imagebind",
     "modalities": ["text", "image", "audio", "video"],
     "embedding_dim": 1024,
