@@ -171,15 +171,15 @@ impl SitemapParser {
 
         for line in content.lines() {
             let line = line.trim();
-            if line.starts_with("http://") || line.starts_with("https://") {
-                if Url::parse(line).is_ok() {
-                    entries.push(SitemapEntry {
-                        loc: line.to_string(),
-                        lastmod: None,
-                        changefreq: None,
-                        priority: None,
-                    });
-                }
+            if (line.starts_with("http://") || line.starts_with("https://"))
+                && Url::parse(line).is_ok()
+            {
+                entries.push(SitemapEntry {
+                    loc: line.to_string(),
+                    lastmod: None,
+                    changefreq: None,
+                    priority: None,
+                });
             }
         }
 

@@ -130,7 +130,11 @@ pub fn xinference_reranker_models() -> HashSet<&'static str> {
 /// Map HuggingFace model ID to Xinference model name.
 /// Removes the organization prefix (e.g., "BAAI/bge-small-en-v1.5" -> "bge-small-en-v1.5")
 pub fn hf_to_xinference_name(hf_model: &str) -> String {
-    hf_model.split('/').last().unwrap_or(hf_model).to_string()
+    hf_model
+        .split('/')
+        .next_back()
+        .unwrap_or(hf_model)
+        .to_string()
 }
 
 /// Get the Xinference model spec for a given model name

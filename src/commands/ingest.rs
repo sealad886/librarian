@@ -277,7 +277,7 @@ fn compute_perceptual_hash(bytes: &[u8]) -> Option<u64> {
     for pixel in resized.pixels() {
         total += pixel[0] as u32;
     }
-    let avg = total / (PERCEPTUAL_HASH_SIZE * PERCEPTUAL_HASH_SIZE) as u32;
+    let avg = total / (PERCEPTUAL_HASH_SIZE * PERCEPTUAL_HASH_SIZE);
     let mut hash: u64 = 0;
     for (idx, pixel) in resized.pixels().enumerate() {
         if pixel[0] as u32 >= avg {
@@ -422,6 +422,7 @@ async fn fetch_and_cache_images(
     cached
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn embed_cached_images(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,
@@ -772,6 +773,7 @@ pub fn format_overlap_warnings(overlaps: &[SourceOverlap], new_uri: &str) -> Vec
 }
 
 /// Ingest a local directory
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_ingest_dir(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,
@@ -989,6 +991,7 @@ async fn process_file(
 }
 
 /// Process chunks for a document
+#[allow(clippy::too_many_arguments)]
 async fn process_chunks(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,
@@ -1141,6 +1144,7 @@ async fn process_chunks(
 }
 
 /// Ingest from a URL
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_ingest_url(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,
@@ -1284,6 +1288,7 @@ pub async fn cmd_ingest_url(
 }
 
 /// Ingest from a sitemap URL
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_ingest_sitemap(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,

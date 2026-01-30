@@ -935,6 +935,7 @@ impl MetaDb {
     }
 
     /// Complete an ingestion run
+    #[allow(clippy::too_many_arguments)]
     pub async fn complete_ingestion_run(
         &self,
         id: &str,

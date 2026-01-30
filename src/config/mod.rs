@@ -1009,8 +1009,6 @@ impl Config {
             let supports_text = supports_joint_inputs || modalities.iter().any(|m| m == "text");
             let strategy = if supports_joint_inputs {
                 MultimodalStrategy::VlEmbedding
-            } else if supports_image {
-                MultimodalStrategy::DualEncoder
             } else {
                 MultimodalStrategy::DualEncoder
             };
@@ -1061,24 +1059,25 @@ impl Config {
 
         let probe_dimension = probe.embedding_dim.or_else(|| {
             let mut dim: Option<usize> = None;
-            for embeddings in [
+            for values in [
                 probe.text_embeddings.as_ref(),
                 probe.image_embeddings.as_ref(),
                 probe.joint_embeddings.as_ref(),
-            ] {
-                if let Some(values) = embeddings {
-                    if let Some(first) = values.first() {
-                        let candidate = first.len();
-                        if values.iter().any(|vec| vec.len() != candidate) {
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if let Some(first) = values.first() {
+                    let candidate = first.len();
+                    if values.iter().any(|vec| vec.len() != candidate) {
+                        return None;
+                    }
+                    if let Some(existing) = dim {
+                        if existing != candidate {
                             return None;
                         }
-                        if let Some(existing) = dim {
-                            if existing != candidate {
-                                return None;
-                            }
-                        } else {
-                            dim = Some(candidate);
-                        }
+                    } else {
+                        dim = Some(candidate);
                     }
                 }
             }
@@ -1210,7 +1209,7 @@ impl Config {
             supports_text,
             supports_image,
             supports_joint_inputs,
-            supports_multi_vector: supports_multi_vector,
+            supports_multi_vector,
             supports_mrl,
             max_batch,
         })

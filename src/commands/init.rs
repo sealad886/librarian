@@ -827,12 +827,10 @@ fn prompt_select(
         }
         stdout.flush()?;
 
-        match event::read()? {
-            Event::Key(key) => match key.code {
+        if let Event::Key(key) = event::read()? {
+            match key.code {
                 KeyCode::Up => {
-                    if selected > 0 {
-                        selected -= 1;
-                    }
+                    selected = selected.saturating_sub(1);
                 }
                 KeyCode::Down => {
                     if selected + 1 < options.len() {
@@ -848,8 +846,7 @@ fn prompt_select(
                     return Ok(selected);
                 }
                 _ => {}
-            },
-            _ => {}
+            }
         }
     }
 }

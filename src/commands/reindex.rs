@@ -157,6 +157,7 @@ pub async fn cmd_reindex(
 }
 
 /// Reindex a single document's chunks
+#[allow(clippy::too_many_arguments)]
 async fn reindex_document(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,

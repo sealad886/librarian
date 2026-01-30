@@ -186,7 +186,7 @@ pub fn print_query_results(result: &QueryResult) {
         }
 
         if r.modality.as_deref() == Some("image") {
-            let label = r.media_url.as_deref().unwrap_or_else(|| r.doc_uri.as_str());
+            let label = r.media_url.as_deref().unwrap_or(r.doc_uri.as_str());
             println!("   [image] {}\n", label);
         } else {
             let preview = if r.chunk_text.len() > 200 {

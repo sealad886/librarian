@@ -268,7 +268,7 @@ async fn run() -> Result<()> {
     };
 
     tracing_subscriber::registry()
-        .with(fmt::layer().with_writer(LogWriterFactory::default()))
+        .with(fmt::layer().with_writer(LogWriterFactory))
         .with(filter)
         .init();
 
@@ -509,6 +509,7 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::print_literal)]
 fn print_completion_extras(shell: Shell) {
     match shell {
         Shell::Bash => {
@@ -615,7 +616,7 @@ async fn handle_init(cli: Cli) -> Result<()> {
             .parent()
             .map(PathBuf::from)
             .unwrap_or_else(Config::default_base_dir);
-        let config = if path.extension().map_or(false, |e| e == "toml") {
+        let config = if path.extension().is_some_and(|e| e == "toml") {
             path // User specified a .toml file
         } else {
             path.join("config.toml") // User specified a directory

@@ -97,12 +97,10 @@ pub async fn create_reranker_auto(config: &RerankerConfig) -> Result<Box<dyn Rer
 
 /// Extract port number from a URL string
 fn extract_port_from_url(url: &str) -> Result<u16> {
-    url::Url::parse(url)
+    Ok(url::Url::parse(url)
         .map_err(|e| Error::Config(format!("Invalid backend URL: {}", e)))?
         .port()
-        .unwrap_or(9997) // Default xinference port
-        .try_into()
-        .map_err(|_| Error::Config("Port out of range".into()))
+        .unwrap_or(9997)) // Default xinference port
 }
 
 /// Create a reranker with optional Xinference manager support
