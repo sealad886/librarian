@@ -298,6 +298,40 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
         supports_mrl: false,
         max_batch: 4,
     },
+    EmbeddingModelSpec {
+        id: "Salesforce/blip2-opt-2.7b",
+        family: "blip2",
+        default_dimension: Some(768),
+        modalities: &["text", "image", "video"],
+        capabilities: EmbeddingModelCapabilities {
+            strategy: MultimodalStrategy::OmniModal,
+            supports_text: true,
+            supports_image: true,
+            supports_audio: false,
+            supports_video: true,
+            supports_joint_inputs: true,
+            supports_multi_vector: false,
+        },
+        supports_mrl: false,
+        max_batch: 4,
+    },
+    EmbeddingModelSpec {
+        id: "microsoft/ImageBind",
+        family: "imagebind",
+        default_dimension: Some(1024),
+        modalities: &["text", "image", "audio", "video"],
+        capabilities: EmbeddingModelCapabilities {
+            strategy: MultimodalStrategy::OmniModal,
+            supports_text: true,
+            supports_image: true,
+            supports_audio: true,
+            supports_video: true,
+            supports_joint_inputs: true,
+            supports_multi_vector: false,
+        },
+        supports_mrl: false,
+        max_batch: 4,
+    },
 ];
 
 const RERANK_MODELS: &[RerankerModelSpec] = &[

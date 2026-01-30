@@ -70,55 +70,5 @@
     "multivector": false,
     "supports_mrl": false,
     "max_batch": 16
-  },
-  {
-    "id": "laion/CLAP",
-    "family": "clap",
-    "modalities": ["text", "audio"],
-    "embedding_dim": 512,
-    "multivector": false,
-    "supports_mrl": false,
-    "max_batch": 16,
-    "notes": "Contrastive Language-Audio Pretraining model for audio-text embeddings"
-  },
-  {
-    "id": "m-a-p/MERT-v1-330M",
-    "family": "mert",
-    "modalities": ["audio"],
-    "embedding_dim": 1024,
-    "multivector": false,
-    "supports_mrl": false,
-    "max_batch": 8,
-    "notes": "Music understanding model from m-a-p"
-  },
-  {
-    "id": "OpenGVLab/InternVideo2-Stage2_1B-224p-f4",
-    "family": "internvideo2",
-    "modalities": ["text", "video"],
-    "embedding_dim": 1408,
-    "multivector": false,
-    "supports_mrl": false,
-    "max_batch": 4,
-    "notes": "Video-language model for video understanding"
-  },
-  {
-    "id": "Salesforce/blip2-opt-2.7b",
-    "family": "blip2",
-    "modalities": ["text", "image", "video"],
-    "embedding_dim": 768,
-    "multivector": false,
-    "supports_mrl": false,
-    "max_batch": 4,
-    "notes": "Multimodal model supporting image and video understanding"
-  },
-  {
-    "id": "microsoft/ImageBind",
-    "family": "imagebind",
-    "modalities": ["text", "image", "audio", "video"],
-    "embedding_dim": 1024,
-    "multivector": false,
-    "supports_mrl": false,
-    "max_batch": 4,
-    "notes": "Meta's ImageBind model supporting all major modalities"
   }
 ]

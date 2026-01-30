@@ -1783,6 +1783,8 @@ mod tests {
             },
             supports_text: true,
             supports_image,
+            supports_audio: false,
+            supports_video: false,
             supports_joint_inputs: false,
             supports_multi_vector: multi_vector,
             supports_mrl: false,

@@ -172,28 +172,56 @@ pub trait Embedder: Send + Sync {
         let mut results = vec![vec![]; inputs.len()];
 
         if !texts.is_empty() {
-            let text_embeddings = self.embed(texts).await?;
+            let text_embeddings = self.embed(texts.clone()).await?;
+            if text_embeddings.len() != texts.len() {
+                return Err(Error::Embedding(format!(
+                    "Backend returned {} text embeddings but expected {}",
+                    text_embeddings.len(),
+                    texts.len()
+                )));
+            }
             for (i, emb) in text_indices.into_iter().zip(text_embeddings) {
                 results[i] = emb;
             }
         }
 
         if !images.is_empty() {
-            let image_embeddings = self.embed_multimode(images).await?;
+            let image_embeddings = self.embed_multimode(images.clone()).await?;
+            if image_embeddings.len() != images.len() {
+                return Err(Error::Embedding(format!(
+                    "Backend returned {} image embeddings but expected {}",
+                    image_embeddings.len(),
+                    images.len()
+                )));
+            }
             for (i, emb) in image_indices.into_iter().zip(image_embeddings) {
                 results[i] = emb;
             }
         }
 
         if !audios.is_empty() {
-            let audio_embeddings = self.embed_audio_multimode(audios).await?;
+            let audio_embeddings = self.embed_audio_multimode(audios.clone()).await?;
+            if audio_embeddings.len() != audios.len() {
+                return Err(Error::Embedding(format!(
+                    "Backend returned {} audio embeddings but expected {}",
+                    audio_embeddings.len(),
+                    audios.len()
+                )));
+            }
             for (i, emb) in audio_indices.into_iter().zip(audio_embeddings) {
                 results[i] = emb;
             }
         }
 
         if !videos.is_empty() {
-            let video_embeddings = self.embed_video_multimode(videos).await?;
+            let video_embeddings = self.embed_video_multimode(videos.clone()).await?;
+            if video_embeddings.len() != videos.len() {
+                return Err(Error::Embedding(format!(
+                    "Backend returned {} video embeddings but expected {}",
+                    video_embeddings.len(),
+                    videos.len()
+                )));
+            }
             for (i, emb) in video_indices.into_iter().zip(video_embeddings) {
                 results[i] = emb;
             }
