@@ -1018,9 +1018,14 @@ impl Config {
 
         // Derive support flags from probe modalities first (authoritative runtime data),
         // falling back to allowlisted spec capabilities when probe modalities are empty
-        let (supports_joint_inputs, supports_image, supports_text, supports_audio, supports_video, strategy) = if let Some(spec) =
-            allowlisted
-        {
+        let (
+            supports_joint_inputs,
+            supports_image,
+            supports_text,
+            supports_audio,
+            supports_video,
+            strategy,
+        ) = if let Some(spec) = allowlisted {
             // For allowlisted models, use spec capabilities but override with probe modalities
             // when probe reports actual modalities (runtime truth)
             let spec_joint = spec.capabilities.supports_joint_inputs;
@@ -1054,7 +1059,14 @@ impl Config {
                     strategy,
                 )
             } else {
-                (spec_joint, spec_image, spec_text, spec_audio, spec_video, spec_strategy)
+                (
+                    spec_joint,
+                    spec_image,
+                    spec_text,
+                    spec_audio,
+                    spec_video,
+                    spec_strategy,
+                )
             }
         } else {
             let supports_joint_inputs = modalities.iter().any(|m| m == "multimode");
