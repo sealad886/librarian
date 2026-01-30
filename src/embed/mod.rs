@@ -172,12 +172,13 @@ pub trait Embedder: Send + Sync {
         let mut results = vec![vec![]; inputs.len()];
 
         if !texts.is_empty() {
-            let text_embeddings = self.embed(texts.clone()).await?;
-            if text_embeddings.len() != texts.len() {
+            let expected = texts.len();
+            let text_embeddings = self.embed(texts).await?;
+            if text_embeddings.len() != expected {
                 return Err(Error::Embedding(format!(
                     "Backend returned {} text embeddings but expected {}",
                     text_embeddings.len(),
-                    texts.len()
+                    expected
                 )));
             }
             for (i, emb) in text_indices.into_iter().zip(text_embeddings) {
@@ -186,12 +187,13 @@ pub trait Embedder: Send + Sync {
         }
 
         if !images.is_empty() {
-            let image_embeddings = self.embed_multimode(images.clone()).await?;
-            if image_embeddings.len() != images.len() {
+            let expected = images.len();
+            let image_embeddings = self.embed_multimode(images).await?;
+            if image_embeddings.len() != expected {
                 return Err(Error::Embedding(format!(
                     "Backend returned {} image embeddings but expected {}",
                     image_embeddings.len(),
-                    images.len()
+                    expected
                 )));
             }
             for (i, emb) in image_indices.into_iter().zip(image_embeddings) {
@@ -200,12 +202,13 @@ pub trait Embedder: Send + Sync {
         }
 
         if !audios.is_empty() {
-            let audio_embeddings = self.embed_audio_multimode(audios.clone()).await?;
-            if audio_embeddings.len() != audios.len() {
+            let expected = audios.len();
+            let audio_embeddings = self.embed_audio_multimode(audios).await?;
+            if audio_embeddings.len() != expected {
                 return Err(Error::Embedding(format!(
                     "Backend returned {} audio embeddings but expected {}",
                     audio_embeddings.len(),
-                    audios.len()
+                    expected
                 )));
             }
             for (i, emb) in audio_indices.into_iter().zip(audio_embeddings) {
@@ -214,12 +217,13 @@ pub trait Embedder: Send + Sync {
         }
 
         if !videos.is_empty() {
-            let video_embeddings = self.embed_video_multimode(videos.clone()).await?;
-            if video_embeddings.len() != videos.len() {
+            let expected = videos.len();
+            let video_embeddings = self.embed_video_multimode(videos).await?;
+            if video_embeddings.len() != expected {
                 return Err(Error::Embedding(format!(
                     "Backend returned {} video embeddings but expected {}",
                     video_embeddings.len(),
-                    videos.len()
+                    expected
                 )));
             }
             for (i, emb) in video_indices.into_iter().zip(video_embeddings) {
