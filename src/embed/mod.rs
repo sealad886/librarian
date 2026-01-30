@@ -5,6 +5,7 @@
 //! - HTTP embedding backend (for custom servers)
 //! - Xinference embedding backend (zero-config, automatic)
 //! - Batch processing for efficiency
+//! - Multimodal support (text, image, audio, video)
 
 mod http_backend;
 
@@ -21,10 +22,47 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
 
+/// Supported media modalities for multimodal embedding
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaModality {
+    Text,
+    Image,
+    Audio,
+    Video,
+}
+
+/// Input for image embedding (with optional text for joint models)
 #[derive(Debug, Clone)]
 pub struct ImageEmbedInput {
     pub image_path: String,
     pub text: Option<String>,
+}
+
+/// Input for audio embedding (with optional text for joint models)
+#[derive(Debug, Clone)]
+pub struct AudioEmbedInput {
+    pub audio_path: String,
+    pub text: Option<String>,
+}
+
+/// Input for video embedding (with optional text for joint models)
+#[derive(Debug, Clone)]
+pub struct VideoEmbedInput {
+    pub video_path: String,
+    pub text: Option<String>,
+}
+
+/// Unified multimodal embedding input supporting all modalities
+#[derive(Debug, Clone)]
+pub enum MultimodalInput {
+    /// Text-only input
+    Text(String),
+    /// Image input with optional text
+    Image(ImageEmbedInput),
+    /// Audio input with optional text
+    Audio(AudioEmbedInput),
+    /// Video input with optional text
+    Video(VideoEmbedInput),
 }
 
 pub fn normalize_embedding(vector: &[f32]) -> Vec<f32> {
@@ -65,11 +103,159 @@ pub trait Embedder: Send + Sync {
         ))
     }
 
+    /// Embed a batch of audio files (file paths)
+    async fn embed_audio(&self, _audios: Vec<String>) -> Result<Vec<Vec<f32>>> {
+        Err(Error::Embedding(
+            "Audio embedding is not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Embed a batch of audio + optional text inputs (joint models)
+    async fn embed_audio_multimode(&self, _inputs: Vec<AudioEmbedInput>) -> Result<Vec<Vec<f32>>> {
+        Err(Error::Embedding(
+            "Audio+text embedding is not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Embed a batch of video files (file paths)
+    async fn embed_video(&self, _videos: Vec<String>) -> Result<Vec<Vec<f32>>> {
+        Err(Error::Embedding(
+            "Video embedding is not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Embed a batch of video + optional text inputs (joint models)
+    async fn embed_video_multimode(&self, _inputs: Vec<VideoEmbedInput>) -> Result<Vec<Vec<f32>>> {
+        Err(Error::Embedding(
+            "Video+text embedding is not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Embed unified multimodal inputs (auto-dispatches to appropriate method)
+    async fn embed_unified(&self, inputs: Vec<MultimodalInput>) -> Result<Vec<Vec<f32>>> {
+        if inputs.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Group inputs by modality for efficient batching
+        let mut texts = Vec::new();
+        let mut text_indices = Vec::new();
+        let mut images = Vec::new();
+        let mut image_indices = Vec::new();
+        let mut audios = Vec::new();
+        let mut audio_indices = Vec::new();
+        let mut videos = Vec::new();
+        let mut video_indices = Vec::new();
+
+        for (idx, input) in inputs.iter().enumerate() {
+            match input {
+                MultimodalInput::Text(t) => {
+                    text_indices.push(idx);
+                    texts.push(t.clone());
+                }
+                MultimodalInput::Image(i) => {
+                    image_indices.push(idx);
+                    images.push(i.clone());
+                }
+                MultimodalInput::Audio(a) => {
+                    audio_indices.push(idx);
+                    audios.push(a.clone());
+                }
+                MultimodalInput::Video(v) => {
+                    video_indices.push(idx);
+                    videos.push(v.clone());
+                }
+            }
+        }
+
+        // Process each modality
+        // TODO: Performance improvement - process modalities concurrently using tokio::try_join!
+        // For batches containing multiple modalities, this could significantly improve throughput
+        // by processing text, image, audio, and video embeddings in parallel rather than sequentially.
+        // Example implementation:
+        // let (text_results, image_results, audio_results, video_results) = tokio::try_join!(
+        //     async { if !texts.is_empty() { self.embed(texts).await } else { Ok(vec![]) } },
+        //     async { if !images.is_empty() { self.embed_multimode(images).await } else { Ok(vec![]) } },
+        //     async { if !audios.is_empty() { self.embed_audio_multimode(audios).await } else { Ok(vec![]) } },
+        //     async { if !videos.is_empty() { self.embed_video_multimode(videos).await } else { Ok(vec![]) } }
+        // )?;
+        // Then merge results back into the results vector using the stored indices.
+        // See: https://github.com/sealad886/librarian/pull/3#discussion_r2745118609
+        let mut results = vec![vec![]; inputs.len()];
+
+        if !texts.is_empty() {
+            let expected = texts.len();
+            let text_embeddings = self.embed(texts).await?;
+            if text_embeddings.len() != expected {
+                return Err(Error::Embedding(format!(
+                    "Backend returned {} text embeddings but expected {}",
+                    text_embeddings.len(),
+                    expected
+                )));
+            }
+            for (i, emb) in text_indices.into_iter().zip(text_embeddings) {
+                results[i] = emb;
+            }
+        }
+
+        if !images.is_empty() {
+            let expected = images.len();
+            let image_embeddings = self.embed_multimode(images).await?;
+            if image_embeddings.len() != expected {
+                return Err(Error::Embedding(format!(
+                    "Backend returned {} image embeddings but expected {}",
+                    image_embeddings.len(),
+                    expected
+                )));
+            }
+            for (i, emb) in image_indices.into_iter().zip(image_embeddings) {
+                results[i] = emb;
+            }
+        }
+
+        if !audios.is_empty() {
+            let expected = audios.len();
+            let audio_embeddings = self.embed_audio_multimode(audios).await?;
+            if audio_embeddings.len() != expected {
+                return Err(Error::Embedding(format!(
+                    "Backend returned {} audio embeddings but expected {}",
+                    audio_embeddings.len(),
+                    expected
+                )));
+            }
+            for (i, emb) in audio_indices.into_iter().zip(audio_embeddings) {
+                results[i] = emb;
+            }
+        }
+
+        if !videos.is_empty() {
+            let expected = videos.len();
+            let video_embeddings = self.embed_video_multimode(videos).await?;
+            if video_embeddings.len() != expected {
+                return Err(Error::Embedding(format!(
+                    "Backend returned {} video embeddings but expected {}",
+                    video_embeddings.len(),
+                    expected
+                )));
+            }
+            for (i, emb) in video_indices.into_iter().zip(video_embeddings) {
+                results[i] = emb;
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Get the embedding dimension
     fn dimension(&self) -> usize;
 
     /// Get the model name
     fn model_name(&self) -> &str;
+
+    /// Get supported modalities for this embedder
+    fn supported_modalities(&self) -> Vec<MediaModality> {
+        vec![MediaModality::Text] // Default to text-only
+    }
 }
 
 /// Create an embedder based on configuration (sync, for HTTP backend only)

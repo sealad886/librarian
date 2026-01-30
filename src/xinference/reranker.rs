@@ -35,6 +35,9 @@ struct RerankResponse {
 struct RerankResultData {
     index: usize,
     relevance_score: f32,
+    #[serde(default)]
+    #[allow(dead_code)]
+    document: Option<String>,
 }
 
 /// Xinference reranker implementation

@@ -509,6 +509,7 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::print_literal)]
 fn print_completion_extras(shell: Shell) {
     match shell {
         Shell::Bash => {

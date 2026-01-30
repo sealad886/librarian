@@ -180,6 +180,8 @@ pub struct ResolvedEmbeddingConfig {
     pub strategy: MultimodalStrategy,
     pub supports_text: bool,
     pub supports_image: bool,
+    pub supports_audio: bool,
+    pub supports_video: bool,
     pub supports_joint_inputs: bool,
     pub supports_multi_vector: bool,
     pub supports_mrl: bool,
@@ -793,18 +795,35 @@ impl Config {
             .map(|spec| spec.modalities.iter().map(|m| (*m).to_string()).collect())
             .unwrap_or_else(|| vec!["text".to_string()]);
 
-        let (supports_text, supports_image, supports_joint_inputs, strategy, supports_multi_vector) =
-            if let Some(spec) = allowlisted {
-                (
-                    spec.capabilities.supports_text,
-                    spec.capabilities.supports_image,
-                    spec.capabilities.supports_joint_inputs,
-                    spec.capabilities.strategy,
-                    spec.capabilities.supports_multi_vector,
-                )
-            } else {
-                (true, false, false, MultimodalStrategy::DualEncoder, false)
-            };
+        let (
+            supports_text,
+            supports_image,
+            supports_audio,
+            supports_video,
+            supports_joint_inputs,
+            strategy,
+            supports_multi_vector,
+        ) = if let Some(spec) = allowlisted {
+            (
+                spec.capabilities.supports_text,
+                spec.capabilities.supports_image,
+                spec.capabilities.supports_audio,
+                spec.capabilities.supports_video,
+                spec.capabilities.supports_joint_inputs,
+                spec.capabilities.strategy,
+                spec.capabilities.supports_multi_vector,
+            )
+        } else {
+            (
+                true,
+                false,
+                false,
+                false,
+                false,
+                MultimodalStrategy::DualEncoder,
+                false,
+            )
+        };
 
         let supports_mrl = allowlisted.map(|spec| spec.supports_mrl).unwrap_or(false);
         let max_batch = allowlisted
@@ -848,6 +867,8 @@ impl Config {
             strategy,
             supports_text,
             supports_image,
+            supports_audio,
+            supports_video,
             supports_joint_inputs,
             supports_multi_vector,
             supports_mrl,
@@ -997,14 +1018,21 @@ impl Config {
 
         // Derive support flags from probe modalities first (authoritative runtime data),
         // falling back to allowlisted spec capabilities when probe modalities are empty
-        let (supports_joint_inputs, supports_image, supports_text, strategy) = if let Some(spec) =
-            allowlisted
-        {
+        let (
+            supports_joint_inputs,
+            supports_image,
+            supports_text,
+            supports_audio,
+            supports_video,
+            strategy,
+        ) = if let Some(spec) = allowlisted {
             // For allowlisted models, use spec capabilities but override with probe modalities
             // when probe reports actual modalities (runtime truth)
             let spec_joint = spec.capabilities.supports_joint_inputs;
             let spec_image = spec.capabilities.supports_image;
             let spec_text = spec.capabilities.supports_text;
+            let spec_audio = spec.capabilities.supports_audio;
+            let spec_video = spec.capabilities.supports_video;
             let spec_strategy = spec.capabilities.strategy;
 
             if probe_has_modalities {
@@ -1012,6 +1040,8 @@ impl Config {
                 let probe_joint = modalities.iter().any(|m| m == "multimode");
                 let probe_image = probe_joint || modalities.iter().any(|m| m == "image");
                 let probe_text = probe_joint || modalities.iter().any(|m| m == "text");
+                let probe_audio = modalities.iter().any(|m| m == "audio");
+                let probe_video = modalities.iter().any(|m| m == "video");
                 // Use spec strategy but could be overridden if probe indicates different capability
                 let strategy = if probe_joint && !spec_joint {
                     MultimodalStrategy::VlEmbedding
@@ -1024,15 +1054,26 @@ impl Config {
                     probe_joint || spec_joint,
                     probe_image || spec_image,
                     probe_text || spec_text,
+                    probe_audio || spec_audio,
+                    probe_video || spec_video,
                     strategy,
                 )
             } else {
-                (spec_joint, spec_image, spec_text, spec_strategy)
+                (
+                    spec_joint,
+                    spec_image,
+                    spec_text,
+                    spec_audio,
+                    spec_video,
+                    spec_strategy,
+                )
             }
         } else {
             let supports_joint_inputs = modalities.iter().any(|m| m == "multimode");
             let supports_image = supports_joint_inputs || modalities.iter().any(|m| m == "image");
             let supports_text = supports_joint_inputs || modalities.iter().any(|m| m == "text");
+            let supports_audio = modalities.iter().any(|m| m == "audio");
+            let supports_video = modalities.iter().any(|m| m == "video");
             let strategy = if supports_joint_inputs {
                 MultimodalStrategy::VlEmbedding
             } else {
@@ -1043,6 +1084,8 @@ impl Config {
                 supports_joint_inputs,
                 supports_image,
                 supports_text,
+                supports_audio,
+                supports_video,
                 strategy,
             )
         };
@@ -1235,6 +1278,8 @@ impl Config {
             strategy,
             supports_text,
             supports_image,
+            supports_audio,
+            supports_video,
             supports_joint_inputs,
             supports_multi_vector,
             supports_mrl,
