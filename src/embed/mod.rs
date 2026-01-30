@@ -169,6 +169,18 @@ pub trait Embedder: Send + Sync {
         }
 
         // Process each modality
+        // TODO: Performance improvement - process modalities concurrently using tokio::try_join!
+        // For batches containing multiple modalities, this could significantly improve throughput
+        // by processing text, image, audio, and video embeddings in parallel rather than sequentially.
+        // Example implementation:
+        // let (text_results, image_results, audio_results, video_results) = tokio::try_join!(
+        //     async { if !texts.is_empty() { self.embed(texts).await } else { Ok(vec![]) } },
+        //     async { if !images.is_empty() { self.embed_multimode(images).await } else { Ok(vec![]) } },
+        //     async { if !audios.is_empty() { self.embed_audio_multimode(audios).await } else { Ok(vec![]) } },
+        //     async { if !videos.is_empty() { self.embed_video_multimode(videos).await } else { Ok(vec![]) } }
+        // )?;
+        // Then merge results back into the results vector using the stored indices.
+        // See: https://github.com/sealad886/librarian/pull/3#discussion_r2745118609
         let mut results = vec![vec![]; inputs.len()];
 
         if !texts.is_empty() {

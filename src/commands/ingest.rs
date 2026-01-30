@@ -19,6 +19,7 @@ use image::imageops::FilterType;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -296,6 +297,115 @@ fn is_perceptual_duplicate(hash: u64, seen: &[u64]) -> bool {
         .any(|seen_hash| hamming_distance(*seen_hash, hash) <= PERCEPTUAL_HASH_MAX_DISTANCE)
 }
 
+/// Check if an IP address is in a private or reserved range to prevent SSRF attacks
+fn is_ip_address_safe(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ipv4) => {
+            // Reject private IP ranges (RFC 1918)
+            if ipv4.is_private() {
+                return false;
+            }
+            // Reject loopback (127.0.0.0/8)
+            if ipv4.is_loopback() {
+                return false;
+            }
+            // Reject link-local (169.254.0.0/16) - includes cloud metadata endpoints
+            if ipv4.is_link_local() {
+                return false;
+            }
+            // Reject broadcast
+            if ipv4.is_broadcast() {
+                return false;
+            }
+            // Reject unspecified (0.0.0.0)
+            if ipv4.is_unspecified() {
+                return false;
+            }
+            // Reject multicast
+            if ipv4.is_multicast() {
+                return false;
+            }
+            // Reject reserved (240.0.0.0/4) - check for class E addresses
+            let octets = ipv4.octets();
+            if octets[0] >= 240 {
+                return false;
+            }
+
+            true
+        }
+        IpAddr::V6(ipv6) => {
+            // Check for IPv4-mapped IPv6 addresses (::ffff:0:0/96)
+            if let Some(ipv4) = ipv6.to_ipv4_mapped() {
+                return is_ip_address_safe(IpAddr::V4(ipv4));
+            }
+
+            // Reject loopback (::1)
+            if ipv6.is_loopback() {
+                return false;
+            }
+            // Reject unspecified (::)
+            if ipv6.is_unspecified() {
+                return false;
+            }
+            // Reject multicast
+            if ipv6.is_multicast() {
+                return false;
+            }
+            // Reject unique local addresses (fc00::/7)
+            let segments = ipv6.segments();
+            if (segments[0] & 0xfe00) == 0xfc00 {
+                return false;
+            }
+            // Reject link-local (fe80::/10)
+            if (segments[0] & 0xffc0) == 0xfe80 {
+                return false;
+            }
+
+            true
+        }
+    }
+}
+
+/// Validate that a URL's resolved IP address is safe to request (not private/reserved)
+fn validate_url_safety(url: &str) -> std::result::Result<(), String> {
+    let parsed = Url::parse(url).map_err(|e| format!("Failed to parse URL: {}", e))?;
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "URL has no host".to_string())?;
+
+    // Only validate http/https URLs
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(format!("Unsupported URL scheme: {}", scheme));
+    }
+
+    // Resolve hostname to IP addresses
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let socket_addrs = format!("{}:{}", host, port)
+        .to_socket_addrs()
+        .map_err(|e| format!("Failed to resolve hostname '{}': {}", host, e))?;
+
+    // Check all resolved IPs - if any are unsafe, reject the URL
+    let mut has_valid_ip = false;
+    for socket_addr in socket_addrs {
+        let ip = socket_addr.ip();
+        if !is_ip_address_safe(ip) {
+            return Err(format!(
+                "URL resolves to unsafe IP address {}: private or reserved ranges are not allowed",
+                ip
+            ));
+        }
+        has_valid_ip = true;
+    }
+
+    if !has_valid_ip {
+        return Err("URL did not resolve to any IP addresses".to_string());
+    }
+
+    Ok(())
+}
+
 /// Fetch accepted image candidates and cache them under base_dir/assets
 async fn fetch_and_cache_images(
     config: &Config,
@@ -313,6 +423,7 @@ async fn fetch_and_cache_images(
     let client = Client::builder()
         .user_agent(&config.crawl.user_agent)
         .timeout(Duration::from_secs(config.crawl.timeout_secs))
+        .redirect(reqwest::redirect::Policy::none()) // Disable redirects to prevent SSRF bypass
         .gzip(true)
         .brotli(true)
         .build();
@@ -334,13 +445,12 @@ async fn fetch_and_cache_images(
     let mut seen_phashes: Vec<u64> = Vec::new();
 
     for (m, _score) in images.iter() {
-        if Url::parse(&m.url)
-            .map(|u| u.scheme().to_string())
-            .map(|s| s != "http" && s != "https")
-            .unwrap_or(true)
-        {
+        // Validate URL safety (SSRF protection)
+        if let Err(e) = validate_url_safety(&m.url) {
+            debug!(url = %m.url, reason = %e, "Skipping image (unsafe URL)");
             continue;
         }
+
         // Fetch
         match client.get(&m.url).send().await {
             Ok(resp) => {
@@ -1752,6 +1862,7 @@ mod tests {
     use crate::embedding_backend::{EmbeddingBackendConfig, EmbeddingBackendKind};
     use crate::models::MultimodalStrategy;
     use crate::parse::{ContentType, ExtractedMedia, Heading, ParsedDocument};
+    use std::net::Ipv6Addr;
 
     fn multimodal_config() -> Config {
         let mut config = Config::default();
@@ -1888,5 +1999,135 @@ mod tests {
 
         assert!(is_perceptual_duplicate(near, &seen));
         assert!(!is_perceptual_duplicate(far, &seen));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_private_ipv4() {
+        // RFC 1918 private ranges
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
+            172, 16, 0, 1
+        ))));
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
+            192, 168, 1, 1
+        ))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_loopback() {
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(127, 1, 1, 1))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_link_local() {
+        // Link-local range (169.254.0.0/16)
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
+            169, 254, 1, 1
+        ))));
+        // AWS/GCP/Azure metadata endpoint
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
+            169, 254, 169, 254
+        ))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_special_addresses() {
+        // Unspecified
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0))));
+        // Broadcast
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
+            255, 255, 255, 255
+        ))));
+        // Multicast
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1))));
+        // Class E (reserved)
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(240, 0, 0, 1))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_accepts_public_ipv4() {
+        // Public IP addresses should be accepted
+        assert!(is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)))); // Google DNS
+        assert!(is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)))); // Cloudflare DNS
+        assert!(is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
+            142, 250, 185, 46
+        )))); // Example public IP
+    }
+
+    #[test]
+    fn test_validate_url_safety_rejects_non_http() {
+        assert!(validate_url_safety("file:///etc/passwd").is_err());
+        assert!(validate_url_safety("ftp://example.com/file").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_safety_accepts_valid_urls() {
+        // Test with well-known public DNS servers
+        // Google DNS 8.8.8.8 - using direct IP to ensure it's public
+        let result = validate_url_safety("http://8.8.8.8/image.png");
+        assert!(result.is_ok(), "Should accept public IP 8.8.8.8");
+
+        // Cloudflare DNS 1.1.1.1
+        let result = validate_url_safety("http://1.1.1.1/image.png");
+        assert!(result.is_ok(), "Should accept public IP 1.1.1.1");
+    }
+
+    #[test]
+    fn test_validate_url_safety_rejects_private_ips_directly() {
+        // Direct IP URLs should be rejected if they're private
+        assert!(validate_url_safety("http://127.0.0.1/image.png").is_err());
+        assert!(validate_url_safety("http://10.0.0.1/image.png").is_err());
+        assert!(validate_url_safety("http://192.168.1.1/image.png").is_err());
+        assert!(validate_url_safety("http://169.254.169.254/latest/meta-data").is_err());
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_ipv6_loopback() {
+        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
+            0, 0, 0, 0, 0, 0, 0, 1
+        ))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_ipv6_unique_local() {
+        // fc00::/7 unique local addresses
+        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
+            0xfc00, 0, 0, 0, 0, 0, 0, 1
+        ))));
+        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
+            0xfd00, 0, 0, 0, 0, 0, 0, 1
+        ))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_ipv6_link_local() {
+        // fe80::/10 link-local addresses
+        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
+            0xfe80, 0, 0, 0, 0, 0, 0, 1
+        ))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_ipv4_mapped_ipv6_private() {
+        // IPv4-mapped IPv6 address for 192.168.1.1
+        // ::ffff:192.168.1.1 = ::ffff:c0a8:0101
+        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
+            0, 0, 0, 0, 0, 0xffff, 0xc0a8, 0x0101
+        ))));
+
+        // IPv4-mapped IPv6 address for 127.0.0.1
+        // ::ffff:127.0.0.1 = ::ffff:7f00:0001
+        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
+            0, 0, 0, 0, 0, 0xffff, 0x7f00, 0x0001
+        ))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_accepts_public_ipv6() {
+        // Google DNS 2001:4860:4860::8888
+        assert!(is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
+            0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888
+        ))));
     }
 }
