@@ -234,7 +234,8 @@ async fn handle_search(
         &query,
         options,
     )
-    .await {
+    .await
+    {
         Ok(result) => {
             if result.results.is_empty() {
                 return ToolResult::text("No results found matching your query.");
@@ -568,7 +569,15 @@ async fn run_update_background(
         prune_orphans,
     };
 
-    cmd_update(&config, &embedding_config, embedder.as_ref(), &db, &store, options).await?;
+    cmd_update(
+        &config,
+        &embedding_config,
+        embedder.as_ref(),
+        &db,
+        &store,
+        options,
+    )
+    .await?;
     Ok(())
 }
 

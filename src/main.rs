@@ -327,7 +327,15 @@ async fn run() -> Result<()> {
         Commands::Init { .. } => unreachable!(),
 
         Commands::Ingest { source } => {
-            handle_ingest(&config, &embedding_config, embedder.as_ref(), &db, &store, source).await?;
+            handle_ingest(
+                &config,
+                &embedding_config,
+                embedder.as_ref(),
+                &db,
+                &store,
+                source,
+            )
+            .await?;
         }
 
         Commands::Query {
@@ -345,9 +353,16 @@ async fn run() -> Result<()> {
                 ..Default::default()
             };
 
-            let results =
-                cmd_query(&config, &embedding_config, embedder.as_ref(), &db, &store, &query, options)
-                    .await?;
+            let results = cmd_query(
+                &config,
+                &embedding_config,
+                embedder.as_ref(),
+                &db,
+                &store,
+                &query,
+                options,
+            )
+            .await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&results)?);
@@ -412,9 +427,15 @@ async fn run() -> Result<()> {
                 batch_size,
             };
 
-            let stats =
-                cmd_reindex(&config, &embedding_config, &db, &store, embedder.as_ref(), options)
-                    .await?;
+            let stats = cmd_reindex(
+                &config,
+                &embedding_config,
+                &db,
+                &store,
+                embedder.as_ref(),
+                options,
+            )
+            .await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&stats)?);
@@ -429,7 +450,15 @@ async fn run() -> Result<()> {
                 prune_orphans: !skip_prune,
             };
 
-            let stats = cmd_update(&config, &embedding_config, embedder.as_ref(), &db, &store, options).await?;
+            let stats = cmd_update(
+                &config,
+                &embedding_config,
+                embedder.as_ref(),
+                &db,
+                &store,
+                options,
+            )
+            .await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&stats)?);
@@ -681,7 +710,10 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
                             stored_dimension, stored_model
                         );
                         if stored_dimension != embedding_config.dimension {
-                            println!("  ❌ Current config has different dimension: {}", embedding_config.dimension);
+                            println!(
+                                "  ❌ Current config has different dimension: {}",
+                                embedding_config.dimension
+                            );
                             println!(
                                 "  Remediation: Run 'librarian db reset' to align with current config"
                             );
@@ -723,7 +755,9 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
                             "  Current: {} dimensions, model '{}'",
                             expected_dimension, expected_model
                         );
-                        println!("  Remediation: Run 'librarian db reset' and reindex, or revert config");
+                        println!(
+                            "  Remediation: Run 'librarian db reset' and reindex, or revert config"
+                        );
                     }
                 }
             }
@@ -770,7 +804,9 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
                     if json {
                         println!(r#"{{"exists": false}}"#);
                     } else {
-                        println!("Collection does not exist. Run 'librarian db init' to create it.");
+                        println!(
+                            "Collection does not exist. Run 'librarian db init' to create it."
+                        );
                     }
                 }
             }
@@ -824,8 +860,18 @@ async fn handle_ingest(
             extensions: _,
             exclude: _,
         } => {
-            let stats =
-                cmd_ingest_dir(config, embedding, embedder, db, store, &path, name, RunOperation::Ingest, true).await?;
+            let stats = cmd_ingest_dir(
+                config,
+                embedding,
+                embedder,
+                db,
+                store,
+                &path,
+                name,
+                RunOperation::Ingest,
+                true,
+            )
+            .await?;
 
             // Display overlap warnings
             for warning in &stats.overlap_warnings {

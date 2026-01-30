@@ -1,11 +1,13 @@
 use super::{AudioEmbedInput, Embedder, ImageEmbedInput, MediaModality, VideoEmbedInput};
 use crate::config::{EmbeddingDimensionSource, ResolvedEmbeddingConfig};
-use crate::embedding_backend::{AudioTextInput, EmbeddingBackendClient, ImageTextInput, VideoTextInput};
+use crate::embedding_backend::{
+    AudioTextInput, EmbeddingBackendClient, ImageTextInput, VideoTextInput,
+};
 use crate::error::{Error, Result};
 use crate::models::{embedding_model_capabilities, EmbeddingModelCapabilities};
 use async_trait::async_trait;
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use std::fs;
 
 pub struct HttpEmbedder {
@@ -46,9 +48,8 @@ impl HttpEmbedder {
     }
 
     fn encode_file_base64(path: &str) -> Result<String> {
-        let bytes = fs::read(path).map_err(|e| {
-            Error::Embedding(format!("Failed to read file '{}': {}", path, e))
-        })?;
+        let bytes = fs::read(path)
+            .map_err(|e| Error::Embedding(format!("Failed to read file '{}': {}", path, e)))?;
         Ok(STANDARD.encode(bytes))
     }
 

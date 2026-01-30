@@ -504,7 +504,9 @@ mod tests {
 
         // Video models
         assert!(is_video_embedding_model("Qwen/Qwen3-VL-Embedding-2B"));
-        assert!(is_video_embedding_model("OpenGVLab/InternVideo2-Stage2_1B-224p-f4"));
+        assert!(is_video_embedding_model(
+            "OpenGVLab/InternVideo2-Stage2_1B-224p-f4"
+        ));
         assert!(!is_video_embedding_model("BAAI/bge-small-en-v1.5"));
     }
 

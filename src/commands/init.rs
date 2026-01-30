@@ -6,8 +6,8 @@ use crate::meta::MetaDb;
 use crate::store::QdrantStore;
 use crossterm::cursor;
 use crossterm::event::{self, Event, KeyCode};
-use crossterm::terminal;
 use crossterm::execute;
+use crossterm::terminal;
 use std::collections::HashSet;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
@@ -111,26 +111,24 @@ pub async fn cmd_init(options: InitOptions) -> Result<()> {
 
     // Attempt to resolve embedding config to get dimension for Qdrant collection
     match config.resolve_embedding_config().await {
-        Ok(embedding_config) => {
-            match QdrantStore::connect(&config, &embedding_config).await {
-                Ok(store) => match store.ensure_collection().await {
-                    Ok(_) => info!("Qdrant collection '{}' ready", config.collection_name),
-                    Err(e) => {
-                        tracing::warn!(
-                            "Could not create Qdrant collection: {}. You can create it later.",
-                            e
-                        );
-                    }
-                },
+        Ok(embedding_config) => match QdrantStore::connect(&config, &embedding_config).await {
+            Ok(store) => match store.ensure_collection().await {
+                Ok(_) => info!("Qdrant collection '{}' ready", config.collection_name),
                 Err(e) => {
                     tracing::warn!(
-                        "Could not connect to Qdrant at {}: {}. Make sure Qdrant is running.",
-                        config.qdrant_url,
+                        "Could not create Qdrant collection: {}. You can create it later.",
                         e
                     );
                 }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "Could not connect to Qdrant at {}: {}. Make sure Qdrant is running.",
+                    config.qdrant_url,
+                    e
+                );
             }
-        }
+        },
         Err(e) => {
             tracing::warn!(
                 "Could not resolve embedding config: {}. Qdrant collection will be created on first ingest.",
@@ -180,7 +178,11 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
     config.qdrant_url = prompt_string(
         "Qdrant URL",
         &config.qdrant_url,
-        |value| Url::parse(value).map(|_| ()).map_err(|_| "Invalid URL".to_string()),
+        |value| {
+            Url::parse(value)
+                .map(|_| ())
+                .map_err(|_| "Invalid URL".to_string())
+        },
         false,
     )?;
 
@@ -206,7 +208,11 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
 
     // Embedding backend selection
     let backend_options = ["xinference (automatic)", "http (custom server)"];
-    let default_backend_index = if config.embedding.backend == "http" { 1 } else { 0 };
+    let default_backend_index = if config.embedding.backend == "http" {
+        1
+    } else {
+        0
+    };
     let backend_selection = prompt_select(
         "Embedding backend",
         &backend_options,
@@ -225,7 +231,11 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
         config.embedding.url = prompt_string(
             "Embedding server URL",
             &config.embedding.url,
-            |value| Url::parse(value).map(|_| ()).map_err(|_| "Invalid URL".to_string()),
+            |value| {
+                Url::parse(value)
+                    .map(|_| ())
+                    .map_err(|_| "Invalid URL".to_string())
+            },
             false,
         )?;
     }
@@ -302,7 +312,11 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
         false,
     )?;
 
-    config.query.hybrid_search = prompt_confirm("Enable hybrid BM25 + vector search?", config.query.hybrid_search, false)?;
+    config.query.hybrid_search = prompt_confirm(
+        "Enable hybrid BM25 + vector search?",
+        config.query.hybrid_search,
+        false,
+    )?;
     if config.query.hybrid_search {
         config.query.bm25_weight = prompt_f32(
             "BM25 weight (0-1)",
@@ -322,7 +336,11 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
     if config.reranker.enabled {
         // Reranker backend selection (inherit from embedding by default)
         let reranker_backend_options = ["xinference (automatic)", "http (custom server)"];
-        let default_reranker_backend = if config.reranker.backend == "http" { 1 } else { 0 };
+        let default_reranker_backend = if config.reranker.backend == "http" {
+            1
+        } else {
+            0
+        };
         let reranker_backend_selection = prompt_select(
             "Reranker backend",
             &reranker_backend_options,
@@ -338,17 +356,18 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
             config.reranker.url = prompt_string(
                 "Reranker server URL",
                 &config.reranker.url,
-                |value| Url::parse(value).map(|_| ()).map_err(|_| "Invalid URL".to_string()),
+                |value| {
+                    Url::parse(value)
+                        .map(|_| ())
+                        .map_err(|_| "Invalid URL".to_string())
+                },
                 false,
             )?;
         }
 
         let reranker_models = reranker_model_choices(&config.reranker.model);
-        config.reranker.model = prompt_select_with_custom(
-            "Reranker model",
-            &reranker_models,
-            &config.reranker.model,
-        )?;
+        config.reranker.model =
+            prompt_select_with_custom("Reranker model", &reranker_models, &config.reranker.model)?;
         config.reranker.top_k = prompt_usize(
             "Reranker top_k",
             config.reranker.top_k,
@@ -473,11 +492,7 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
         false,
     )?;
 
-    let configure_advanced = prompt_confirm(
-        "Configure advanced crawl settings?",
-        false,
-        false,
-    )?;
+    let configure_advanced = prompt_confirm("Configure advanced crawl settings?", false, false)?;
     if configure_advanced {
         config.crawl.allowed_domains = prompt_string_list(
             "Allowed domains (comma-separated, empty for same domain)",
@@ -782,7 +797,12 @@ fn prompt_confirm(label: &str, default: bool, auto_accept: bool) -> Result<bool>
     Ok(selection == 0)
 }
 
-fn prompt_select(label: &str, options: &[impl AsRef<str>], default_index: usize, auto_accept: bool) -> Result<usize> {
+fn prompt_select(
+    label: &str,
+    options: &[impl AsRef<str>],
+    default_index: usize,
+    auto_accept: bool,
+) -> Result<usize> {
     if auto_accept {
         return Ok(default_index.min(options.len().saturating_sub(1)));
     }

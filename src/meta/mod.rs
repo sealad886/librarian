@@ -365,11 +365,10 @@ impl MetaDb {
             .await?;
         }
 
-        let has_modality: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM pragma_table_info('chunks') WHERE name='modality'",
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+        let has_modality: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM pragma_table_info('chunks') WHERE name='modality'")
+                .fetch_optional(&self.pool)
+                .await?;
 
         if has_modality.is_none() {
             sqlx::query("ALTER TABLE chunks ADD COLUMN modality TEXT NOT NULL DEFAULT 'text'")
@@ -377,11 +376,10 @@ impl MetaDb {
                 .await?;
         }
 
-        let has_media_url: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM pragma_table_info('chunks') WHERE name='media_url'",
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+        let has_media_url: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM pragma_table_info('chunks') WHERE name='media_url'")
+                .fetch_optional(&self.pool)
+                .await?;
 
         if has_media_url.is_none() {
             sqlx::query("ALTER TABLE chunks ADD COLUMN media_url TEXT")
@@ -389,11 +387,10 @@ impl MetaDb {
                 .await?;
         }
 
-        let has_media_hash: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM pragma_table_info('chunks') WHERE name='media_hash'",
-        )
-        .fetch_optional(&self.pool)
-        .await?;
+        let has_media_hash: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM pragma_table_info('chunks') WHERE name='media_hash'")
+                .fetch_optional(&self.pool)
+                .await?;
 
         if has_media_hash.is_none() {
             sqlx::query("ALTER TABLE chunks ADD COLUMN media_hash TEXT")
@@ -422,10 +419,9 @@ impl MetaDb {
             return Ok(0);
         }
 
-        let version: Option<(i32,)> =
-            sqlx::query_as("SELECT MAX(version) FROM schema_version")
-                .fetch_optional(&self.pool)
-                .await?;
+        let version: Option<(i32,)> = sqlx::query_as("SELECT MAX(version) FROM schema_version")
+            .fetch_optional(&self.pool)
+            .await?;
 
         Ok(version.map(|v| v.0).unwrap_or(0))
     }
@@ -1311,7 +1307,10 @@ mod tests {
 
         // upsert_document MUST return the canonical (original) document ID
         let stored2 = db.upsert_document(&doc2).await.unwrap();
-        assert_eq!(stored2.id, original_doc_id, "upsert_document must return canonical doc ID");
+        assert_eq!(
+            stored2.id, original_doc_id,
+            "upsert_document must return canonical doc ID"
+        );
 
         // Now we can safely create a chunk using the returned ID
         let chunk2 = Chunk::new(

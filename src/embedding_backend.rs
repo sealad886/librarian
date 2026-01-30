@@ -199,9 +199,9 @@ impl EmbeddingBackendClient {
     ) -> Result<T> {
         let mut last_err: Option<Error> = None;
         for attempt in 0..=self.retries {
-            let req = request.try_clone().ok_or_else(|| {
-                Error::Embedding("Failed to clone backend request".to_string())
-            })?;
+            let req = request
+                .try_clone()
+                .ok_or_else(|| Error::Embedding("Failed to clone backend request".to_string()))?;
             match req.send().await {
                 Ok(response) => match response.error_for_status() {
                     Ok(ok) => return Ok(ok.json::<T>().await?),
@@ -215,9 +215,8 @@ impl EmbeddingBackendClient {
             }
         }
 
-        Err(last_err.unwrap_or_else(|| {
-            Error::Embedding("Embedding backend request failed".to_string())
-        }))
+        Err(last_err
+            .unwrap_or_else(|| Error::Embedding("Embedding backend request failed".to_string())))
     }
 
     pub async fn capabilities(&self) -> Result<BackendCapabilities> {

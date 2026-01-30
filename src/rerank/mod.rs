@@ -13,8 +13,7 @@ use crate::embedding_backend::EmbeddingBackendKind;
 use crate::error::{Error, Result};
 use crate::models::reranker_model_spec;
 use crate::xinference::{
-    ensure_xinference_ready, get_or_init_xinference_manager, XinferenceManager,
-    XinferenceReranker,
+    ensure_xinference_ready, get_or_init_xinference_manager, XinferenceManager, XinferenceReranker,
 };
 use async_trait::async_trait;
 use std::sync::Arc;

@@ -130,11 +130,7 @@ pub fn xinference_reranker_models() -> HashSet<&'static str> {
 /// Map HuggingFace model ID to Xinference model name.
 /// Removes the organization prefix (e.g., "BAAI/bge-small-en-v1.5" -> "bge-small-en-v1.5")
 pub fn hf_to_xinference_name(hf_model: &str) -> String {
-    hf_model
-        .split('/')
-        .last()
-        .unwrap_or(hf_model)
-        .to_string()
+    hf_model.split('/').last().unwrap_or(hf_model).to_string()
 }
 
 /// Get the Xinference model spec for a given model name
@@ -221,10 +217,7 @@ impl XinferenceManager {
 
         // Check if xinference is already running externally on this port
         if self.health_check().await? {
-            info!(
-                "Xinference server already running on port {}",
-                self.port
-            );
+            info!("Xinference server already running on port {}", self.port);
             return Ok(());
         }
 
@@ -446,9 +439,11 @@ impl Drop for XinferenceManager {
 static GLOBAL_XINFERENCE_MANAGER: OnceLock<Mutex<Option<XinferenceManager>>> = OnceLock::new();
 
 /// Get or initialize the global Xinference manager
-pub async fn get_or_init_xinference_manager(port: u16) -> Result<&'static Mutex<Option<XinferenceManager>>> {
+pub async fn get_or_init_xinference_manager(
+    port: u16,
+) -> Result<&'static Mutex<Option<XinferenceManager>>> {
     let manager_lock = GLOBAL_XINFERENCE_MANAGER.get_or_init(|| Mutex::new(None));
-    
+
     {
         let mut guard = manager_lock.lock().await;
         if guard.is_none() {
@@ -456,7 +451,7 @@ pub async fn get_or_init_xinference_manager(port: u16) -> Result<&'static Mutex<
             *guard = Some(manager);
         }
     }
-    
+
     Ok(manager_lock)
 }
 

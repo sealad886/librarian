@@ -171,32 +171,51 @@ pub fn default_js_render_wait() -> u64 {
 }
 
 /// Default: multimodal crawling disabled
-pub fn default_multimodal_enabled() -> bool { false }
+pub fn default_multimodal_enabled() -> bool {
+    false
+}
 
 /// Default: include images
-pub fn default_multimodal_include_images() -> bool { true }
+pub fn default_multimodal_include_images() -> bool {
+    true
+}
 
 /// Default: include audio disabled
-pub fn default_multimodal_include_audio() -> bool { false }
+pub fn default_multimodal_include_audio() -> bool {
+    false
+}
 
 /// Default: include video disabled
-pub fn default_multimodal_include_video() -> bool { false }
+pub fn default_multimodal_include_video() -> bool {
+    false
+}
 
 /// Default: maximum asset bytes (5 MB)
-pub fn default_multimodal_max_asset_bytes() -> usize { 5_000_000 }
+pub fn default_multimodal_max_asset_bytes() -> usize {
+    5_000_000
+}
 
 /// Default: minimum asset bytes (4 KB)
-pub fn default_multimodal_min_asset_bytes() -> usize { 4_096 }
+pub fn default_multimodal_min_asset_bytes() -> usize {
+    4_096
+}
 
 /// Default: maximum assets per page
-pub fn default_multimodal_max_assets_per_page() -> usize { 10 }
+pub fn default_multimodal_max_assets_per_page() -> usize {
+    10
+}
 
 /// Default: allowed MIME prefixes (images only)
-pub fn default_multimodal_allowed_mime_prefixes() -> Vec<String> { vec!["image/".to_string()] }
+pub fn default_multimodal_allowed_mime_prefixes() -> Vec<String> {
+    vec!["image/".to_string()]
+}
 
 /// Default: minimum relevance score threshold
-pub fn default_multimodal_min_relevance_score() -> f32 { 0.6 }
+pub fn default_multimodal_min_relevance_score() -> f32 {
+    0.6
+}
 
 /// Default: include CSS background images disabled
-pub fn default_multimodal_include_css_background_images() -> bool { false }
-
+pub fn default_multimodal_include_css_background_images() -> bool {
+    false
+}

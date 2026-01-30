@@ -15,8 +15,7 @@ use crate::config::ResolvedEmbeddingConfig;
 use crate::embedding_backend::EmbeddingBackendKind;
 use crate::error::{Error, Result};
 use crate::xinference::{
-    ensure_xinference_ready, get_or_init_xinference_manager, XinferenceEmbedder,
-    XinferenceManager,
+    ensure_xinference_ready, get_or_init_xinference_manager, XinferenceEmbedder, XinferenceManager,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
