@@ -2014,4 +2014,73 @@ mod tests {
         assert!(is_perceptual_duplicate(near, &seen));
         assert!(!is_perceptual_duplicate(far, &seen));
     }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_private_ipv4() {
+        // RFC 1918 private ranges
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(172, 16, 0, 1))));
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_loopback() {
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(127, 1, 1, 1))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_link_local() {
+        // Link-local range (169.254.0.0/16)
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1))));
+        // AWS/GCP/Azure metadata endpoint
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_rejects_special_addresses() {
+        // Unspecified
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0))));
+        // Broadcast
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255))));
+        // Multicast
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1))));
+        // Class E (reserved)
+        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(240, 0, 0, 1))));
+    }
+
+    #[test]
+    fn test_is_ip_address_safe_accepts_public_ipv4() {
+        // Public IP addresses should be accepted
+        assert!(is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)))); // Google DNS
+        assert!(is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)))); // Cloudflare DNS
+        assert!(is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(142, 250, 185, 46)))); // Example public IP
+    }
+
+    #[test]
+    fn test_validate_url_safety_rejects_non_http() {
+        assert!(validate_url_safety("file:///etc/passwd").is_err());
+        assert!(validate_url_safety("ftp://example.com/file").is_err());
+    }
+
+    #[test]
+    fn test_validate_url_safety_accepts_valid_urls() {
+        // Test with well-known public DNS servers
+        // Google DNS 8.8.8.8 - using direct IP to ensure it's public
+        let result = validate_url_safety("http://8.8.8.8/image.png");
+        assert!(result.is_ok(), "Should accept public IP 8.8.8.8");
+        
+        // Cloudflare DNS 1.1.1.1
+        let result = validate_url_safety("http://1.1.1.1/image.png");
+        assert!(result.is_ok(), "Should accept public IP 1.1.1.1");
+    }
+
+    #[test]
+    fn test_validate_url_safety_rejects_private_ips_directly() {
+        // Direct IP URLs should be rejected if they're private
+        assert!(validate_url_safety("http://127.0.0.1/image.png").is_err());
+        assert!(validate_url_safety("http://10.0.0.1/image.png").is_err());
+        assert!(validate_url_safety("http://192.168.1.1/image.png").is_err());
+        assert!(validate_url_safety("http://169.254.169.254/latest/meta-data").is_err());
+    }
 }
