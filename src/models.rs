@@ -228,7 +228,6 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
         supports_mrl: false,
         max_batch: 16,
     },
-
     // Video embedding models - text encoder only (video not supported by sidecar)
     EmbeddingModelSpec {
         id: "OpenGVLab/InternVideo2-Stage2_1B-224p-f4",
@@ -247,7 +246,6 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
         supports_mrl: false,
         max_batch: 4,
     },
-
     EmbeddingModelSpec {
         id: "Salesforce/blip2-itm-vit-g",
         family: "blip2",
