@@ -7,14 +7,18 @@ pub fn parse_plain_text(content: &str) -> ParsedDocument {
     let text = normalize_whitespace(content);
 
     // Try to extract a title from the first line
-    let title = text.lines().next().and_then(|line| {
-        let trimmed = line.trim();
-        if trimmed.len() < 100 && !trimmed.is_empty() {
-            Some(trimmed.to_string())
-        } else {
-            None
-        }
-    });
+    let title = text
+        .lines()
+        .next()
+        .map(|line| {
+            let trimmed = line.trim();
+            if trimmed.len() < 100 && !trimmed.is_empty() {
+                Some(trimmed.to_string())
+            } else {
+                None
+            }
+        })
+        .flatten();
 
     ParsedDocument {
         title,

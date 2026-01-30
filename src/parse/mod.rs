@@ -202,7 +202,7 @@ pub fn parse_content(
 pub fn is_binary_content(data: &[u8]) -> bool {
     // Check for null bytes in the first 8KB
     let check_len = std::cmp::min(data.len(), 8192);
-    data[..check_len].contains(&0)
+    data[..check_len].iter().any(|&b| b == 0)
 }
 
 /// Check if file should be skipped based on extension

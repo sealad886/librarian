@@ -41,7 +41,7 @@ impl LogWriter {
         if line.is_empty() {
             let _ = multi_progress().println(String::new());
         } else {
-            let _ = multi_progress().println(line);
+            let _ = multi_progress().println(line.to_string());
         }
         self.buffer.clear();
     }
@@ -57,7 +57,7 @@ impl Write for LogWriter {
             if line.is_empty() {
                 let _ = multi_progress().println(String::new());
             } else {
-                let _ = multi_progress().println(line);
+                let _ = multi_progress().println(line.to_string());
             }
             self.buffer.drain(..idx + 1);
         }
