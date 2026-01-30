@@ -1862,7 +1862,7 @@ mod tests {
     use crate::embedding_backend::{EmbeddingBackendConfig, EmbeddingBackendKind};
     use crate::models::MultimodalStrategy;
     use crate::parse::{ContentType, ExtractedMedia, Heading, ParsedDocument};
-    use std::net::Ipv6Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn multimodal_config() -> Config {
         let mut config = Config::default();
