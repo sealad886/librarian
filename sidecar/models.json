@@ -38,7 +38,7 @@
   {
     "id": "Qwen/Qwen3-VL-Embedding-2B",
     "family": "qwen3-vl",
-    "modalities": ["text", "image"],
+    "modalities": ["text", "image", "video"],
     "embedding_dim": 2048,
     "multivector": false,
     "supports_mrl": false,
@@ -47,7 +47,7 @@
   {
     "id": "Qwen/Qwen3-VL-Embedding-8B",
     "family": "qwen3-vl",
-    "modalities": ["text", "image"],
+    "modalities": ["text", "image", "video"],
     "embedding_dim": 4096,
     "multivector": false,
     "supports_mrl": false,
@@ -72,7 +72,7 @@
     "max_batch": 16
   },
   {
-    "id": "laion/CLAP",
+    "id": "laion/clap-htsat-unfused",
     "family": "clap",
     "modalities": ["text", "audio"],
     "embedding_dim": 512,
@@ -102,7 +102,7 @@
     "notes": "Video-language model for video understanding"
   },
   {
-    "id": "Salesforce/blip2-opt-2.7b",
+    "id": "Salesforce/blip2-itm-vit-g",
     "family": "blip2",
     "modalities": ["text", "image", "video"],
     "embedding_dim": 768,
