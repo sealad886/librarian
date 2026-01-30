@@ -11,7 +11,7 @@ use librarian::{
         ReindexOptions, UpdateOptions,
     },
     config::Config,
-    embed::create_embedder,
+    embed::create_embedder_auto,
     error::Result,
     mcp::McpServer,
     meta::{MetaDb, RunOperation},
@@ -290,7 +290,7 @@ async fn run() -> Result<()> {
 
     // Resolve embedding config and create embedder to get dimension
     let embedding_config = config.resolve_embedding_config().await?;
-    let embedder = create_embedder(&embedding_config)?;
+    let embedder = create_embedder_auto(&embedding_config).await?;
 
     // Initialize components
     let db = MetaDb::new(&config.paths.db_file).await?;

@@ -30,15 +30,15 @@ pub fn default_embedding_multimodal() -> bool {
     false
 }
 
-/// Default embedding backend kind
+/// Default embedding backend kind (xinference for zero-config experience)
 pub fn default_embedding_backend() -> String {
-    "http".to_string()
+    "xinference".to_string()
 }
 
-/// Default embedding backend URL
+/// Default embedding backend URL (used for xinference and http backends)
 pub fn default_embedding_backend_url() -> String {
     std::env::var("LIBRARIAN_EMBEDDING_BACKEND_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:7997".to_string())
+        .unwrap_or_else(|_| "http://127.0.0.1:9997".to_string())
 }
 
 /// Default custom embedding backend kind
@@ -138,6 +138,16 @@ pub fn default_reranker_model() -> String {
 /// Default: reranker disabled
 pub fn default_reranker_enabled() -> bool {
     false
+}
+
+/// Default reranker backend kind (xinference for auto-managed)
+pub fn default_reranker_backend() -> String {
+    "xinference".to_string()
+}
+
+/// Default reranker backend URL
+pub fn default_reranker_url() -> String {
+    "http://localhost:9997".to_string()
 }
 
 /// Default number of results to return after reranking

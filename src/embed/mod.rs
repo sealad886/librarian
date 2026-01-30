@@ -2,7 +2,8 @@
 //!
 //! This module provides an abstraction over embedding models with:
 //! - A trait for different embedding backends
-//! - HTTP embedding backend
+//! - HTTP embedding backend (for custom servers)
+//! - Xinference embedding backend (zero-config, automatic)
 //! - Batch processing for efficiency
 
 mod http_backend;
@@ -10,8 +11,16 @@ mod http_backend;
 pub use http_backend::*;
 
 use crate::config::ResolvedEmbeddingConfig;
+use crate::embedding_backend::EmbeddingBackendKind;
 use crate::error::{Error, Result};
+use crate::xinference::{
+    ensure_xinference_ready, get_or_init_xinference_manager, XinferenceEmbedder,
+    XinferenceManager,
+};
 use async_trait::async_trait;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tracing::info;
 
 #[derive(Debug, Clone)]
 pub struct ImageEmbedInput {
@@ -64,10 +73,79 @@ pub trait Embedder: Send + Sync {
     fn model_name(&self) -> &str;
 }
 
-/// Create an embedder based on configuration
+/// Create an embedder based on configuration (sync, for HTTP backend only)
 pub fn create_embedder(config: &ResolvedEmbeddingConfig) -> Result<Box<dyn Embedder>> {
     let embedder = HttpEmbedder::new(config)?;
     Ok(Box::new(embedder))
+}
+
+/// Create an embedder automatically based on backend kind
+///
+/// For xinference backend: automatically ensures xinference is installed, server is running,
+/// and model is launched before creating the embedder.
+///
+/// For http backend: creates HttpEmbedder directly.
+pub async fn create_embedder_auto(config: &ResolvedEmbeddingConfig) -> Result<Box<dyn Embedder>> {
+    match config.backend.kind {
+        EmbeddingBackendKind::Xinference => {
+            info!("Using Xinference backend, ensuring dependencies...");
+
+            // Ensure xinference is installed and ready (sync check)
+            ensure_xinference_ready()?;
+
+            // Extract port from URL
+            let port = extract_port_from_url(&config.backend.url)?;
+
+            // Get or initialize the global manager
+            let manager_lock = get_or_init_xinference_manager(port).await?;
+
+            // Ensure server is running
+            {
+                let mut guard = manager_lock.lock().await;
+                if let Some(ref mut manager) = *guard {
+                    manager.ensure_running().await?;
+                }
+            }
+
+            // Create embedder (this will launch model if needed)
+            let embedder = XinferenceEmbedder::from_global_manager(&config.model_id).await?;
+            Ok(Box::new(embedder))
+        }
+        EmbeddingBackendKind::Http => {
+            let embedder = HttpEmbedder::new(config)?;
+            Ok(Box::new(embedder))
+        }
+    }
+}
+
+/// Extract port number from a URL string
+fn extract_port_from_url(url: &str) -> Result<u16> {
+    url::Url::parse(url)
+        .map_err(|e| Error::Config(format!("Invalid backend URL: {}", e)))?
+        .port()
+        .unwrap_or(9997) // Default xinference port
+        .try_into()
+        .map_err(|_| Error::Config("Port out of range".into()))
+}
+
+/// Create an embedder with optional Xinference manager support
+pub async fn create_embedder_with_xinference(
+    config: &ResolvedEmbeddingConfig,
+    xinf_manager: Option<Arc<Mutex<XinferenceManager>>>,
+) -> Result<Box<dyn Embedder>> {
+    match config.backend.kind {
+        EmbeddingBackendKind::Xinference => {
+            let manager = xinf_manager.ok_or_else(|| {
+                Error::Config("Xinference manager required for xinference backend".into())
+            })?;
+            let embedder = XinferenceEmbedder::new(manager, &config.model_id).await?;
+            Ok(Box::new(embedder))
+        }
+        EmbeddingBackendKind::Http => {
+            let embedder = HttpEmbedder::new(config)?;
+            Ok(Box::new(embedder))
+        }
+    }
 }
 
 /// Helper to embed in batches with progress

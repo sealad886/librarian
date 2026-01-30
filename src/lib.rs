@@ -20,6 +20,7 @@ pub mod progress;
 pub mod rank;
 pub mod rerank;
 pub mod store;
+pub mod xinference;
 
 pub use config::Config;
 pub use error::{Error, Result};

@@ -10,6 +10,7 @@ use crate::embedding_backend::{
     BackendCapabilities, EmbeddingBackendClient, EmbeddingBackendConfig, EmbeddingBackendKind,
 };
 use crate::error::{Error, Result};
+use crate::xinference::{get_xinference_model_spec, hf_to_xinference_name, DEFAULT_XINFERENCE_PORT};
 use std::str::FromStr;
 use crate::models::{
     allowlisted_embedding_models, allowlisted_reranker_models, embedding_model_capabilities,
@@ -308,6 +309,14 @@ pub struct RerankerConfig {
     #[serde(default = "default_reranker_model")]
     pub model: String,
 
+    /// Reranker backend kind (xinference, http)
+    #[serde(default = "default_reranker_backend")]
+    pub backend: String,
+
+    /// Reranker backend URL
+    #[serde(default = "default_reranker_url")]
+    pub url: String,
+
     /// Number of results to return after reranking
     #[serde(default = "default_reranker_top_k")]
     pub top_k: usize,
@@ -465,6 +474,8 @@ impl Default for RerankerConfig {
         Self {
             enabled: default_reranker_enabled(),
             model: default_reranker_model(),
+            backend: default_reranker_backend(),
+            url: default_reranker_url(),
             top_k: default_reranker_top_k(),
         }
     }
@@ -739,6 +750,114 @@ impl Config {
         Ok(())
     }
 
+    /// Resolve embedding configuration for Xinference backend using model registry.
+    /// This avoids probing since Xinference server may not be running yet.
+    async fn resolve_xinference_embedding_config(
+        &self,
+        model_id: &str,
+        allowlisted: Option<&crate::models::EmbeddingModelSpec>,
+    ) -> Result<ResolvedEmbeddingConfig> {
+        let xinf_name = hf_to_xinference_name(model_id);
+        
+        // Try Xinference model registry first, then fall back to allowlist
+        let xinf_spec = get_xinference_model_spec(model_id);
+        
+        let dimension = if let Some(config_dim) = self.embedding.dimension {
+            config_dim
+        } else if let Some(ref spec) = xinf_spec {
+            spec.dimension
+        } else if let Some(spec) = allowlisted {
+            spec.default_dimension.ok_or_else(|| {
+                Error::Config(format!(
+                    "Embedding dimension could not be determined for model '{}'; set embedding.dimension",
+                    model_id
+                ))
+            })?
+        } else {
+            return Err(Error::Config(format!(
+                "Unknown Xinference embedding model: '{}'. Supported models include: bge-small-en-v1.5, bge-base-en-v1.5, bge-large-en-v1.5, all-MiniLM-L6-v2. Set embedding.dimension if using a custom model.",
+                model_id
+            )));
+        };
+
+        let dimension_source = if self.embedding.dimension.is_some() {
+            EmbeddingDimensionSource::Config
+        } else if xinf_spec.is_some() || allowlisted.is_some() {
+            EmbeddingDimensionSource::Registry
+        } else {
+            EmbeddingDimensionSource::Config
+        };
+
+        let family = allowlisted
+            .map(|spec| spec.family.to_string())
+            .unwrap_or_else(|| "xinference".to_string());
+
+        let modalities = allowlisted
+            .map(|spec| spec.modalities.iter().map(|m| (*m).to_string()).collect())
+            .unwrap_or_else(|| vec!["text".to_string()]);
+
+        let (supports_text, supports_image, supports_joint_inputs, strategy, supports_multi_vector) =
+            if let Some(spec) = allowlisted {
+                (
+                    spec.capabilities.supports_text,
+                    spec.capabilities.supports_image,
+                    spec.capabilities.supports_joint_inputs,
+                    spec.capabilities.strategy,
+                    spec.capabilities.supports_multi_vector,
+                )
+            } else {
+                (true, false, false, MultimodalStrategy::DualEncoder, false)
+            };
+
+        let supports_mrl = allowlisted.map(|spec| spec.supports_mrl).unwrap_or(false);
+        let max_batch = allowlisted
+            .map(|spec| spec.max_batch)
+            .unwrap_or(self.embedding.batch_size.max(1));
+
+        // Xinference backend URL uses default port
+        let backend_url = format!("http://127.0.0.1:{}", DEFAULT_XINFERENCE_PORT);
+
+        let backend = EmbeddingBackendConfig {
+            kind: EmbeddingBackendKind::Xinference,
+            url: backend_url,
+        };
+
+        if supports_multi_vector || strategy == MultimodalStrategy::LateInteraction {
+            return Err(Error::Embedding(format!(
+                "Late-interaction embedding models like '{}' are not supported",
+                model_id
+            )));
+        }
+
+        if self.embedding.multimodal && !(supports_image || supports_joint_inputs) {
+            return Err(Error::Embedding(format!(
+                "embedding.multimodal is enabled, but model '{}' does not support image inputs",
+                model_id
+            )));
+        }
+
+        debug!(
+            "Resolved Xinference embedding config: model={}, xinf_name={}, dimension={}",
+            model_id, xinf_name, dimension
+        );
+
+        Ok(ResolvedEmbeddingConfig {
+            model_id: model_id.to_string(),
+            family,
+            modalities,
+            dimension,
+            dimension_source,
+            backend,
+            strategy,
+            supports_text,
+            supports_image,
+            supports_joint_inputs,
+            supports_multi_vector,
+            supports_mrl,
+            max_batch,
+        })
+    }
+
     /// Resolve embedding configuration against allowlist and backend probe
     pub async fn resolve_embedding_config(&self) -> Result<ResolvedEmbeddingConfig> {
         let raw_model = self.embedding.model.trim();
@@ -785,14 +904,19 @@ impl Config {
         let (backend_kind, backend_url) = if is_custom_model {
             (
                 EmbeddingBackendKind::from_str(&self.embedding.custom.backend)?,
-                self.embedding.custom.url.trim(),
+                self.embedding.custom.url.trim().to_string(),
             )
         } else {
             (
                 EmbeddingBackendKind::from_str(&self.embedding.backend)?,
-                self.embedding.url.trim(),
+                self.embedding.url.trim().to_string(),
             )
         };
+
+        // For Xinference backend, use model registry without probing
+        if backend_kind == EmbeddingBackendKind::Xinference && !is_custom_model {
+            return self.resolve_xinference_embedding_config(model_id, allowlisted).await;
+        }
 
         if backend_url.is_empty() {
             return Err(Error::Config(
@@ -802,10 +926,10 @@ impl Config {
 
         let backend = EmbeddingBackendConfig {
             kind: backend_kind,
-            url: backend_url.to_string(),
+            url: backend_url.clone(),
         };
 
-        let client = EmbeddingBackendClient::new(&backend.url)?;
+        let client = EmbeddingBackendClient::new(&backend_url)?;
 
         if is_custom_model {
             let capabilities: BackendCapabilities = client.capabilities().await?;
@@ -1738,6 +1862,7 @@ mod tests {
             .await;
 
         let mut config = Config::default();
+        config.embedding.backend = "http".to_string(); // Force HTTP backend to trigger probe
         config.embedding.url = mock_server.uri();
         config.embedding.dimension = Some(384);
 

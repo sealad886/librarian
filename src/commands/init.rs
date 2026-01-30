@@ -204,7 +204,33 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
         false,
     )?;
 
-    // Embedding
+    // Embedding backend selection
+    let backend_options = ["xinference (automatic)", "http (custom server)"];
+    let default_backend_index = if config.embedding.backend == "http" { 1 } else { 0 };
+    let backend_selection = prompt_select(
+        "Embedding backend",
+        &backend_options,
+        default_backend_index,
+        false,
+    )?;
+
+    if backend_selection == 0 {
+        // Xinference - automatic management
+        config.embedding.backend = "xinference".to_string();
+        config.embedding.url = "http://localhost:9997".to_string();
+        println!("  Using Xinference (auto-managed). Server will start automatically.");
+    } else {
+        // HTTP - custom server
+        config.embedding.backend = "http".to_string();
+        config.embedding.url = prompt_string(
+            "Embedding server URL",
+            &config.embedding.url,
+            |value| Url::parse(value).map(|_| ()).map_err(|_| "Invalid URL".to_string()),
+            false,
+        )?;
+    }
+
+    // Embedding model
     let embedding_models = embedding_model_choices(&config.embedding.model);
     config.embedding.model = prompt_select_with_custom(
         "Embedding model",
@@ -212,12 +238,18 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
         &config.embedding.model,
     )?;
 
-    let dimension_options = [384, 512, 768, 1024];
-    config.embedding.dimension = prompt_select_dimension(
-        "Embedding dimension",
-        config.embedding.dimension,
-        &dimension_options,
-    )?;
+    // Dimension: only prompt if using HTTP backend (xinference auto-detects)
+    if config.embedding.backend == "http" {
+        let dimension_options = [384, 512, 768, 1024];
+        config.embedding.dimension = prompt_select_dimension(
+            "Embedding dimension",
+            config.embedding.dimension,
+            &dimension_options,
+        )?;
+    } else {
+        // Xinference will auto-detect dimension from model registry
+        config.embedding.dimension = None;
+    }
 
     config.embedding.batch_size = prompt_usize(
         "Embedding batch size",
@@ -288,6 +320,29 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
 
     config.reranker.enabled = prompt_confirm("Enable reranking?", config.reranker.enabled, false)?;
     if config.reranker.enabled {
+        // Reranker backend selection (inherit from embedding by default)
+        let reranker_backend_options = ["xinference (automatic)", "http (custom server)"];
+        let default_reranker_backend = if config.reranker.backend == "http" { 1 } else { 0 };
+        let reranker_backend_selection = prompt_select(
+            "Reranker backend",
+            &reranker_backend_options,
+            default_reranker_backend,
+            false,
+        )?;
+
+        if reranker_backend_selection == 0 {
+            config.reranker.backend = "xinference".to_string();
+            config.reranker.url = "http://localhost:9997".to_string();
+        } else {
+            config.reranker.backend = "http".to_string();
+            config.reranker.url = prompt_string(
+                "Reranker server URL",
+                &config.reranker.url,
+                |value| Url::parse(value).map(|_| ()).map_err(|_| "Invalid URL".to_string()),
+                false,
+            )?;
+        }
+
         let reranker_models = reranker_model_choices(&config.reranker.model);
         config.reranker.model = prompt_select_with_custom(
             "Reranker model",

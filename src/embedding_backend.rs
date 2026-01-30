@@ -8,6 +8,7 @@ use url::Url;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingBackendKind {
     Http,
+    Xinference,
 }
 
 impl FromStr for EmbeddingBackendKind {
@@ -16,11 +17,12 @@ impl FromStr for EmbeddingBackendKind {
     fn from_str(value: &str) -> Result<Self> {
         match value.to_lowercase().as_str() {
             "http" | "https" | "python-sidecar" => Ok(Self::Http),
+            "xinference" | "xinf" | "auto" => Ok(Self::Xinference),
             "openai-compatible" => Err(Error::Config(
                 "Embedding backend 'openai-compatible' is not implemented".to_string(),
             )),
             _ => Err(Error::Config(format!(
-                "Unsupported embedding backend '{}'; only 'http' is supported",
+                "Unsupported embedding backend '{}'; supported: 'xinference', 'http'",
                 value
             ))),
         }
