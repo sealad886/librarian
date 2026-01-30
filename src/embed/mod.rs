@@ -5,6 +5,7 @@
 //! - HTTP embedding backend (for custom servers)
 //! - Xinference embedding backend (zero-config, automatic)
 //! - Batch processing for efficiency
+//! - Multimodal support (text, image, audio, video)
 
 mod http_backend;
 
@@ -14,18 +15,54 @@ use crate::config::ResolvedEmbeddingConfig;
 use crate::embedding_backend::EmbeddingBackendKind;
 use crate::error::{Error, Result};
 use crate::xinference::{
-    ensure_xinference_ready, get_or_init_xinference_manager, XinferenceEmbedder,
-    XinferenceManager,
+    ensure_xinference_ready, get_or_init_xinference_manager, XinferenceEmbedder, XinferenceManager,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
 
+/// Supported media modalities for multimodal embedding
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaModality {
+    Text,
+    Image,
+    Audio,
+    Video,
+}
+
+/// Input for image embedding (with optional text for joint models)
 #[derive(Debug, Clone)]
 pub struct ImageEmbedInput {
     pub image_path: String,
     pub text: Option<String>,
+}
+
+/// Input for audio embedding (with optional text for joint models)
+#[derive(Debug, Clone)]
+pub struct AudioEmbedInput {
+    pub audio_path: String,
+    pub text: Option<String>,
+}
+
+/// Input for video embedding (with optional text for joint models)
+#[derive(Debug, Clone)]
+pub struct VideoEmbedInput {
+    pub video_path: String,
+    pub text: Option<String>,
+}
+
+/// Unified multimodal embedding input supporting all modalities
+#[derive(Debug, Clone)]
+pub enum MultimodalInput {
+    /// Text-only input
+    Text(String),
+    /// Image input with optional text
+    Image(ImageEmbedInput),
+    /// Audio input with optional text
+    Audio(AudioEmbedInput),
+    /// Video input with optional text
+    Video(VideoEmbedInput),
 }
 
 pub fn normalize_embedding(vector: &[f32]) -> Vec<f32> {
@@ -66,11 +103,115 @@ pub trait Embedder: Send + Sync {
         ))
     }
 
+    /// Embed a batch of audio files (file paths)
+    async fn embed_audio(&self, _audios: Vec<String>) -> Result<Vec<Vec<f32>>> {
+        Err(Error::Embedding(
+            "Audio embedding is not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Embed a batch of audio + optional text inputs (joint models)
+    async fn embed_audio_multimode(&self, _inputs: Vec<AudioEmbedInput>) -> Result<Vec<Vec<f32>>> {
+        Err(Error::Embedding(
+            "Audio+text embedding is not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Embed a batch of video files (file paths)
+    async fn embed_video(&self, _videos: Vec<String>) -> Result<Vec<Vec<f32>>> {
+        Err(Error::Embedding(
+            "Video embedding is not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Embed a batch of video + optional text inputs (joint models)
+    async fn embed_video_multimode(&self, _inputs: Vec<VideoEmbedInput>) -> Result<Vec<Vec<f32>>> {
+        Err(Error::Embedding(
+            "Video+text embedding is not supported by this backend".to_string(),
+        ))
+    }
+
+    /// Embed unified multimodal inputs (auto-dispatches to appropriate method)
+    async fn embed_unified(&self, inputs: Vec<MultimodalInput>) -> Result<Vec<Vec<f32>>> {
+        if inputs.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Group inputs by modality for efficient batching
+        let mut texts = Vec::new();
+        let mut text_indices = Vec::new();
+        let mut images = Vec::new();
+        let mut image_indices = Vec::new();
+        let mut audios = Vec::new();
+        let mut audio_indices = Vec::new();
+        let mut videos = Vec::new();
+        let mut video_indices = Vec::new();
+
+        for (idx, input) in inputs.iter().enumerate() {
+            match input {
+                MultimodalInput::Text(t) => {
+                    text_indices.push(idx);
+                    texts.push(t.clone());
+                }
+                MultimodalInput::Image(i) => {
+                    image_indices.push(idx);
+                    images.push(i.clone());
+                }
+                MultimodalInput::Audio(a) => {
+                    audio_indices.push(idx);
+                    audios.push(a.clone());
+                }
+                MultimodalInput::Video(v) => {
+                    video_indices.push(idx);
+                    videos.push(v.clone());
+                }
+            }
+        }
+
+        // Process each modality
+        let mut results = vec![vec![]; inputs.len()];
+
+        if !texts.is_empty() {
+            let text_embeddings = self.embed(texts).await?;
+            for (i, emb) in text_indices.into_iter().zip(text_embeddings) {
+                results[i] = emb;
+            }
+        }
+
+        if !images.is_empty() {
+            let image_embeddings = self.embed_multimode(images).await?;
+            for (i, emb) in image_indices.into_iter().zip(image_embeddings) {
+                results[i] = emb;
+            }
+        }
+
+        if !audios.is_empty() {
+            let audio_embeddings = self.embed_audio_multimode(audios).await?;
+            for (i, emb) in audio_indices.into_iter().zip(audio_embeddings) {
+                results[i] = emb;
+            }
+        }
+
+        if !videos.is_empty() {
+            let video_embeddings = self.embed_video_multimode(videos).await?;
+            for (i, emb) in video_indices.into_iter().zip(video_embeddings) {
+                results[i] = emb;
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Get the embedding dimension
     fn dimension(&self) -> usize;
 
     /// Get the model name
     fn model_name(&self) -> &str;
+
+    /// Get supported modalities for this embedder
+    fn supported_modalities(&self) -> Vec<MediaModality> {
+        vec![MediaModality::Text] // Default to text-only
+    }
 }
 
 /// Create an embedder based on configuration (sync, for HTTP backend only)
@@ -120,12 +261,10 @@ pub async fn create_embedder_auto(config: &ResolvedEmbeddingConfig) -> Result<Bo
 
 /// Extract port number from a URL string
 fn extract_port_from_url(url: &str) -> Result<u16> {
-    url::Url::parse(url)
+    Ok(url::Url::parse(url)
         .map_err(|e| Error::Config(format!("Invalid backend URL: {}", e)))?
         .port()
-        .unwrap_or(9997) // Default xinference port
-        .try_into()
-        .map_err(|_| Error::Config("Port out of range".into()))
+        .unwrap_or(9997)) // Default xinference port
 }
 
 /// Create an embedder with optional Xinference manager support

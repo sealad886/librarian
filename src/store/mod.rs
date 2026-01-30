@@ -647,12 +647,12 @@ fn extract_vector_sizes(info: &GetCollectionInfoResponse) -> Option<Vec<(String,
 
     match config {
         qdrant_client::qdrant::vectors_config::Config::Params(params) => {
-            Some(vec![("default".to_string(), params.size as u64)])
+            Some(vec![("default".to_string(), params.size)])
         }
         qdrant_client::qdrant::vectors_config::Config::ParamsMap(map) => {
             let mut sizes = Vec::new();
             for (name, params) in &map.map {
-                sizes.push((name.clone(), params.size as u64));
+                sizes.push((name.clone(), params.size));
             }
             if sizes.is_empty() {
                 None

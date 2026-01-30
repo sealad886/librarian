@@ -2,11 +2,9 @@
 //!
 //! Implements the Embedder trait using Xinference's OpenAI-compatible API.
 
-use crate::embed::{Embedder, ImageEmbedInput};
+use crate::embed::{Embedder, ImageEmbedInput, MediaModality};
 use crate::error::{Error, Result};
-use crate::xinference::{
-    get_xinference_model_spec, hf_to_xinference_name, XinferenceManager,
-};
+use crate::xinference::{get_xinference_model_spec, hf_to_xinference_name, XinferenceManager};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -28,6 +26,7 @@ struct OpenAIEmbedRequest {
 struct OpenAIEmbedResponse {
     data: Vec<EmbeddingData>,
     #[serde(default)]
+    #[allow(dead_code)]
     model: Option<String>,
 }
 
@@ -55,10 +54,7 @@ impl XinferenceEmbedder {
     /// 1. Ensure the Xinference server is running
     /// 2. Launch the embedding model if not already running
     /// 3. Return an embedder ready for use
-    pub async fn new(
-        manager: Arc<Mutex<XinferenceManager>>,
-        model: &str,
-    ) -> Result<Self> {
+    pub async fn new(manager: Arc<Mutex<XinferenceManager>>, model: &str) -> Result<Self> {
         let xinf_name = hf_to_xinference_name(model);
 
         // Get model spec for dimension
@@ -116,9 +112,9 @@ impl XinferenceEmbedder {
         let manager_lock = get_or_init_xinference_manager(9997).await?;
         let (base_url, _model_uid) = {
             let mut guard = manager_lock.lock().await;
-            let mgr = guard.as_mut().ok_or_else(|| {
-                Error::Config("Xinference manager not initialized".into())
-            })?;
+            let mgr = guard
+                .as_mut()
+                .ok_or_else(|| Error::Config("Xinference manager not initialized".into()))?;
 
             // Ensure model is launched
             let uid = mgr.ensure_model_launched(model, "embedding").await?;
@@ -132,9 +128,7 @@ impl XinferenceEmbedder {
 
         // Create a dummy Arc<Mutex<XinferenceManager>> since we use the global one
         // This is a temporary workaround; ideally we'd refactor to not need this field
-        let dummy_manager = Arc::new(Mutex::new(
-            crate::xinference::XinferenceManager::new(9997)?
-        ));
+        let dummy_manager = Arc::new(Mutex::new(crate::xinference::XinferenceManager::new(9997)?));
 
         Ok(Self {
             manager: dummy_manager,
@@ -162,7 +156,10 @@ impl XinferenceEmbedder {
             input: texts,
         };
 
-        debug!("Sending embedding request for {} texts", request.input.len());
+        debug!(
+            "Sending embedding request for {} texts",
+            request.input.len()
+        );
 
         let response = self
             .client
@@ -238,6 +235,11 @@ impl Embedder for XinferenceEmbedder {
 
     fn model_name(&self) -> &str {
         &self.model_name
+    }
+
+    fn supported_modalities(&self) -> Vec<MediaModality> {
+        // Xinference only supports text embeddings via OpenAI-compatible API
+        vec![MediaModality::Text]
     }
 }
 

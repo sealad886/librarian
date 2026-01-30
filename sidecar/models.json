@@ -38,7 +38,7 @@
   {
     "id": "Qwen/Qwen3-VL-Embedding-2B",
     "family": "qwen3-vl",
-    "modalities": ["text", "multimode"],
+    "modalities": ["text", "image"],
     "embedding_dim": 2048,
     "multivector": false,
     "supports_mrl": false,
@@ -47,7 +47,7 @@
   {
     "id": "Qwen/Qwen3-VL-Embedding-8B",
     "family": "qwen3-vl",
-    "modalities": ["text", "multimode"],
+    "modalities": ["text", "image"],
     "embedding_dim": 4096,
     "multivector": false,
     "supports_mrl": false,
@@ -56,7 +56,7 @@
   {
     "id": "jinaai/jina-clip-v2",
     "family": "jina-clip",
-    "modalities": ["text", "multimode"],
+    "modalities": ["text", "image"],
     "embedding_dim": 768,
     "multivector": false,
     "supports_mrl": false,
@@ -65,10 +65,60 @@
   {
     "id": "google/siglip2-base-patch16-224",
     "family": "siglip2",
-    "modalities": ["text", "multimode"],
+    "modalities": ["text", "image"],
     "embedding_dim": 768,
     "multivector": false,
     "supports_mrl": false,
     "max_batch": 16
+  },
+  {
+    "id": "laion/CLAP",
+    "family": "clap",
+    "modalities": ["text", "audio"],
+    "embedding_dim": 512,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 16,
+    "notes": "Contrastive Language-Audio Pretraining model for audio-text embeddings"
+  },
+  {
+    "id": "m-a-p/MERT-v1-330M",
+    "family": "mert",
+    "modalities": ["audio"],
+    "embedding_dim": 1024,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 8,
+    "notes": "Music understanding model from m-a-p"
+  },
+  {
+    "id": "OpenGVLab/InternVideo2-Stage2_1B-224p-f4",
+    "family": "internvideo2",
+    "modalities": ["text", "video"],
+    "embedding_dim": 1408,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 4,
+    "notes": "Video-language model for video understanding"
+  },
+  {
+    "id": "Salesforce/blip2-opt-2.7b",
+    "family": "blip2",
+    "modalities": ["text", "image", "video"],
+    "embedding_dim": 768,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 4,
+    "notes": "Multimodal model supporting image and video understanding"
+  },
+  {
+    "id": "microsoft/ImageBind",
+    "family": "imagebind",
+    "modalities": ["text", "image", "audio", "video"],
+    "embedding_dim": 1024,
+    "multivector": false,
+    "supports_mrl": false,
+    "max_batch": 4,
+    "notes": "Meta's ImageBind model supporting all major modalities"
   }
 ]

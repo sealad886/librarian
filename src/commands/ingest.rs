@@ -4,13 +4,13 @@ use crate::chunk::{chunk_document, compute_content_hash, TextChunk};
 use crate::config::{Config, ResolvedEmbeddingConfig};
 use crate::crawl::{CrawledPage, Crawler};
 use crate::embed::{
-    embed_multimode_in_batches, embed_images_in_batches, embed_in_batches, Embedder,
-    ImageEmbedInput, fuse_embeddings,
+    embed_images_in_batches, embed_in_batches, embed_multimode_in_batches, fuse_embeddings,
+    Embedder, ImageEmbedInput,
 };
 use crate::error::{Error, Result};
 use crate::meta::{Chunk, Document, MetaDb, RunOperation, RunStatus, Source, SourceType};
 use crate::parse::{is_binary_content, parse_content, should_skip_file, ContentType};
-use crate::parse::{ParsedDocument, ExtractedMedia};
+use crate::parse::{ExtractedMedia, ParsedDocument};
 use crate::progress::add_progress_bar;
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
 use chrono::Utc;
@@ -93,7 +93,11 @@ fn score_image_candidate(doc: &ParsedDocument, media: &ExtractedMedia) -> f32 {
             has_main_signal = true;
         }
         let alt_lower = trimmed.to_lowercase();
-        if doc.headings.iter().any(|h| alt_lower.contains(&h.text.to_lowercase())) {
+        if doc
+            .headings
+            .iter()
+            .any(|h| alt_lower.contains(&h.text.to_lowercase()))
+        {
             score += 0.2;
             has_main_signal = true;
         }
@@ -207,7 +211,9 @@ fn select_image_candidates(
     doc: &ParsedDocument,
 ) -> Vec<(ExtractedMedia, f32)> {
     let mm = &config.crawl.multimodal;
-    if !mm.enabled || !mm.include_images { return Vec::new(); }
+    if !mm.enabled || !mm.include_images {
+        return Vec::new();
+    }
     if !embedding.supports_image_inputs() {
         debug!(model = %embedding.model_id, "Skipping image candidates (model not multimodal)");
         return Vec::new();
@@ -271,7 +277,7 @@ fn compute_perceptual_hash(bytes: &[u8]) -> Option<u64> {
     for pixel in resized.pixels() {
         total += pixel[0] as u32;
     }
-    let avg = total / (PERCEPTUAL_HASH_SIZE * PERCEPTUAL_HASH_SIZE) as u32;
+    let avg = total / (PERCEPTUAL_HASH_SIZE * PERCEPTUAL_HASH_SIZE);
     let mut hash: u64 = 0;
     for (idx, pixel) in resized.pixels().enumerate() {
         if pixel[0] as u32 >= avg {
@@ -291,7 +297,10 @@ fn is_perceptual_duplicate(hash: u64, seen: &[u64]) -> bool {
 }
 
 /// Fetch accepted image candidates and cache them under base_dir/assets
-async fn fetch_and_cache_images(config: &Config, images: &[(ExtractedMedia, f32)]) -> Vec<CachedAsset> {
+async fn fetch_and_cache_images(
+    config: &Config,
+    images: &[(ExtractedMedia, f32)],
+) -> Vec<CachedAsset> {
     use reqwest::header::CONTENT_TYPE;
     use reqwest::Client;
     use tokio::fs;
@@ -316,14 +325,20 @@ async fn fetch_and_cache_images(config: &Config, images: &[(ExtractedMedia, f32)
     };
 
     let assets_dir = config.paths.base_dir.join("assets");
-    if let Err(e) = fs::create_dir_all(&assets_dir).await { warn!("Failed to create assets dir: {}", e); }
+    if let Err(e) = fs::create_dir_all(&assets_dir).await {
+        warn!("Failed to create assets dir: {}", e);
+    }
 
     let mut cached = Vec::new();
     let mut seen_hashes: HashSet<String> = HashSet::new();
     let mut seen_phashes: Vec<u64> = Vec::new();
 
     for (m, _score) in images.iter() {
-        if Url::parse(&m.url).map(|u| u.scheme().to_string()).map(|s| s != "http" && s != "https").unwrap_or(true) {
+        if Url::parse(&m.url)
+            .map(|u| u.scheme().to_string())
+            .map(|s| s != "http" && s != "https")
+            .unwrap_or(true)
+        {
             continue;
         }
         // Fetch
@@ -372,7 +387,11 @@ async fn fetch_and_cache_images(config: &Config, images: &[(ExtractedMedia, f32)
                             seen_phashes.push(phash);
                         }
                         // Determine extension from URL (best-effort)
-                        let ext = if let Some(pos) = m.url.rfind('.') { m.url[pos..].to_string() } else { ".bin".to_string() };
+                        let ext = if let Some(pos) = m.url.rfind('.') {
+                            m.url[pos..].to_string()
+                        } else {
+                            ".bin".to_string()
+                        };
                         let file_name = format!("{}{}", hash, ext);
                         let target = assets_dir.join(file_name);
                         let exists = fs::metadata(&target).await.is_ok();
@@ -403,6 +422,7 @@ async fn fetch_and_cache_images(config: &Config, images: &[(ExtractedMedia, f32)
     cached
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn embed_cached_images(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,
@@ -753,6 +773,7 @@ pub fn format_overlap_warnings(overlaps: &[SourceOverlap], new_uri: &str) -> Vec
 }
 
 /// Ingest a local directory
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_ingest_dir(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,
@@ -830,16 +851,7 @@ pub async fn cmd_ingest_dir(
         let file_uri = file_path.display().to_string();
         current_uris.push(file_uri.clone());
 
-        match process_file(
-            config,
-            embedding,
-            db,
-            store,
-            embedder,
-            &source,
-            &file_path,
-        )
-        .await {
+        match process_file(config, embedding, db, store, embedder, &source, &file_path).await {
             Ok((created, updated)) => {
                 stats.docs_processed += 1;
                 stats.chunks_created += created;
@@ -971,15 +983,7 @@ async fn process_file(
 
     // Process chunks
     let (created, updated) = process_chunks(
-        config,
-        embedding,
-        db,
-        store,
-        embedder,
-        source,
-        &doc,
-        &file_uri,
-        chunks,
+        config, embedding, db, store, embedder, source, &doc, &file_uri, chunks,
     )
     .await?;
 
@@ -987,6 +991,7 @@ async fn process_file(
 }
 
 /// Process chunks for a document
+#[allow(clippy::too_many_arguments)]
 async fn process_chunks(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,
@@ -1139,6 +1144,7 @@ async fn process_chunks(
 }
 
 /// Ingest from a URL
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_ingest_url(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,
@@ -1282,6 +1288,7 @@ pub async fn cmd_ingest_url(
 }
 
 /// Ingest from a sitemap URL
+#[allow(clippy::too_many_arguments)]
 pub async fn cmd_ingest_sitemap(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,
@@ -1527,8 +1534,10 @@ async fn process_page(
     }
 
     // Process text chunks
-    let (created, updated) =
-        process_chunks(config, embedding, db, store, embedder, source, &doc, &page.url, chunks).await?;
+    let (created, updated) = process_chunks(
+        config, embedding, db, store, embedder, source, &doc, &page.url, chunks,
+    )
+    .await?;
 
     // Embed cached images after text processing
     let (image_created, image_updated) = if cached_images.is_empty() {
@@ -1851,8 +1860,14 @@ mod tests {
     #[test]
     fn test_url_is_allowed_image_filters_svg() {
         let allowed = vec!["image/".to_string()];
-        assert!(!url_is_allowed_image("https://example.com/icon.svg", &allowed));
-        assert!(url_is_allowed_image("https://example.com/photo.png", &allowed));
+        assert!(!url_is_allowed_image(
+            "https://example.com/icon.svg",
+            &allowed
+        ));
+        assert!(url_is_allowed_image(
+            "https://example.com/photo.png",
+            &allowed
+        ));
     }
 
     #[test]
