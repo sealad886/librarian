@@ -49,19 +49,26 @@ fn is_ip_address_safe(ip: IpAddr) -> bool {
             true
         }
         IpAddr::V6(ipv6) => {
+            // Reject loopback (::1) - check before IPv4 conversions
+            if ipv6.is_loopback() {
+                return false;
+            }
+            // Reject unspecified (::) - check before IPv4 conversions
+            if ipv6.is_unspecified() {
+                return false;
+            }
+
             // Check for IPv4-mapped IPv6 addresses (::ffff:0:0/96)
             if let Some(ipv4) = ipv6.to_ipv4_mapped() {
                 return is_ip_address_safe(IpAddr::V4(ipv4));
             }
 
-            // Reject loopback (::1)
-            if ipv6.is_loopback() {
-                return false;
+            // Check for deprecated IPv4-compatible IPv6 addresses (::0:0/96)
+            // These are deprecated but might still be used in attacks
+            if let Some(ipv4) = ipv6.to_ipv4() {
+                return is_ip_address_safe(IpAddr::V4(ipv4));
             }
-            // Reject unspecified (::)
-            if ipv6.is_unspecified() {
-                return false;
-            }
+
             // Reject multicast
             if ipv6.is_multicast() {
                 return false;
@@ -82,6 +89,37 @@ fn is_ip_address_safe(ip: IpAddr) -> bool {
 }
 
 /// Validate that a URL's resolved IP address is safe to request (not private/reserved)
+///
+/// This function performs DNS resolution to check if a URL resolves to a safe public IP address.
+/// It is designed to prevent Server-Side Request Forgery (SSRF) attacks by rejecting URLs that
+/// resolve to private or reserved IP ranges.
+///
+/// # Security Note
+/// - This function performs **synchronous DNS resolution**, which is a blocking operation
+/// - There is a Time-of-Check Time-of-Use (TOCTOU) window between validation and actual request
+/// - DNS responses can change between validation and the HTTP request
+/// - For best security, combine with redirect prevention and validate at connection time
+///
+/// # Behavior
+/// - Only validates `http://` and `https://` URL schemes
+/// - Performs DNS resolution for the hostname
+/// - Checks all resolved IP addresses (both IPv4 and IPv6)
+/// - Returns error if **any** resolved IP is in a private/reserved range
+///
+/// # Rejected IP Ranges
+/// - Private IP ranges (RFC 1918): 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+/// - Loopback: 127.0.0.0/8 (IPv4), ::1 (IPv6)
+/// - Link-local: 169.254.0.0/16 (IPv4), fe80::/10 (IPv6) - includes cloud metadata endpoints
+/// - Reserved: 0.0.0.0, 240.0.0.0/4, broadcast, multicast
+/// - IPv6 unique local: fc00::/7
+/// - IPv4-mapped IPv6 addresses that map to private ranges
+///
+/// # Arguments
+/// - `url`: The URL string to validate
+///
+/// # Returns
+/// - `Ok(())` if the URL is safe to request
+/// - `Err(String)` with error description if the URL is unsafe or invalid
 fn validate_url_safety(url: &str) -> std::result::Result<(), String> {
     let parsed = Url::parse(url).map_err(|e| format!("Failed to parse URL: {}", e))?;
 
@@ -148,6 +186,7 @@ impl SitemapParser {
         let client = Client::builder()
             .user_agent(user_agent)
             .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none()) // Disable redirects to prevent SSRF bypass
             .gzip(true)
             .build()
             .map_err(|e| Error::Crawl(format!("Failed to create HTTP client: {}", e)))?;
@@ -162,6 +201,14 @@ impl SitemapParser {
     /// Parse a sitemap URL and return all page URLs
     pub async fn parse(&self, sitemap_url: &str) -> Result<Vec<SitemapEntry>> {
         info!("Parsing sitemap: {}", sitemap_url);
+
+        // Validate initial sitemap URL for SSRF protection
+        if let Err(e) = validate_url_safety(sitemap_url) {
+            return Err(Error::Crawl(format!(
+                "Initial sitemap URL validation failed: {}",
+                e
+            )));
+        }
 
         let mut all_entries = Vec::new();
         let mut sitemaps_processed = 0;
