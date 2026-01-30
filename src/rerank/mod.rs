@@ -80,7 +80,7 @@ pub async fn create_reranker_auto(config: &RerankerConfig) -> Result<Box<dyn Rer
 
             // Create reranker (this will launch model if needed)
             let reranker = XinferenceReranker::from_global_manager(&config.model).await?;
-            Ok(Box::new(reranker))
+            Ok(Box::new(reranker) as Box<dyn Reranker>)
         }
         EmbeddingBackendKind::Http => {
             if reranker_model_spec(&config.model).is_none() {
@@ -90,7 +90,7 @@ pub async fn create_reranker_auto(config: &RerankerConfig) -> Result<Box<dyn Rer
                 )));
             }
             let reranker = HttpReranker::new(config, &config.url)?;
-            Ok(Box::new(reranker))
+            Ok(Box::new(reranker) as Box<dyn Reranker>)
         }
     }
 }
@@ -116,7 +116,7 @@ pub async fn create_reranker_with_xinference(
                 Error::Config("Xinference manager required for xinference backend".into())
             })?;
             let reranker = XinferenceReranker::new(manager, &config.model).await?;
-            Ok(Box::new(reranker))
+            Ok(Box::new(reranker) as Box<dyn Reranker>)
         }
         EmbeddingBackendKind::Http => {
             if reranker_model_spec(&config.model).is_none() {
@@ -126,7 +126,7 @@ pub async fn create_reranker_with_xinference(
                 )));
             }
             let reranker = HttpReranker::new(config, backend_url)?;
-            Ok(Box::new(reranker))
+            Ok(Box::new(reranker) as Box<dyn Reranker>)
         }
     }
 }

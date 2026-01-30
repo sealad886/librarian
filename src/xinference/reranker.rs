@@ -32,6 +32,7 @@ struct RerankResponse {
 
 /// Individual rerank result data
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct RerankResultData {
     index: usize,
     relevance_score: f32,

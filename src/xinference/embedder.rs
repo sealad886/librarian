@@ -23,6 +23,7 @@ struct OpenAIEmbedRequest {
 
 /// OpenAI-compatible embedding response
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OpenAIEmbedResponse {
     data: Vec<EmbeddingData>,
     #[serde(default)]
@@ -38,6 +39,7 @@ struct EmbeddingData {
 }
 
 /// Xinference embedder implementation
+#[allow(dead_code)]
 pub struct XinferenceEmbedder {
     manager: Arc<Mutex<XinferenceManager>>,
     model_name: String,
