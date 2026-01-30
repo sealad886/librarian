@@ -71,6 +71,7 @@ pub struct ChunkPayload {
 }
 
 impl ChunkPayload {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         source_id: String,
         source_type: String,

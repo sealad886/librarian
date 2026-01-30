@@ -2,8 +2,8 @@
 
 use crate::config::{Config, ResolvedEmbeddingConfig};
 use crate::embed::{
-    embed_multimode_in_batches, embed_images_in_batches, embed_in_batches, Embedder,
-    ImageEmbedInput, fuse_embeddings,
+    embed_images_in_batches, embed_in_batches, embed_multimode_in_batches, fuse_embeddings,
+    Embedder, ImageEmbedInput,
 };
 use crate::error::{Error, Result};
 use crate::meta::{MetaDb, RunOperation, RunStatus};
@@ -157,6 +157,7 @@ pub async fn cmd_reindex(
 }
 
 /// Reindex a single document's chunks
+#[allow(clippy::too_many_arguments)]
 async fn reindex_document(
     config: &Config,
     embedding: &ResolvedEmbeddingConfig,
@@ -180,9 +181,8 @@ async fn reindex_document(
         return Ok(0);
     }
 
-    let (text_chunks, image_chunks): (Vec<_>, Vec<_>) = chunks
-        .into_iter()
-        .partition(|c| c.modality == "text");
+    let (text_chunks, image_chunks): (Vec<_>, Vec<_>) =
+        chunks.into_iter().partition(|c| c.modality == "text");
 
     let mut points = Vec::new();
     let mut total = 0usize;
@@ -251,10 +251,7 @@ async fn reindex_document(
         let mut image_meta = Vec::new();
 
         for chunk in image_chunks.iter() {
-            let hash = chunk
-                .media_hash
-                .as_ref()
-                .unwrap_or(&chunk.content_hash);
+            let hash = chunk.media_hash.as_ref().unwrap_or(&chunk.content_hash);
             if let Some(path) = find_cached_asset_path(&assets_dir, hash) {
                 image_paths.push(path.to_string_lossy().to_string());
                 image_meta.push(chunk);
@@ -285,7 +282,11 @@ async fn reindex_document(
                 .iter()
                 .map(|chunk| {
                     let text = chunk.text.trim();
-                    if text.is_empty() { None } else { Some(text.to_string()) }
+                    if text.is_empty() {
+                        None
+                    } else {
+                        Some(text.to_string())
+                    }
                 })
                 .collect();
 
@@ -300,7 +301,8 @@ async fn reindex_document(
                     .collect::<Vec<_>>();
                 embed_multimode_in_batches(embedder, inputs, batch_size).await?
             } else {
-                let image_embeddings = embed_images_in_batches(embedder, image_paths, batch_size).await?;
+                let image_embeddings =
+                    embed_images_in_batches(embedder, image_paths, batch_size).await?;
                 let mut fused_embeddings = image_embeddings.clone();
 
                 let mut text_inputs = Vec::new();
@@ -315,7 +317,8 @@ async fn reindex_document(
                 }
 
                 if !text_inputs.is_empty() {
-                    let text_embeddings = embed_in_batches(embedder, text_inputs, batch_size).await?;
+                    let text_embeddings =
+                        embed_in_batches(embedder, text_inputs, batch_size).await?;
                     for (offset, idx) in text_indices.iter().enumerate() {
                         let image_vec = &image_embeddings[*idx];
                         let text_vec = &text_embeddings[offset];

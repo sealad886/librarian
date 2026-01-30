@@ -10,17 +10,19 @@ use crate::embedding_backend::{
     BackendCapabilities, EmbeddingBackendClient, EmbeddingBackendConfig, EmbeddingBackendKind,
 };
 use crate::error::{Error, Result};
-use crate::xinference::{get_xinference_model_spec, hf_to_xinference_name, DEFAULT_XINFERENCE_PORT};
-use std::str::FromStr;
 use crate::models::{
     allowlisted_embedding_models, allowlisted_reranker_models, embedding_model_capabilities,
     embedding_model_spec, reranker_model_spec, supported_multimodal_embedding_models,
     MultimodalStrategy,
 };
+use crate::xinference::{
+    get_xinference_model_spec, hf_to_xinference_name, DEFAULT_XINFERENCE_PORT,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tracing::{debug, info, warn};
 
 const PROBE_TEXT: &str = "ping";
@@ -638,16 +640,12 @@ impl Config {
         }
 
         if self.embedding.url.trim().is_empty() {
-            return Err(Error::Config(
-                "embedding.url must not be empty".to_string(),
-            ));
+            return Err(Error::Config("embedding.url must not be empty".to_string()));
         }
 
         if let Some(dimension) = self.embedding.dimension {
             if dimension == 0 {
-                return Err(Error::Config(
-                    "embedding.dimension must be > 0".to_string(),
-                ));
+                return Err(Error::Config("embedding.dimension must be > 0".to_string()));
             }
         }
 
@@ -735,8 +733,7 @@ impl Config {
                 || self.crawl.multimodal.min_relevance_score > 1.0
             {
                 return Err(Error::Config(
-                    "crawl.multimodal.min_relevance_score must be between 0.0 and 1.0"
-                        .to_string(),
+                    "crawl.multimodal.min_relevance_score must be between 0.0 and 1.0".to_string(),
                 ));
             }
 
@@ -758,10 +755,10 @@ impl Config {
         allowlisted: Option<&crate::models::EmbeddingModelSpec>,
     ) -> Result<ResolvedEmbeddingConfig> {
         let xinf_name = hf_to_xinference_name(model_id);
-        
+
         // Try Xinference model registry first, then fall back to allowlist
         let xinf_spec = get_xinference_model_spec(model_id);
-        
+
         let dimension = if let Some(config_dim) = self.embedding.dimension {
             config_dim
         } else if let Some(ref spec) = xinf_spec {
@@ -862,7 +859,9 @@ impl Config {
     pub async fn resolve_embedding_config(&self) -> Result<ResolvedEmbeddingConfig> {
         let raw_model = self.embedding.model.trim();
         if raw_model.is_empty() {
-            return Err(Error::Config("embedding.model must not be empty".to_string()));
+            return Err(Error::Config(
+                "embedding.model must not be empty".to_string(),
+            ));
         }
 
         let allowlisted = embedding_model_spec(raw_model);
@@ -915,7 +914,9 @@ impl Config {
 
         // For Xinference backend, use model registry without probing
         if backend_kind == EmbeddingBackendKind::Xinference && !is_custom_model {
-            return self.resolve_xinference_embedding_config(model_id, allowlisted).await;
+            return self
+                .resolve_xinference_embedding_config(model_id, allowlisted)
+                .await;
         }
 
         if backend_url.is_empty() {
@@ -934,10 +935,7 @@ impl Config {
         if is_custom_model {
             let capabilities: BackendCapabilities = client.capabilities().await?;
             if !capabilities.models.is_empty()
-                && !capabilities
-                    .models
-                    .iter()
-                    .any(|model| model.id == model_id)
+                && !capabilities.models.iter().any(|model| model.id == model_id)
             {
                 return Err(Error::Embedding(format!(
                     "Embedding backend does not advertise model '{}' in /capabilities",
@@ -947,7 +945,9 @@ impl Config {
         }
 
         let wants_image_probe = self.embedding.multimodal
-            || allowlisted.map(|spec| spec.capabilities.supports_image).unwrap_or(false)
+            || allowlisted
+                .map(|spec| spec.capabilities.supports_image)
+                .unwrap_or(false)
             || (is_custom_model
                 && self
                     .embedding
@@ -979,7 +979,8 @@ impl Config {
             .unwrap_or_else(|| "custom".to_string());
 
         let probe_modalities = probe.modalities.clone();
-        let modalities = if !probe_modalities.is_empty() {
+        let probe_has_modalities = !probe_modalities.is_empty();
+        let modalities = if probe_has_modalities {
             probe_modalities
         } else if let Some(spec) = allowlisted {
             spec.modalities.iter().map(|m| (*m).to_string()).collect()
@@ -994,25 +995,56 @@ impl Config {
             ));
         }
 
-        let (supports_joint_inputs, supports_image, supports_text, strategy) = if let Some(spec) = allowlisted {
-            (
-                spec.capabilities.supports_joint_inputs,
-                spec.capabilities.supports_image,
-                spec.capabilities.supports_text,
-                spec.capabilities.strategy,
-            )
+        // Derive support flags from probe modalities first (authoritative runtime data),
+        // falling back to allowlisted spec capabilities when probe modalities are empty
+        let (supports_joint_inputs, supports_image, supports_text, strategy) = if let Some(spec) =
+            allowlisted
+        {
+            // For allowlisted models, use spec capabilities but override with probe modalities
+            // when probe reports actual modalities (runtime truth)
+            let spec_joint = spec.capabilities.supports_joint_inputs;
+            let spec_image = spec.capabilities.supports_image;
+            let spec_text = spec.capabilities.supports_text;
+            let spec_strategy = spec.capabilities.strategy;
+
+            if probe_has_modalities {
+                // Probe modalities override spec - backend reports actual runtime capabilities
+                let probe_joint = modalities.iter().any(|m| m == "multimode");
+                let probe_image = probe_joint || modalities.iter().any(|m| m == "image");
+                let probe_text = probe_joint || modalities.iter().any(|m| m == "text");
+                // Use spec strategy but could be overridden if probe indicates different capability
+                let strategy = if probe_joint && !spec_joint {
+                    MultimodalStrategy::VlEmbedding
+                } else if probe_image && !spec_image && !probe_joint {
+                    MultimodalStrategy::DualEncoder
+                } else {
+                    spec_strategy
+                };
+                (
+                    probe_joint || spec_joint,
+                    probe_image || spec_image,
+                    probe_text || spec_text,
+                    strategy,
+                )
+            } else {
+                (spec_joint, spec_image, spec_text, spec_strategy)
+            }
         } else {
             let supports_joint_inputs = modalities.iter().any(|m| m == "multimode");
             let supports_image = supports_joint_inputs || modalities.iter().any(|m| m == "image");
             let supports_text = supports_joint_inputs || modalities.iter().any(|m| m == "text");
             let strategy = if supports_joint_inputs {
                 MultimodalStrategy::VlEmbedding
-            } else if supports_image {
-                MultimodalStrategy::DualEncoder
             } else {
+                // Default to DualEncoder for both image-only and text-only models
                 MultimodalStrategy::DualEncoder
             };
-            (supports_joint_inputs, supports_image, supports_text, strategy)
+            (
+                supports_joint_inputs,
+                supports_image,
+                supports_text,
+                strategy,
+            )
         };
 
         if wants_image_probe {
@@ -1054,24 +1086,25 @@ impl Config {
 
         let probe_dimension = probe.embedding_dim.or_else(|| {
             let mut dim: Option<usize> = None;
-            for embeddings in [
+            for values in [
                 probe.text_embeddings.as_ref(),
                 probe.image_embeddings.as_ref(),
                 probe.joint_embeddings.as_ref(),
-            ] {
-                if let Some(values) = embeddings {
-                    if let Some(first) = values.first() {
-                        let candidate = first.len();
-                        if values.iter().any(|vec| vec.len() != candidate) {
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if let Some(first) = values.first() {
+                    let candidate = first.len();
+                    if values.iter().any(|vec| vec.len() != candidate) {
+                        return None;
+                    }
+                    if let Some(existing) = dim {
+                        if existing != candidate {
                             return None;
                         }
-                        if let Some(existing) = dim {
-                            if existing != candidate {
-                                return None;
-                            }
-                        } else {
-                            dim = Some(candidate);
-                        }
+                    } else {
+                        dim = Some(candidate);
                     }
                 }
             }
@@ -1095,17 +1128,18 @@ impl Config {
             }
         }
 
-        if probe_dimension.is_none() && (has_text
-            || probe
-                .image_embeddings
-                .as_ref()
-                .map(|v| !v.is_empty())
-                .unwrap_or(false)
-            || probe
-                .joint_embeddings
-                .as_ref()
-                .map(|v| !v.is_empty())
-                .unwrap_or(false))
+        if probe_dimension.is_none()
+            && (has_text
+                || probe
+                    .image_embeddings
+                    .as_ref()
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false)
+                || probe
+                    .joint_embeddings
+                    .as_ref()
+                    .map(|v| !v.is_empty())
+                    .unwrap_or(false))
         {
             return Err(Error::Embedding(format!(
                 "Embedding backend probe returned embeddings for '{}' but dimension could not be determined",
@@ -1126,7 +1160,8 @@ impl Config {
             }
         }
 
-        let (dimension, dimension_source) = if let Some(config_dimension) = self.embedding.dimension {
+        let (dimension, dimension_source) = if let Some(config_dimension) = self.embedding.dimension
+        {
             (config_dimension, EmbeddingDimensionSource::Config)
         } else if let Some(probe_dimension) = probe_dimension {
             (probe_dimension, EmbeddingDimensionSource::Probe)
@@ -1201,7 +1236,7 @@ impl Config {
             supports_text,
             supports_image,
             supports_joint_inputs,
-            supports_multi_vector: supports_multi_vector,
+            supports_multi_vector,
             supports_mrl,
             max_batch,
         })
@@ -1653,8 +1688,18 @@ pub fn render_config_toml(
     lines.join("\n") + "\n"
 }
 
-fn push_kv(lines: &mut Vec<String>, key: &str, value: String, is_default: bool, is_irrelevant: bool) {
-    let prefix = if is_default || is_irrelevant { "# " } else { "" };
+fn push_kv(
+    lines: &mut Vec<String>,
+    key: &str,
+    value: String,
+    is_default: bool,
+    is_irrelevant: bool,
+) {
+    let prefix = if is_default || is_irrelevant {
+        "# "
+    } else {
+        ""
+    };
     lines.push(format!("{}{} = {}", prefix, key, value));
 }
 
@@ -1686,11 +1731,11 @@ fn toml_array(values: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::collections::HashSet;
     use tempfile::TempDir;
-    use wiremock::{Mock, MockServer, ResponseTemplate};
     use wiremock::matchers::{method, path};
-    use serde_json::json;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn test_default_config() {
@@ -1815,10 +1860,7 @@ mod tests {
         irrelevant.insert("reranker.model".to_string());
         let rendered = render_config_toml(&config, &defaults, &irrelevant);
 
-        let reranker_section = rendered
-            .split("[reranker]")
-            .nth(1)
-            .unwrap_or("");
+        let reranker_section = rendered.split("[reranker]").nth(1).unwrap_or("");
         assert!(reranker_section.contains("# model = \"BAAI/bge-reranker-base\""));
     }
 
@@ -1867,9 +1909,7 @@ mod tests {
         config.embedding.dimension = Some(384);
 
         let err = config.resolve_embedding_config().await.unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("config 384 != probe 768"));
+        assert!(err.to_string().contains("config 384 != probe 768"));
     }
 
     #[tokio::test]
@@ -1904,8 +1944,6 @@ mod tests {
         config.embedding.custom.modalities = vec!["text".to_string(), "image".to_string()];
 
         let err = config.resolve_embedding_config().await.unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("did not return image embeddings"));
+        assert!(err.to_string().contains("did not return image embeddings"));
     }
 }

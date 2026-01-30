@@ -7,18 +7,21 @@
 //! - Crawl depth and page limits
 //! - Sitemap XML parsing
 //! - SPA detection and JavaScript rendering
+//! - SSRF protection with async DNS validation
 
 mod detection;
 mod rate_limit;
 mod renderer;
 mod robots;
 mod sitemap;
+mod ssrf;
 
 pub use detection::*;
 pub use rate_limit::*;
 pub use renderer::*;
 pub use robots::*;
 pub use sitemap::*;
+pub use ssrf::*;
 
 use crate::config::CrawlConfig;
 use crate::error::{Error, Result};
@@ -50,11 +53,17 @@ pub struct Crawler {
     rate_limiters: Arc<RwLock<HashMap<String, HostRateLimiter>>>,
     visited: Arc<RwLock<HashSet<String>>>,
     renderer: Option<Arc<tokio::sync::Mutex<HeadlessRenderer>>>,
+    ssrf_config: SsrfConfig,
 }
 
 impl Crawler {
     /// Create a new crawler
     pub fn new(config: CrawlConfig) -> Result<Self> {
+        Self::with_ssrf_config(config, SsrfConfig::default())
+    }
+
+    /// Create a new crawler with custom SSRF configuration
+    pub fn with_ssrf_config(config: CrawlConfig, ssrf_config: SsrfConfig) -> Result<Self> {
         let client = Client::builder()
             .user_agent(&config.user_agent)
             .timeout(Duration::from_secs(config.timeout_secs))
@@ -87,11 +96,15 @@ impl Crawler {
             rate_limiters: Arc::new(RwLock::new(HashMap::new())),
             visited: Arc::new(RwLock::new(HashSet::new())),
             renderer,
+            ssrf_config,
         })
     }
 
     /// Fetch a single URL with automatic SPA detection and JS rendering fallback
     pub async fn fetch(&self, url: &str) -> Result<CrawledPage> {
+        // SSRF validation - validate URL before any network request
+        validate_url_ssrf_with_config(url, &self.ssrf_config).await?;
+
         let parsed_url = Url::parse(url)?;
         let host = parsed_url
             .host_str()
@@ -301,6 +314,9 @@ impl Crawler {
         seed_url: &str,
         callback: impl Fn(CrawledPage) -> bool + Send + Sync,
     ) -> Result<Vec<CrawledPage>> {
+        // SSRF validation for seed URL before starting crawl
+        validate_url_ssrf_with_config(seed_url, &self.ssrf_config).await?;
+
         let seed = Url::parse(seed_url)?;
         let seed_host = seed
             .host_str()
@@ -350,8 +366,8 @@ impl Crawler {
             .timeout_secs
             .max(self.config.js_page_load_timeout_ms / 1000)
             .max(1);
-        let max_crawl_seconds = per_page_budget_secs
-            .saturating_mul(self.config.max_pages.max(1) as u64);
+        let max_crawl_seconds =
+            per_page_budget_secs.saturating_mul(self.config.max_pages.max(1) as u64);
         let crawl_deadline = Instant::now() + Duration::from_secs(max_crawl_seconds);
         let max_attempts = self.config.max_pages.saturating_mul(5).max(1);
         let max_hash_routes = self.config.max_pages.max(1);
@@ -649,8 +665,8 @@ pub fn should_crawl_url(url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::{Mock, MockServer, ResponseTemplate};
     use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn test_normalize_url() {
@@ -726,10 +742,9 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/index.html"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(
-                html.clone().into_bytes(),
-                "text/html",
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(html.clone().into_bytes(), "text/html"),
+            )
             .mount(&mock_server)
             .await;
 
@@ -748,7 +763,12 @@ mod tests {
         crawl_config.timeout_secs = 5;
 
         let max_attempts = max_pages.saturating_mul(5).max(1);
-        let crawler = Crawler::new(crawl_config).expect("crawler should build");
+        // Allow localhost for tests using mock server
+        let ssrf_config = SsrfConfig {
+            allow_localhost: true,
+        };
+        let crawler =
+            Crawler::with_ssrf_config(crawl_config, ssrf_config).expect("crawler should build");
         let seed = format!("{}/index.html", mock_server.uri());
         let results = crawler
             .crawl(&seed, |_page| true)
@@ -759,7 +779,11 @@ mod tests {
 
         assert_eq!(results[0].content_type, ContentType::Html);
         assert_eq!(
-            results[0].links.iter().filter(|link| link.is_internal).count(),
+            results[0]
+                .links
+                .iter()
+                .filter(|link| link.is_internal)
+                .count(),
             20
         );
 

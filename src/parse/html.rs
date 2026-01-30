@@ -5,9 +5,9 @@ use super::{
     ParsedDocument,
 };
 use crate::error::Result;
+use regex::Regex;
 use scraper::{Html, Selector};
 use std::collections::HashSet;
-use regex::Regex;
 use url::Url;
 
 /// Parse HTML content and extract text
@@ -189,7 +189,7 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
     // Inline CSS background-image: url(...)
     if let Ok(selector) = Selector::parse("*[style]") {
         let base = base_url.and_then(|u| Url::parse(u).ok());
-            let re = Regex::new(r#"background-image\s*:\s*url\(([^)]+)\)"#).ok();
+        let re = Regex::new(r#"background-image\s*:\s*url\(([^)]+)\)"#).ok();
         if let Some(ref regex) = re {
             for elem in document.select(&selector) {
                 if let Some(style) = elem.value().attr("style") {
@@ -298,10 +298,16 @@ mod tests {
             <div style="background-image: url('/images/bg.jpg'); width:100px; height:100px"></div>
         </body></html>
         "#;
-        let doc = parse_html(html, Some("https://example.com/docs"))
-            .expect("parse_html should succeed");
-        assert!(doc.media.iter().any(|m| m.url.ends_with("/images/diagram.png")));
-        assert!(doc.media.iter().any(|m| m.url.ends_with("/images/diagram-2x.png")));
+        let doc =
+            parse_html(html, Some("https://example.com/docs")).expect("parse_html should succeed");
+        assert!(doc
+            .media
+            .iter()
+            .any(|m| m.url.ends_with("/images/diagram.png")));
+        assert!(doc
+            .media
+            .iter()
+            .any(|m| m.url.ends_with("/images/diagram-2x.png")));
         assert!(doc.media.iter().any(|m| m.url.ends_with("/images/bg.jpg")));
     }
 }

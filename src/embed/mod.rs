@@ -14,8 +14,7 @@ use crate::config::ResolvedEmbeddingConfig;
 use crate::embedding_backend::EmbeddingBackendKind;
 use crate::error::{Error, Result};
 use crate::xinference::{
-    ensure_xinference_ready, get_or_init_xinference_manager, XinferenceEmbedder,
-    XinferenceManager,
+    ensure_xinference_ready, get_or_init_xinference_manager, XinferenceEmbedder, XinferenceManager,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -120,12 +119,10 @@ pub async fn create_embedder_auto(config: &ResolvedEmbeddingConfig) -> Result<Bo
 
 /// Extract port number from a URL string
 fn extract_port_from_url(url: &str) -> Result<u16> {
-    url::Url::parse(url)
+    Ok(url::Url::parse(url)
         .map_err(|e| Error::Config(format!("Invalid backend URL: {}", e)))?
         .port()
-        .unwrap_or(9997) // Default xinference port
-        .try_into()
-        .map_err(|_| Error::Config("Port out of range".into()))
+        .unwrap_or(9997)) // Default xinference port
 }
 
 /// Create an embedder with optional Xinference manager support

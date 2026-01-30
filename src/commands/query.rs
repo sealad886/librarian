@@ -93,15 +93,20 @@ pub async fn cmd_query(
     if config.reranker.enabled && !ranked.is_empty() {
         let reranker = create_reranker(&config.reranker, &embedding.backend.url)?;
         if is_multimodal_reranker_model(&config.reranker.model) {
-            ranked = apply_reranker(reranker.as_ref(), query, ranked, config.reranker.top_k).await?;
+            ranked =
+                apply_reranker(reranker.as_ref(), query, ranked, config.reranker.top_k).await?;
         } else {
             let (text_results, other_results): (Vec<_>, Vec<_>) = ranked
                 .into_iter()
                 .partition(|r| r.modality.as_deref().unwrap_or("text") == "text");
 
-            let mut reranked_text =
-                apply_reranker(reranker.as_ref(), query, text_results, config.reranker.top_k)
-                    .await?;
+            let mut reranked_text = apply_reranker(
+                reranker.as_ref(),
+                query,
+                text_results,
+                config.reranker.top_k,
+            )
+            .await?;
             reranked_text.extend(other_results);
             ranked = reranked_text;
         }
@@ -181,10 +186,7 @@ pub fn print_query_results(result: &QueryResult) {
         }
 
         if r.modality.as_deref() == Some("image") {
-            let label = r
-                .media_url
-                .as_deref()
-                .unwrap_or_else(|| r.doc_uri.as_str());
+            let label = r.media_url.as_deref().unwrap_or(r.doc_uri.as_str());
             println!("   [image] {}\n", label);
         } else {
             let preview = if r.chunk_text.len() > 200 {

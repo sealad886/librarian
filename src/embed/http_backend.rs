@@ -3,8 +3,8 @@ use crate::config::{EmbeddingDimensionSource, ResolvedEmbeddingConfig};
 use crate::embedding_backend::{EmbeddingBackendClient, ImageTextInput};
 use crate::error::{Error, Result};
 use async_trait::async_trait;
-use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use std::fs;
 
 pub struct HttpEmbedder {
@@ -44,9 +44,8 @@ impl HttpEmbedder {
     }
 
     fn encode_image_base64(path: &str) -> Result<String> {
-        let bytes = fs::read(path).map_err(|e| {
-            Error::Embedding(format!("Failed to read image '{}': {}", path, e))
-        })?;
+        let bytes = fs::read(path)
+            .map_err(|e| Error::Embedding(format!("Failed to read image '{}': {}", path, e)))?;
         Ok(STANDARD.encode(bytes))
     }
 }
