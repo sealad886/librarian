@@ -19,6 +19,7 @@ use image::imageops::FilterType;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+#[cfg(test)]
 use std::net::{IpAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -298,6 +299,7 @@ fn is_perceptual_duplicate(hash: u64, seen: &[u64]) -> bool {
 }
 
 /// Check if an IP address is in a private or reserved range to prevent SSRF attacks
+#[cfg(test)]
 fn is_ip_address_safe(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ipv4) => {
@@ -367,6 +369,7 @@ fn is_ip_address_safe(ip: IpAddr) -> bool {
 }
 
 /// Validate that a URL's resolved IP address is safe to request (not private/reserved)
+#[cfg(test)]
 fn validate_url_safety(url: &str) -> std::result::Result<(), String> {
     let parsed = Url::parse(url).map_err(|e| format!("Failed to parse URL: {}", e))?;
 

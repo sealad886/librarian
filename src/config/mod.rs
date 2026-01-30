@@ -1018,7 +1018,7 @@ impl Config {
 
         // Derive support flags from probe modalities first (authoritative runtime data),
         // falling back to allowlisted spec capabilities when probe modalities are empty
-        let (supports_joint_inputs, supports_image, supports_text, strategy) = if let Some(spec) =
+        let (supports_joint_inputs, supports_image, supports_text, supports_audio, supports_video, strategy) = if let Some(spec) =
             allowlisted
         {
             // For allowlisted models, use spec capabilities but override with probe modalities
@@ -1026,6 +1026,8 @@ impl Config {
             let spec_joint = spec.capabilities.supports_joint_inputs;
             let spec_image = spec.capabilities.supports_image;
             let spec_text = spec.capabilities.supports_text;
+            let spec_audio = spec.capabilities.supports_audio;
+            let spec_video = spec.capabilities.supports_video;
             let spec_strategy = spec.capabilities.strategy;
 
             if probe_has_modalities {
@@ -1033,6 +1035,8 @@ impl Config {
                 let probe_joint = modalities.iter().any(|m| m == "multimode");
                 let probe_image = probe_joint || modalities.iter().any(|m| m == "image");
                 let probe_text = probe_joint || modalities.iter().any(|m| m == "text");
+                let probe_audio = modalities.iter().any(|m| m == "audio");
+                let probe_video = modalities.iter().any(|m| m == "video");
                 // Use spec strategy but could be overridden if probe indicates different capability
                 let strategy = if probe_joint && !spec_joint {
                     MultimodalStrategy::VlEmbedding
@@ -1045,10 +1049,12 @@ impl Config {
                     probe_joint || spec_joint,
                     probe_image || spec_image,
                     probe_text || spec_text,
+                    probe_audio || spec_audio,
+                    probe_video || spec_video,
                     strategy,
                 )
             } else {
-                (spec_joint, spec_image, spec_text, spec_strategy)
+                (spec_joint, spec_image, spec_text, spec_audio, spec_video, spec_strategy)
             }
         } else {
             let supports_joint_inputs = modalities.iter().any(|m| m == "multimode");
@@ -1066,6 +1072,8 @@ impl Config {
                 supports_joint_inputs,
                 supports_image,
                 supports_text,
+                supports_audio,
+                supports_video,
                 strategy,
             )
         };
