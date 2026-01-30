@@ -15,11 +15,14 @@ use librarian::{
     error::Result,
     mcp::McpServer,
     meta::{MetaDb, RunOperation},
+    models::embedding_model_spec,
     progress::LogWriterFactory,
     store::QdrantStore,
 };
+use std::io::IsTerminal;
 use std::path::PathBuf;
-use tracing::{error, info};
+use tracing::{debug, error, info};
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Parser)]
@@ -252,7 +255,7 @@ enum IngestSource {
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
-        error!("{}", e);
+        log_error_chain(&e);
         std::process::exit(1);
     }
 }
@@ -267,10 +270,24 @@ async fn run() -> Result<()> {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
     };
 
+    let is_mcp = matches!(&cli.command, &Commands::Mcp);
+    let use_progress_writer = std::io::stderr().is_terminal() && !is_mcp;
+    let writer: BoxMakeWriter = if use_progress_writer {
+        BoxMakeWriter::new(LogWriterFactory)
+    } else {
+        BoxMakeWriter::new(std::io::stderr)
+    };
+    let fmt_layer = fmt::layer().with_writer(writer);
+
     tracing_subscriber::registry()
-        .with(fmt::layer().with_writer(LogWriterFactory))
+        .with(fmt_layer)
         .with(filter)
         .init();
+
+    debug!(
+        command = command_label(&cli.command),
+        "Dispatching librarian command"
+    );
 
     // Handle init command specially (doesn't need existing config)
     if matches!(cli.command, Commands::Init { .. }) {
@@ -288,12 +305,67 @@ async fn run() -> Result<()> {
     // Load configuration
     let config = load_config(cli.config.as_deref()).await?;
 
-    // Resolve embedding config and create embedder to get dimension
-    let embedding_config = config.resolve_embedding_config().await?;
-    let embedder = create_embedder_auto(&embedding_config).await?;
+    debug!(
+        config_path = %config.paths.config_file.display(),
+        db_path = %config.paths.db_file.display(),
+        "Resolved config paths"
+    );
+
+    debug!(
+        qdrant_url = %config.qdrant_url,
+        collection = %config.collection_name,
+        "Resolved Qdrant configuration"
+    );
+
+    if config.qdrant_api_key_env.is_empty() {
+        debug!("Qdrant API key env var not configured");
+    } else {
+        let present = std::env::var(&config.qdrant_api_key_env).is_ok();
+        debug!(
+            qdrant_api_key_env = %config.qdrant_api_key_env,
+            present,
+            "Checked Qdrant API key env var"
+        );
+    }
 
     // Initialize components
     let db = MetaDb::new(&config.paths.db_file).await?;
+
+    if is_mcp {
+        debug!(
+            embedding_model = %config.embedding.model,
+            embedding_backend = %config.embedding.backend,
+            embedding_url = %config.embedding.url,
+            custom_embedding_url = %config.embedding.custom.url,
+            "Resolved embedding configuration for MCP startup"
+        );
+
+        let dimension = resolve_mcp_store_dimension(&config, &db).await?;
+        debug!(
+            dimension = dimension.dimension,
+            source = dimension.source,
+            "Resolved embedding dimension for MCP store"
+        );
+
+        let store = QdrantStore::new(
+            &config.qdrant_url,
+            &config.collection_name,
+            dimension.dimension,
+            None,
+        )
+        .await?;
+
+        let server = McpServer::new(config, db, store);
+        server
+            .run()
+            .await
+            .map_err(|e| librarian::error::Error::McpProtocol(e.to_string()))?;
+        return Ok(());
+    }
+
+    // Resolve embedding config and create embedder to get dimension
+    let embedding_config = config.resolve_embedding_config().await?;
+    let embedder = create_embedder_auto(&embedding_config).await?;
 
     // Determine if this command needs validated connection (write operations)
     let needs_validation = matches!(
@@ -495,13 +567,7 @@ async fn run() -> Result<()> {
             handle_db_action(&config, action, cli.json).await?;
         }
 
-        Commands::Mcp => {
-            let server = McpServer::new(config, db, store);
-            server
-                .run()
-                .await
-                .map_err(|e| librarian::error::Error::McpProtocol(e.to_string()))?;
-        }
+        Commands::Mcp => unreachable!(),
 
         Commands::Completions { .. } => unreachable!(),
     }
@@ -509,6 +575,74 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
+fn command_label(command: &Commands) -> &'static str {
+    match command {
+        Commands::Init { .. } => "init",
+        Commands::Ingest { .. } => "ingest",
+        Commands::Query { .. } => "query",
+        Commands::Status => "status",
+        Commands::Sources { .. } => "sources",
+        Commands::Prune { .. } => "prune",
+        Commands::Reindex { .. } => "reindex",
+        Commands::Update { .. } => "update",
+        Commands::Remove { .. } => "remove",
+        Commands::Rename { .. } => "rename",
+        Commands::Mcp => "mcp",
+        Commands::Completions { .. } => "completions",
+        Commands::Db { .. } => "db",
+    }
+}
+
+fn log_error_chain(err: &dyn std::error::Error) {
+    error!("{}", err);
+    let mut source = err.source();
+    while let Some(cause) = source {
+        error!("caused by: {}", cause);
+        source = cause.source();
+    }
+}
+
+struct StoreDimension {
+    dimension: usize,
+    source: &'static str,
+}
+
+async fn resolve_mcp_store_dimension(config: &Config, db: &MetaDb) -> Result<StoreDimension> {
+    if let Some(dimension) = config.embedding.dimension {
+        return Ok(StoreDimension {
+            dimension,
+            source: "config.embedding.dimension",
+        });
+    }
+
+    if let Some(dimension) = config.embedding.custom.dimension {
+        return Ok(StoreDimension {
+            dimension,
+            source: "config.embedding.custom.dimension",
+        });
+    }
+
+    if let Some(record) = db.get_collection_config(&config.collection_name).await? {
+        return Ok(StoreDimension {
+            dimension: record.vector_dimension as usize,
+            source: "metadata.collection_config",
+        });
+    }
+
+    if let Some(spec) = embedding_model_spec(&config.embedding.model) {
+        if let Some(dimension) = spec.default_dimension {
+            return Ok(StoreDimension {
+                dimension,
+                source: "model_registry",
+            });
+        }
+    }
+
+    Err(librarian::error::Error::Config(
+        "Embedding dimension could not be resolved for MCP startup. Set embedding.dimension in config.toml or ensure collection metadata exists."
+            .to_string(),
+    ))
+}
 #[allow(clippy::print_literal)]
 fn print_completion_extras(shell: Shell) {
     match shell {

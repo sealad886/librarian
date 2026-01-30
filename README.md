@@ -300,11 +300,27 @@ Start the MCP server for VS Code integration.
 librarian mcp
 ```
 
-The MCP server communicates via stdio and exposes:
+The MCP server communicates via stdio (JSON-RPC on stdout; logs on stderr) and exposes:
 
 - `rag_search`: Search the index
 - `rag_sources`: List sources
 - `rag_status`: Get status
+
+MCP reads configuration from `~/.librarian/config.toml` (or `--config`). If your
+embedding backend is unavailable, the server still starts, but `rag_search` and
+ingest/update tools will return an error until the backend is reachable.
+
+### Troubleshooting `librarian mcp`
+
+- Enable debug logging (stderr only):
+  - `RUST_LOG=debug librarian --verbose mcp`
+- MCP startup requires a known embedding dimension. If you see:
+  - `Embedding dimension could not be resolved for MCP startup`
+  - Fix: set `embedding.dimension` in your config, or run `librarian db init`
+    to record collection metadata.
+- Root cause note (fixed Jan 2026): MCP previously resolved the embedding backend
+  during startup and suppressed logs on non-tty stderr, causing silent exits when
+  the backend was down.
 
 ### `completions`
 
