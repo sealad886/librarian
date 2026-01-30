@@ -17,6 +17,11 @@ pub struct HttpEmbedder {
     dimension: usize,
     dimension_source: EmbeddingDimensionSource,
     capabilities: Option<EmbeddingModelCapabilities>,
+    // Fallback support flags from config (for custom models)
+    config_supports_text: bool,
+    config_supports_image: bool,
+    config_supports_audio: bool,
+    config_supports_video: bool,
 }
 
 impl HttpEmbedder {
@@ -30,6 +35,10 @@ impl HttpEmbedder {
             dimension: config.dimension,
             dimension_source: config.dimension_source,
             capabilities,
+            config_supports_text: config.supports_text,
+            config_supports_image: config.supports_image,
+            config_supports_audio: config.supports_audio,
+            config_supports_video: config.supports_video,
         })
     }
 
@@ -54,15 +63,27 @@ impl HttpEmbedder {
     }
 
     fn supports_image(&self) -> bool {
-        self.capabilities.map(|c| c.supports_image).unwrap_or(false)
+        self.capabilities
+            .map(|c| c.supports_image)
+            .unwrap_or(self.config_supports_image)
     }
 
     fn supports_audio(&self) -> bool {
-        self.capabilities.map(|c| c.supports_audio).unwrap_or(false)
+        self.capabilities
+            .map(|c| c.supports_audio)
+            .unwrap_or(self.config_supports_audio)
     }
 
     fn supports_video(&self) -> bool {
-        self.capabilities.map(|c| c.supports_video).unwrap_or(false)
+        self.capabilities
+            .map(|c| c.supports_video)
+            .unwrap_or(self.config_supports_video)
+    }
+
+    fn supports_text(&self) -> bool {
+        self.capabilities
+            .map(|c| c.supports_text)
+            .unwrap_or(self.config_supports_text)
     }
 
     fn detect_mime_type(path: &str) -> Option<String> {
@@ -305,7 +326,10 @@ impl Embedder for HttpEmbedder {
     }
 
     fn supported_modalities(&self) -> Vec<MediaModality> {
-        let mut modalities = vec![MediaModality::Text];
+        let mut modalities = vec![];
+        if self.supports_text() {
+            modalities.push(MediaModality::Text);
+        }
         if self.supports_image() {
             modalities.push(MediaModality::Image);
         }
