@@ -1815,8 +1815,10 @@ mod tests {
 
     #[test]
     fn test_render_config_uncomments_custom_values() {
-        let mut config = Config::default();
-        config.collection_name = "custom_collection".to_string();
+        let config = Config {
+            collection_name: "custom_collection".to_string(),
+            ..Default::default()
+        };
         let defaults = Config::default();
         let irrelevant = HashSet::new();
         let rendered = render_config_toml(&config, &defaults, &irrelevant);

@@ -231,6 +231,26 @@ pub fn extract_text_from_html(content: &str) -> String {
     normalize_whitespace(&text)
 }
 
+/// Parse a srcset string into individual URLs (best-effort)
+fn parse_srcset_urls(srcset: &str) -> Vec<String> {
+    // srcset format: "url1 1x, url2 2x" or "url1 500w, url2 1000w"
+    let mut urls = Vec::new();
+    for part in srcset.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        // Split by whitespace and take the first token as URL
+        if let Some((url, _descriptor)) = trimmed.split_once(' ') {
+            urls.push(url.to_string());
+        } else {
+            // No descriptor, treat whole part as URL
+            urls.push(trimmed.to_string());
+        }
+    }
+    urls
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,24 +330,4 @@ mod tests {
             .any(|m| m.url.ends_with("/images/diagram-2x.png")));
         assert!(doc.media.iter().any(|m| m.url.ends_with("/images/bg.jpg")));
     }
-}
-
-/// Parse a srcset string into individual URLs (best-effort)
-fn parse_srcset_urls(srcset: &str) -> Vec<String> {
-    // srcset format: "url1 1x, url2 2x" or "url1 500w, url2 1000w"
-    let mut urls = Vec::new();
-    for part in srcset.split(',') {
-        let trimmed = part.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        // Split by whitespace and take the first token as URL
-        if let Some((url, _descriptor)) = trimmed.split_once(' ') {
-            urls.push(url.to_string());
-        } else {
-            // No descriptor, treat whole part as URL
-            urls.push(trimmed.to_string());
-        }
-    }
-    urls
 }
