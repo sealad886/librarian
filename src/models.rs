@@ -136,7 +136,7 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
             supports_image: true,
             supports_audio: false,
             supports_video: false,
-            supports_joint_inputs: true,
+            supports_joint_inputs: false,
             supports_multi_vector: false,
         },
         supports_mrl: false,
@@ -153,7 +153,7 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
             supports_image: true,
             supports_audio: false,
             supports_video: false,
-            supports_joint_inputs: true,
+            supports_joint_inputs: false,
             supports_multi_vector: false,
         },
         supports_mrl: false,
@@ -307,7 +307,7 @@ const RERANK_MODELS: &[RerankerModelSpec] = &[
             supports_image: true,
             supports_audio: false,
             supports_video: false,
-            supports_joint_inputs: true,
+            supports_joint_inputs: false,
         },
         max_batch: 8,
     },
@@ -320,7 +320,7 @@ const RERANK_MODELS: &[RerankerModelSpec] = &[
             supports_image: true,
             supports_audio: false,
             supports_video: false,
-            supports_joint_inputs: true,
+            supports_joint_inputs: false,
         },
         max_batch: 4,
     },
@@ -462,7 +462,7 @@ mod tests {
     fn test_embedding_capabilities() {
         let caps = embedding_model_capabilities("Qwen/Qwen3-VL-Embedding-2B").unwrap();
         assert_eq!(caps.strategy, MultimodalStrategy::VlEmbedding);
-        assert!(caps.supports_joint_inputs);
+        assert!(!caps.supports_joint_inputs); // Joint inputs not supported by sidecar
         assert!(caps.supports_image);
         assert!(!caps.supports_video); // Video not supported by sidecar
 
