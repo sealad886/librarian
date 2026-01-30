@@ -95,6 +95,24 @@ pub struct ImageTextInput {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AudioTextInput {
+    pub audio_base64: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_mime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VideoTextInput {
+    pub video_base64: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_mime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct EmbedTextRequest {
     model: String,
     inputs: Vec<String>,
@@ -104,6 +122,18 @@ struct EmbedTextRequest {
 struct EmbedImageTextRequest {
     model: String,
     inputs: Vec<ImageTextInput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EmbedAudioTextRequest {
+    model: String,
+    inputs: Vec<AudioTextInput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EmbedVideoTextRequest {
+    model: String,
+    inputs: Vec<VideoTextInput>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -233,6 +263,54 @@ impl EmbeddingBackendClient {
     ) -> Result<Vec<Vec<f32>>> {
         let url = self.endpoint("/v1/embed/multimode")?;
         let request = EmbedImageTextRequest {
+            model: model.to_string(),
+            inputs,
+        };
+        let parsed: EmbeddingResponse = self
+            .send_with_retry(self.client.post(url).json(&request))
+            .await?;
+        Ok(parsed.into_embeddings())
+    }
+
+    pub async fn embed_image(
+        &self,
+        model: &str,
+        inputs: Vec<ImageTextInput>,
+    ) -> Result<Vec<Vec<f32>>> {
+        let url = self.endpoint("/v1/embed/image")?;
+        let request = EmbedImageTextRequest {
+            model: model.to_string(),
+            inputs,
+        };
+        let parsed: EmbeddingResponse = self
+            .send_with_retry(self.client.post(url).json(&request))
+            .await?;
+        Ok(parsed.into_embeddings())
+    }
+
+    pub async fn embed_audio(
+        &self,
+        model: &str,
+        inputs: Vec<AudioTextInput>,
+    ) -> Result<Vec<Vec<f32>>> {
+        let url = self.endpoint("/v1/embed/audio")?;
+        let request = EmbedAudioTextRequest {
+            model: model.to_string(),
+            inputs,
+        };
+        let parsed: EmbeddingResponse = self
+            .send_with_retry(self.client.post(url).json(&request))
+            .await?;
+        Ok(parsed.into_embeddings())
+    }
+
+    pub async fn embed_video(
+        &self,
+        model: &str,
+        inputs: Vec<VideoTextInput>,
+    ) -> Result<Vec<Vec<f32>>> {
+        let url = self.endpoint("/v1/embed/video")?;
+        let request = EmbedVideoTextRequest {
             model: model.to_string(),
             inputs,
         };

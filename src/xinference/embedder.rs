@@ -2,7 +2,7 @@
 //!
 //! Implements the Embedder trait using Xinference's OpenAI-compatible API.
 
-use crate::embed::{Embedder, ImageEmbedInput};
+use crate::embed::{Embedder, ImageEmbedInput, MediaModality};
 use crate::error::{Error, Result};
 use crate::xinference::{
     get_xinference_model_spec, hf_to_xinference_name, XinferenceManager,
@@ -28,6 +28,7 @@ struct OpenAIEmbedRequest {
 struct OpenAIEmbedResponse {
     data: Vec<EmbeddingData>,
     #[serde(default)]
+    #[allow(dead_code)]
     model: Option<String>,
 }
 
@@ -238,6 +239,11 @@ impl Embedder for XinferenceEmbedder {
 
     fn model_name(&self) -> &str {
         &self.model_name
+    }
+
+    fn supported_modalities(&self) -> Vec<MediaModality> {
+        // Xinference only supports text embeddings via OpenAI-compatible API
+        vec![MediaModality::Text]
     }
 }
 
