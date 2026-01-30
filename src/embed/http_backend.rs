@@ -56,9 +56,9 @@ impl HttpEmbedder {
         Ok(())
     }
 
-    fn encode_file_base64(path: &str) -> Result<String> {
+    fn encode_image_base64(path: &str) -> Result<String> {
         let bytes = fs::read(path)
-            .map_err(|e| Error::Embedding(format!("Failed to read file '{}': {}", path, e)))?;
+            .map_err(|e| Error::Embedding(format!("Failed to read image '{}': {}", path, e)))?;
         Ok(STANDARD.encode(bytes))
     }
 

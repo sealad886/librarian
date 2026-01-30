@@ -1000,7 +1000,8 @@ impl Config {
             .unwrap_or_else(|| "custom".to_string());
 
         let probe_modalities = probe.modalities.clone();
-        let modalities = if !probe_modalities.is_empty() {
+        let probe_has_modalities = !probe_modalities.is_empty();
+        let modalities = if probe_has_modalities {
             probe_modalities
         } else if let Some(spec) = allowlisted {
             spec.modalities.iter().map(|m| (*m).to_string()).collect()
@@ -1015,22 +1016,40 @@ impl Config {
             ));
         }
 
-        let (
-            supports_joint_inputs,
-            supports_image,
-            supports_text,
-            supports_audio,
-            supports_video,
-            strategy,
-        ) = if let Some(spec) = allowlisted {
-            (
-                spec.capabilities.supports_joint_inputs,
-                spec.capabilities.supports_image,
-                spec.capabilities.supports_text,
-                spec.capabilities.supports_audio,
-                spec.capabilities.supports_video,
-                spec.capabilities.strategy,
-            )
+        // Derive support flags from probe modalities first (authoritative runtime data),
+        // falling back to allowlisted spec capabilities when probe modalities are empty
+        let (supports_joint_inputs, supports_image, supports_text, strategy) = if let Some(spec) =
+            allowlisted
+        {
+            // For allowlisted models, use spec capabilities but override with probe modalities
+            // when probe reports actual modalities (runtime truth)
+            let spec_joint = spec.capabilities.supports_joint_inputs;
+            let spec_image = spec.capabilities.supports_image;
+            let spec_text = spec.capabilities.supports_text;
+            let spec_strategy = spec.capabilities.strategy;
+
+            if probe_has_modalities {
+                // Probe modalities override spec - backend reports actual runtime capabilities
+                let probe_joint = modalities.iter().any(|m| m == "multimode");
+                let probe_image = probe_joint || modalities.iter().any(|m| m == "image");
+                let probe_text = probe_joint || modalities.iter().any(|m| m == "text");
+                // Use spec strategy but could be overridden if probe indicates different capability
+                let strategy = if probe_joint && !spec_joint {
+                    MultimodalStrategy::VlEmbedding
+                } else if probe_image && !spec_image && !probe_joint {
+                    MultimodalStrategy::DualEncoder
+                } else {
+                    spec_strategy
+                };
+                (
+                    probe_joint || spec_joint,
+                    probe_image || spec_image,
+                    probe_text || spec_text,
+                    strategy,
+                )
+            } else {
+                (spec_joint, spec_image, spec_text, spec_strategy)
+            }
         } else {
             let supports_joint_inputs = modalities.iter().any(|m| m == "multimode");
             let supports_image = supports_joint_inputs || modalities.iter().any(|m| m == "image");
@@ -1040,14 +1059,13 @@ impl Config {
             let strategy = if supports_joint_inputs {
                 MultimodalStrategy::VlEmbedding
             } else {
+                // Default to DualEncoder for both image-only and text-only models
                 MultimodalStrategy::DualEncoder
             };
             (
                 supports_joint_inputs,
                 supports_image,
                 supports_text,
-                supports_audio,
-                supports_video,
                 strategy,
             )
         };
@@ -1851,7 +1869,7 @@ mod tests {
     fn test_render_config_uncomments_custom_values() {
         let config = Config {
             collection_name: "custom_collection".to_string(),
-            ..Default::default()
+            ..Config::default()
         };
         let defaults = Config::default();
         let irrelevant = HashSet::new();

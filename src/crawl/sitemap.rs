@@ -4,7 +4,9 @@
 //! - Standard sitemap.xml format
 //! - Sitemap index files (sitemapindex)
 //! - Recursive sitemap index resolution
+//! - SSRF protection via async DNS validation
 
+use super::ssrf::validate_url_ssrf;
 use crate::error::{Error, Result};
 use reqwest::Client;
 use std::net::{IpAddr, ToSocketAddrs};
@@ -256,6 +258,9 @@ impl SitemapParser {
 
     /// Fetch and parse a single sitemap
     async fn fetch_and_parse(&self, url: &str) -> Result<ParseResult> {
+        // Validate URL for SSRF protection before fetching
+        validate_url_ssrf(url).await?;
+
         let response = self.client.get(url).send().await?;
 
         if !response.status().is_success() {

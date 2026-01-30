@@ -267,6 +267,6 @@ mod tests {
 
         let response: RerankResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.results.len(), 1);
-        assert!(response.results[0].document.is_none());
+        // Document field removed per Issue #11 - field was never read
     }
 }

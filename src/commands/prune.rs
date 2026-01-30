@@ -185,7 +185,12 @@ pub async fn cmd_remove_source(
 
     // Get all documents for the source
     let documents = db.list_source_documents(source_id).await?;
-    stats.documents_checked = documents.len();
+
+    let mut stats = PruneStats {
+        sources_checked: 1,
+        documents_checked: documents.len(),
+        ..Default::default()
+    };
 
     // Delete chunks from Qdrant
     for doc in &documents {

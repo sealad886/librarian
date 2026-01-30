@@ -2,7 +2,7 @@
 
 use crate::chunk::{chunk_document, compute_content_hash, TextChunk};
 use crate::config::{Config, ResolvedEmbeddingConfig};
-use crate::crawl::{CrawledPage, Crawler};
+use crate::crawl::{validate_url_ssrf, CrawledPage, Crawler};
 use crate::embed::{
     embed_images_in_batches, embed_in_batches, embed_multimode_in_batches, fuse_embeddings,
     Embedder, ImageEmbedInput,
@@ -407,6 +407,7 @@ fn validate_url_safety(url: &str) -> std::result::Result<(), String> {
 }
 
 /// Fetch accepted image candidates and cache them under base_dir/assets
+#[allow(clippy::too_many_arguments)]
 async fn fetch_and_cache_images(
     config: &Config,
     images: &[(ExtractedMedia, f32)],
@@ -445,9 +446,16 @@ async fn fetch_and_cache_images(
     let mut seen_phashes: Vec<u64> = Vec::new();
 
     for (m, _score) in images.iter() {
-        // Validate URL safety (SSRF protection)
-        if let Err(e) = validate_url_safety(&m.url) {
-            debug!(url = %m.url, reason = %e, "Skipping image (unsafe URL)");
+        if Url::parse(&m.url)
+            .map(|u| u.scheme().to_string())
+            .map(|s| s != "http" && s != "https")
+            .unwrap_or(true)
+        {
+            continue;
+        }
+        // SSRF validation before fetching
+        if let Err(e) = validate_url_ssrf(&m.url).await {
+            debug!(url = %m.url, error = %e, "Skipping image (SSRF validation failed)");
             continue;
         }
 

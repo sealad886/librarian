@@ -514,85 +514,58 @@ fn print_completion_extras(shell: Shell) {
     match shell {
         Shell::Bash => {
             println!();
+            println!("# Dynamic completion for 'librarian remove' source IDs");
+            println!("_librarian_dynamic() {{");
+            println!("    local cur prev words cword");
+            println!("    if declare -F _init_completion >/dev/null; then");
+            println!("        _init_completion -n : || return");
+            println!("    else");
+            println!("        cur=\"${{COMP_WORDS[COMP_CWORD]}}\"");
+            println!("        words=(\"${{COMP_WORDS[@]}}\")");
+            println!("        cword=$COMP_CWORD");
+            println!("    fi");
+            println!("    local remove_index=-1");
+            println!("    for i in \"${{!words[@]}}\"; do");
+            println!("        if [[ \"${{words[i]}}\" == \"remove\" ]]; then");
+            println!("            remove_index=$i");
+            println!("            break");
+            println!("        fi");
+            println!("    done");
+            println!("    if [[ $remove_index -ge 0 && $cword -eq $((remove_index + 1)) ]]; then");
             println!(
-                "{raw}",
-                raw = r#"# Dynamic completion for 'librarian remove' source IDs"#
+                "        COMPREPLY=( $(compgen -W \"$(librarian sources --completion bash 2>/dev/null)\" -- \"$cur\") )"
             );
-            println!("{raw}", raw = r#"_librarian_dynamic() {"#);
-            println!("{raw}", raw = r#"    local cur prev words cword"#);
+            println!("        return 0");
+            println!("    fi");
+            println!("    _librarian \"$@\"");
+            println!("}}");
             println!(
-                "{raw}",
-                raw = r#"    if declare -F _init_completion >/dev/null; then"#
-            );
-            println!("{raw}", raw = r#"        _init_completion -n : || return"#);
-            println!("{raw}", raw = r#"    else"#);
-            println!("{raw}", raw = r#"        cur="${COMP_WORDS[COMP_CWORD]}""#);
-            println!("{raw}", raw = r#"        words=("${COMP_WORDS[@]}")"#);
-            println!("{raw}", raw = r#"        cword=$COMP_CWORD"#);
-            println!("{raw}", raw = r#"    fi"#);
-            println!("{raw}", raw = r#"    local remove_index=-1"#);
-            println!("{raw}", raw = r#"    for i in "${!words[@]}"; do"#);
-            println!(
-                "{raw}",
-                raw = r#"        if [[ "${words[i]}" == "remove" ]]; then"#
-            );
-            println!("{raw}", raw = r#"            remove_index=$i"#);
-            println!("{raw}", raw = r#"            break"#);
-            println!("{raw}", raw = r#"        fi"#);
-            println!("{raw}", raw = r#"    done"#);
-            println!(
-                "{raw}",
-                raw =
-                    r#"    if [[ $remove_index -ge 0 && $cword -eq $((remove_index + 1)) ]]; then"#
+                "if [[ \"${{BASH_VERSINFO[0]}}\" -eq 4 && \"${{BASH_VERSINFO[1]}}\" -ge 4 || \"${{BASH_VERSINFO[0]}}\" -gt 4 ]]; then"
             );
             println!(
-                "{raw}",
-                raw = r#"        COMPREPLY=( $(compgen -W "$(librarian sources --completion bash 2>/dev/null)" -- "$cur") )"#
+                "    complete -F _librarian_dynamic -o nosort -o bashdefault -o default librarian"
             );
-            println!("{raw}", raw = r#"        return 0"#);
-            println!("{raw}", raw = r#"    fi"#);
-            println!("{raw}", raw = r#"    _librarian "$@""#);
-            println!("{raw}", raw = r#"}"#);
-            println!(
-                "{raw}",
-                raw = r#"if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then"#
-            );
-            println!(
-                "{raw}",
-                raw = r#"    complete -F _librarian_dynamic -o nosort -o bashdefault -o default librarian"#
-            );
-            println!("{raw}", raw = r#"else"#);
-            println!(
-                "{raw}",
-                raw = r#"    complete -F _librarian_dynamic -o bashdefault -o default librarian"#
-            );
-            println!("{raw}", raw = r#"fi"#);
+            println!("else");
+            println!("    complete -F _librarian_dynamic -o bashdefault -o default librarian");
+            println!("fi");
         }
         Shell::Zsh => {
             println!();
+            println!("# Dynamic completion for 'librarian remove' source IDs");
+            println!("_librarian_source_ids() {{");
+            println!("    local -a entries");
             println!(
-                "{}",
-                r#"# Dynamic completion for 'librarian remove' source IDs"#
+                "    entries=(\"${{(@f)$(librarian sources --completion zsh 2>/dev/null)}}\")"
             );
-            println!("{}", r#"_librarian_source_ids() {"#);
-            println!("{}", r#"    local -a entries"#);
-            println!(
-                "{}",
-                r#"    entries=("${(@f)$(librarian sources --completion zsh 2>/dev/null)}")"#
-            );
-            println!("{}", r#"    _describe -t sources 'source ids' entries"#);
-            println!("{}", r#"}"#);
-            println!("{}", r#"compdef _librarian_source_ids 'librarian remove'"#);
+            println!("    _describe -t sources 'source ids' entries");
+            println!("}}");
+            println!("compdef _librarian_source_ids 'librarian remove'");
         }
         Shell::Fish => {
             println!();
+            println!("# Dynamic completion for 'librarian remove' source IDs");
             println!(
-                "{}",
-                r#"# Dynamic completion for 'librarian remove' source IDs"#
-            );
-            println!(
-                "{}",
-                r#"complete -c librarian -n '__fish_seen_subcommand_from remove' -a '(librarian sources --completion fish 2>/dev/null)'"#
+                "complete -c librarian -n '__fish_seen_subcommand_from remove' -a '(librarian sources --completion fish 2>/dev/null)'"
             );
         }
         _ => {}
