@@ -35,8 +35,6 @@ struct RerankResponse {
 struct RerankResultData {
     index: usize,
     relevance_score: f32,
-    #[serde(default)]
-    document: Option<String>,
 }
 
 /// Xinference reranker implementation
@@ -55,10 +53,7 @@ impl XinferenceReranker {
     /// 1. Ensure the Xinference server is running
     /// 2. Launch the reranker model if not already running
     /// 3. Return a reranker ready for use
-    pub async fn new(
-        manager: Arc<Mutex<XinferenceManager>>,
-        model: &str,
-    ) -> Result<Self> {
+    pub async fn new(manager: Arc<Mutex<XinferenceManager>>, model: &str) -> Result<Self> {
         let xinf_name = hf_to_xinference_name(model);
 
         // Verify model is a known reranker model
@@ -115,9 +110,9 @@ impl XinferenceReranker {
         let manager_lock = get_or_init_xinference_manager(9997).await?;
         let base_url = {
             let mut guard = manager_lock.lock().await;
-            let mgr = guard.as_mut().ok_or_else(|| {
-                Error::Config("Xinference manager not initialized".into())
-            })?;
+            let mgr = guard
+                .as_mut()
+                .ok_or_else(|| Error::Config("Xinference manager not initialized".into()))?;
 
             // Ensure model is launched
             mgr.ensure_model_launched(model, "rerank").await?;
@@ -130,9 +125,7 @@ impl XinferenceReranker {
             .map_err(|e| Error::Embedding(format!("Failed to create HTTP client: {}", e)))?;
 
         // Create a dummy Arc<Mutex<XinferenceManager>> since we use the global one
-        let dummy_manager = Arc::new(Mutex::new(
-            crate::xinference::XinferenceManager::new(9997)?
-        ));
+        let dummy_manager = Arc::new(Mutex::new(crate::xinference::XinferenceManager::new(9997)?));
 
         Ok(Self {
             manager: dummy_manager,
@@ -211,7 +204,8 @@ impl Reranker for XinferenceReranker {
             let mut mgr = self.manager.lock().await;
             mgr.ensure_running().await?;
             if !mgr.is_model_launched(&self.xinf_model_name) {
-                mgr.ensure_model_launched(&self.model_name, "rerank").await?;
+                mgr.ensure_model_launched(&self.model_name, "rerank")
+                    .await?;
             }
         }
 
@@ -270,6 +264,6 @@ mod tests {
 
         let response: RerankResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.results.len(), 1);
-        assert!(response.results[0].document.is_none());
+        // Document field removed per Issue #11 - field was never read
     }
 }

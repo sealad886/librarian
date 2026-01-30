@@ -193,9 +193,9 @@ fn main() {
         assert_eq!(doc.title, Some("Main Title".to_string()));
         assert!(doc.text.contains("paragraph"));
         assert!(doc.headings.len() >= 3);
-        assert!(doc.code_blocks.len() >= 1);
+        assert!(!doc.code_blocks.is_empty());
         assert_eq!(doc.code_blocks[0].language, Some("rust".to_string()));
-        assert!(doc.links.len() >= 1);
+        assert!(!doc.links.is_empty());
     }
 
     #[test]

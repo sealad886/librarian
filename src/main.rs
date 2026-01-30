@@ -268,7 +268,7 @@ async fn run() -> Result<()> {
     };
 
     tracing_subscriber::registry()
-        .with(fmt::layer().with_writer(LogWriterFactory::default()))
+        .with(fmt::layer().with_writer(LogWriterFactory))
         .with(filter)
         .init();
 
@@ -327,7 +327,15 @@ async fn run() -> Result<()> {
         Commands::Init { .. } => unreachable!(),
 
         Commands::Ingest { source } => {
-            handle_ingest(&config, &embedding_config, embedder.as_ref(), &db, &store, source).await?;
+            handle_ingest(
+                &config,
+                &embedding_config,
+                embedder.as_ref(),
+                &db,
+                &store,
+                source,
+            )
+            .await?;
         }
 
         Commands::Query {
@@ -345,9 +353,16 @@ async fn run() -> Result<()> {
                 ..Default::default()
             };
 
-            let results =
-                cmd_query(&config, &embedding_config, embedder.as_ref(), &db, &store, &query, options)
-                    .await?;
+            let results = cmd_query(
+                &config,
+                &embedding_config,
+                embedder.as_ref(),
+                &db,
+                &store,
+                &query,
+                options,
+            )
+            .await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&results)?);
@@ -412,9 +427,15 @@ async fn run() -> Result<()> {
                 batch_size,
             };
 
-            let stats =
-                cmd_reindex(&config, &embedding_config, &db, &store, embedder.as_ref(), options)
-                    .await?;
+            let stats = cmd_reindex(
+                &config,
+                &embedding_config,
+                &db,
+                &store,
+                embedder.as_ref(),
+                options,
+            )
+            .await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&stats)?);
@@ -429,7 +450,15 @@ async fn run() -> Result<()> {
                 prune_orphans: !skip_prune,
             };
 
-            let stats = cmd_update(&config, &embedding_config, embedder.as_ref(), &db, &store, options).await?;
+            let stats = cmd_update(
+                &config,
+                &embedding_config,
+                embedder.as_ref(),
+                &db,
+                &store,
+                options,
+            )
+            .await?;
 
             if cli.json {
                 println!("{}", serde_json::to_string_pretty(&stats)?);
@@ -484,85 +513,58 @@ fn print_completion_extras(shell: Shell) {
     match shell {
         Shell::Bash => {
             println!();
+            println!("# Dynamic completion for 'librarian remove' source IDs");
+            println!("_librarian_dynamic() {{");
+            println!("    local cur prev words cword");
+            println!("    if declare -F _init_completion >/dev/null; then");
+            println!("        _init_completion -n : || return");
+            println!("    else");
+            println!("        cur=\"${{COMP_WORDS[COMP_CWORD]}}\"");
+            println!("        words=(\"${{COMP_WORDS[@]}}\")");
+            println!("        cword=$COMP_CWORD");
+            println!("    fi");
+            println!("    local remove_index=-1");
+            println!("    for i in \"${{!words[@]}}\"; do");
+            println!("        if [[ \"${{words[i]}}\" == \"remove\" ]]; then");
+            println!("            remove_index=$i");
+            println!("            break");
+            println!("        fi");
+            println!("    done");
+            println!("    if [[ $remove_index -ge 0 && $cword -eq $((remove_index + 1)) ]]; then");
             println!(
-                "{raw}",
-                raw = r#"# Dynamic completion for 'librarian remove' source IDs"#
+                "        COMPREPLY=( $(compgen -W \"$(librarian sources --completion bash 2>/dev/null)\" -- \"$cur\") )"
             );
-            println!("{raw}", raw = r#"_librarian_dynamic() {"#);
-            println!("{raw}", raw = r#"    local cur prev words cword"#);
+            println!("        return 0");
+            println!("    fi");
+            println!("    _librarian \"$@\"");
+            println!("}}");
             println!(
-                "{raw}",
-                raw = r#"    if declare -F _init_completion >/dev/null; then"#
-            );
-            println!("{raw}", raw = r#"        _init_completion -n : || return"#);
-            println!("{raw}", raw = r#"    else"#);
-            println!("{raw}", raw = r#"        cur="${COMP_WORDS[COMP_CWORD]}""#);
-            println!("{raw}", raw = r#"        words=("${COMP_WORDS[@]}")"#);
-            println!("{raw}", raw = r#"        cword=$COMP_CWORD"#);
-            println!("{raw}", raw = r#"    fi"#);
-            println!("{raw}", raw = r#"    local remove_index=-1"#);
-            println!("{raw}", raw = r#"    for i in "${!words[@]}"; do"#);
-            println!(
-                "{raw}",
-                raw = r#"        if [[ "${words[i]}" == "remove" ]]; then"#
-            );
-            println!("{raw}", raw = r#"            remove_index=$i"#);
-            println!("{raw}", raw = r#"            break"#);
-            println!("{raw}", raw = r#"        fi"#);
-            println!("{raw}", raw = r#"    done"#);
-            println!(
-                "{raw}",
-                raw =
-                    r#"    if [[ $remove_index -ge 0 && $cword -eq $((remove_index + 1)) ]]; then"#
+                "if [[ \"${{BASH_VERSINFO[0]}}\" -eq 4 && \"${{BASH_VERSINFO[1]}}\" -ge 4 || \"${{BASH_VERSINFO[0]}}\" -gt 4 ]]; then"
             );
             println!(
-                "{raw}",
-                raw = r#"        COMPREPLY=( $(compgen -W "$(librarian sources --completion bash 2>/dev/null)" -- "$cur") )"#
+                "    complete -F _librarian_dynamic -o nosort -o bashdefault -o default librarian"
             );
-            println!("{raw}", raw = r#"        return 0"#);
-            println!("{raw}", raw = r#"    fi"#);
-            println!("{raw}", raw = r#"    _librarian "$@""#);
-            println!("{raw}", raw = r#"}"#);
-            println!(
-                "{raw}",
-                raw = r#"if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then"#
-            );
-            println!(
-                "{raw}",
-                raw = r#"    complete -F _librarian_dynamic -o nosort -o bashdefault -o default librarian"#
-            );
-            println!("{raw}", raw = r#"else"#);
-            println!(
-                "{raw}",
-                raw = r#"    complete -F _librarian_dynamic -o bashdefault -o default librarian"#
-            );
-            println!("{raw}", raw = r#"fi"#);
+            println!("else");
+            println!("    complete -F _librarian_dynamic -o bashdefault -o default librarian");
+            println!("fi");
         }
         Shell::Zsh => {
             println!();
+            println!("# Dynamic completion for 'librarian remove' source IDs");
+            println!("_librarian_source_ids() {{");
+            println!("    local -a entries");
             println!(
-                "{}",
-                r#"# Dynamic completion for 'librarian remove' source IDs"#
+                "    entries=(\"${{(@f)$(librarian sources --completion zsh 2>/dev/null)}}\")"
             );
-            println!("{}", r#"_librarian_source_ids() {"#);
-            println!("{}", r#"    local -a entries"#);
-            println!(
-                "{}",
-                r#"    entries=("${(@f)$(librarian sources --completion zsh 2>/dev/null)}")"#
-            );
-            println!("{}", r#"    _describe -t sources 'source ids' entries"#);
-            println!("{}", r#"}"#);
-            println!("{}", r#"compdef _librarian_source_ids 'librarian remove'"#);
+            println!("    _describe -t sources 'source ids' entries");
+            println!("}}");
+            println!("compdef _librarian_source_ids 'librarian remove'");
         }
         Shell::Fish => {
             println!();
+            println!("# Dynamic completion for 'librarian remove' source IDs");
             println!(
-                "{}",
-                r#"# Dynamic completion for 'librarian remove' source IDs"#
-            );
-            println!(
-                "{}",
-                r#"complete -c librarian -n '__fish_seen_subcommand_from remove' -a '(librarian sources --completion fish 2>/dev/null)'"#
+                "complete -c librarian -n '__fish_seen_subcommand_from remove' -a '(librarian sources --completion fish 2>/dev/null)'"
             );
         }
         _ => {}
@@ -586,7 +588,7 @@ async fn handle_init(cli: Cli) -> Result<()> {
             .parent()
             .map(PathBuf::from)
             .unwrap_or_else(Config::default_base_dir);
-        let config = if path.extension().map_or(false, |e| e == "toml") {
+        let config = if path.extension().is_some_and(|e| e == "toml") {
             path // User specified a .toml file
         } else {
             path.join("config.toml") // User specified a directory
@@ -681,7 +683,10 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
                             stored_dimension, stored_model
                         );
                         if stored_dimension != embedding_config.dimension {
-                            println!("  ❌ Current config has different dimension: {}", embedding_config.dimension);
+                            println!(
+                                "  ❌ Current config has different dimension: {}",
+                                embedding_config.dimension
+                            );
                             println!(
                                 "  Remediation: Run 'librarian db reset' to align with current config"
                             );
@@ -723,7 +728,9 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
                             "  Current: {} dimensions, model '{}'",
                             expected_dimension, expected_model
                         );
-                        println!("  Remediation: Run 'librarian db reset' and reindex, or revert config");
+                        println!(
+                            "  Remediation: Run 'librarian db reset' and reindex, or revert config"
+                        );
                     }
                 }
             }
@@ -770,7 +777,9 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
                     if json {
                         println!(r#"{{"exists": false}}"#);
                     } else {
-                        println!("Collection does not exist. Run 'librarian db init' to create it.");
+                        println!(
+                            "Collection does not exist. Run 'librarian db init' to create it."
+                        );
                     }
                 }
             }
@@ -824,8 +833,18 @@ async fn handle_ingest(
             extensions: _,
             exclude: _,
         } => {
-            let stats =
-                cmd_ingest_dir(config, embedding, embedder, db, store, &path, name, RunOperation::Ingest, true).await?;
+            let stats = cmd_ingest_dir(
+                config,
+                embedding,
+                embedder,
+                db,
+                store,
+                &path,
+                name,
+                RunOperation::Ingest,
+                true,
+            )
+            .await?;
 
             // Display overlap warnings
             for warning in &stats.overlap_warnings {
