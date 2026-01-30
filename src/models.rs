@@ -128,14 +128,14 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
     EmbeddingModelSpec {
         id: "Qwen/Qwen3-VL-Embedding-2B",
         family: "qwen3-vl",
-        default_dimension: None,
-        modalities: &["text", "image", "video"],
+        default_dimension: Some(2048),
+        modalities: &["text", "image"],
         capabilities: EmbeddingModelCapabilities {
             strategy: MultimodalStrategy::VlEmbedding,
             supports_text: true,
             supports_image: true,
             supports_audio: false,
-            supports_video: true,
+            supports_video: false,
             supports_joint_inputs: true,
             supports_multi_vector: false,
         },
@@ -145,14 +145,14 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
     EmbeddingModelSpec {
         id: "Qwen/Qwen3-VL-Embedding-8B",
         family: "qwen3-vl",
-        default_dimension: None,
-        modalities: &["text", "image", "video"],
+        default_dimension: Some(4096),
+        modalities: &["text", "image"],
         capabilities: EmbeddingModelCapabilities {
             strategy: MultimodalStrategy::VlEmbedding,
             supports_text: true,
             supports_image: true,
             supports_audio: false,
-            supports_video: true,
+            supports_video: false,
             supports_joint_inputs: true,
             supports_multi_vector: false,
         },
@@ -210,89 +210,56 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
         supports_mrl: false,
         max_batch: 8,
     },
-    // Audio embedding models
+    // Audio embedding models - text encoder only (audio not supported by sidecar)
     EmbeddingModelSpec {
         id: "laion/clap-htsat-unfused",
         family: "clap",
         default_dimension: Some(512),
-        modalities: &["text", "audio"],
+        modalities: &["text"],
         capabilities: EmbeddingModelCapabilities {
-            strategy: MultimodalStrategy::AudioLanguage,
-            supports_text: true,
-            supports_image: false,
-            supports_audio: true,
-            supports_video: false,
-            supports_joint_inputs: true,
-            supports_multi_vector: false,
-        },
-        supports_mrl: false,
-        max_batch: 16,
-    },
-    EmbeddingModelSpec {
-        id: "laion/larger_clap_music_and_speech",
-        family: "clap",
-        default_dimension: Some(512),
-        modalities: &["text", "audio"],
-        capabilities: EmbeddingModelCapabilities {
-            strategy: MultimodalStrategy::AudioLanguage,
-            supports_text: true,
-            supports_image: false,
-            supports_audio: true,
-            supports_video: false,
-            supports_joint_inputs: true,
-            supports_multi_vector: false,
-        },
-        supports_mrl: false,
-        max_batch: 16,
-    },
-    // Video embedding models
-    EmbeddingModelSpec {
-        id: "OpenGVLab/InternVideo2-Stage2_1B-224p-f4",
-        family: "internvideo2",
-        default_dimension: Some(1024),
-        modalities: &["text", "video"],
-        capabilities: EmbeddingModelCapabilities {
-            strategy: MultimodalStrategy::VideoLanguage,
+            strategy: MultimodalStrategy::DualEncoder,
             supports_text: true,
             supports_image: false,
             supports_audio: false,
-            supports_video: true,
-            supports_joint_inputs: true,
-            supports_multi_vector: false,
-        },
-        supports_mrl: false,
-        max_batch: 4,
-    },
-    // Omni-modal models (text, image, audio, video)
-    EmbeddingModelSpec {
-        id: "m-a-p/MERT-v1-330M",
-        family: "mert",
-        default_dimension: Some(1024),
-        modalities: &["audio"],
-        capabilities: EmbeddingModelCapabilities {
-            strategy: MultimodalStrategy::AudioLanguage,
-            supports_text: false,
-            supports_image: false,
-            supports_audio: true,
             supports_video: false,
             supports_joint_inputs: false,
             supports_multi_vector: false,
         },
         supports_mrl: false,
-        max_batch: 8,
+        max_batch: 16,
     },
+
+    // Video embedding models - text encoder only (video not supported by sidecar)
+    EmbeddingModelSpec {
+        id: "OpenGVLab/InternVideo2-Stage2_1B-224p-f4",
+        family: "internvideo2",
+        default_dimension: Some(1024),
+        modalities: &["text"],
+        capabilities: EmbeddingModelCapabilities {
+            strategy: MultimodalStrategy::DualEncoder,
+            supports_text: true,
+            supports_image: false,
+            supports_audio: false,
+            supports_video: false,
+            supports_joint_inputs: false,
+            supports_multi_vector: false,
+        },
+        supports_mrl: false,
+        max_batch: 4,
+    },
+
     EmbeddingModelSpec {
         id: "Salesforce/blip2-itm-vit-g",
         family: "blip2",
         default_dimension: Some(768),
-        modalities: &["text", "image", "video"],
+        modalities: &["text", "image"],
         capabilities: EmbeddingModelCapabilities {
-            strategy: MultimodalStrategy::OmniModal,
+            strategy: MultimodalStrategy::DualEncoder,
             supports_text: true,
             supports_image: true,
             supports_audio: false,
-            supports_video: true,
-            supports_joint_inputs: true,
+            supports_video: false,
+            supports_joint_inputs: false,
             supports_multi_vector: false,
         },
         supports_mrl: false,
@@ -302,14 +269,14 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
         id: "facebook/ImageBind",
         family: "imagebind",
         default_dimension: Some(1024),
-        modalities: &["text", "image", "audio", "video"],
+        modalities: &["text", "image"],
         capabilities: EmbeddingModelCapabilities {
-            strategy: MultimodalStrategy::OmniModal,
+            strategy: MultimodalStrategy::DualEncoder,
             supports_text: true,
             supports_image: true,
-            supports_audio: true,
-            supports_video: true,
-            supports_joint_inputs: true,
+            supports_audio: false,
+            supports_video: false,
+            supports_joint_inputs: false,
             supports_multi_vector: false,
         },
         supports_mrl: false,
@@ -334,12 +301,12 @@ const RERANK_MODELS: &[RerankerModelSpec] = &[
     RerankerModelSpec {
         id: "Qwen/Qwen3-VL-Reranker-2B",
         family: "qwen3-vl",
-        modalities: &["text", "image", "video"],
+        modalities: &["text", "image"],
         capabilities: RerankerModelCapabilities {
             supports_text: true,
             supports_image: true,
             supports_audio: false,
-            supports_video: true,
+            supports_video: false,
             supports_joint_inputs: true,
         },
         max_batch: 8,
@@ -347,12 +314,12 @@ const RERANK_MODELS: &[RerankerModelSpec] = &[
     RerankerModelSpec {
         id: "Qwen/Qwen3-VL-Reranker-8B",
         family: "qwen3-vl",
-        modalities: &["text", "image", "video"],
+        modalities: &["text", "image"],
         capabilities: RerankerModelCapabilities {
             supports_text: true,
             supports_image: true,
             supports_audio: false,
-            supports_video: true,
+            supports_video: false,
             supports_joint_inputs: true,
         },
         max_batch: 4,
@@ -496,7 +463,8 @@ mod tests {
         let caps = embedding_model_capabilities("Qwen/Qwen3-VL-Embedding-2B").unwrap();
         assert_eq!(caps.strategy, MultimodalStrategy::VlEmbedding);
         assert!(caps.supports_joint_inputs);
-        assert!(caps.supports_video);
+        assert!(caps.supports_image);
+        assert!(!caps.supports_video); // Video not supported by sidecar
 
         let caps = embedding_model_capabilities("jinaai/jina-clip-v2").unwrap();
         assert_eq!(caps.strategy, MultimodalStrategy::DualEncoder);
@@ -515,13 +483,13 @@ mod tests {
 
     #[test]
     fn test_audio_video_model_detection() {
-        // Audio models
-        assert!(is_audio_embedding_model("laion/clap-htsat-unfused"));
+        // Audio/video not supported by sidecar - models are text-only
+        assert!(!is_audio_embedding_model("laion/clap-htsat-unfused"));
         assert!(!is_audio_embedding_model("BAAI/bge-small-en-v1.5"));
 
-        // Video models
-        assert!(is_video_embedding_model("Qwen/Qwen3-VL-Embedding-2B"));
-        assert!(is_video_embedding_model(
+        // Video not supported by sidecar
+        assert!(!is_video_embedding_model("Qwen/Qwen3-VL-Embedding-2B"));
+        assert!(!is_video_embedding_model(
             "OpenGVLab/InternVideo2-Stage2_1B-224p-f4"
         ));
         assert!(!is_video_embedding_model("BAAI/bge-small-en-v1.5"));
@@ -529,12 +497,11 @@ mod tests {
 
     #[test]
     fn test_supported_audio_video_models() {
+        // Audio/video not supported by sidecar
         let audio_models = supported_audio_embedding_models();
-        assert!(!audio_models.is_empty());
-        assert!(audio_models.contains(&"laion/clap-htsat-unfused"));
+        assert!(audio_models.is_empty());
 
         let video_models = supported_video_embedding_models();
-        assert!(!video_models.is_empty());
-        assert!(video_models.contains(&"Qwen/Qwen3-VL-Embedding-2B"));
+        assert!(video_models.is_empty());
     }
 }
