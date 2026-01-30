@@ -1,5 +1,7 @@
 # librarian
 
+<img width="1536" height="1024" alt="librarian_banner" src="https://github.com/user-attachments/assets/0d951d96-a8fb-405a-9c90-733f57d14fb3" />
+
 A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP server for indexing and querying documentation.
 
 ## Features
