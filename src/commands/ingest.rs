@@ -4,7 +4,7 @@ use crate::chunk::{chunk_document, compute_content_hash, TextChunk};
 use crate::config::{Config, ResolvedEmbeddingConfig};
 use crate::crawl::{CrawledPage, Crawler};
 use crate::embed::{
-    embed_image_text_in_batches, embed_images_in_batches, embed_in_batches, Embedder,
+    embed_multimode_in_batches, embed_images_in_batches, embed_in_batches, Embedder,
     ImageEmbedInput, fuse_embeddings,
 };
 use crate::error::{Error, Result};
@@ -447,7 +447,7 @@ async fn embed_cached_images(
             })
             .collect::<Vec<_>>();
 
-        embed_image_text_in_batches(embedder, inputs, batch_size).await?
+        embed_multimode_in_batches(embedder, inputs, batch_size).await?
     } else {
         let image_paths: Vec<String> = cached_images
             .iter()

@@ -19,7 +19,7 @@ use librarian::{
     store::QdrantStore,
 };
 use std::path::PathBuf;
-use tracing::error;
+use tracing::{error, info};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Parser)]
@@ -180,6 +180,9 @@ enum DbAction {
     /// Show Qdrant collection status
     Status,
 
+    /// Check collection health and configuration consistency
+    Check,
+
     /// Reset the collection (delete all vectors and recreate)
     Reset {
         /// Skip confirmation prompt
@@ -291,13 +294,33 @@ async fn run() -> Result<()> {
 
     // Initialize components
     let db = MetaDb::new(&config.paths.db_file).await?;
-    let store = QdrantStore::new(
-        &config.qdrant_url,
-        &config.collection_name,
-        embedder.dimension(),
-        Some(&embedding_config),
-    )
-    .await?;
+
+    // Determine if this command needs validated connection (write operations)
+    let needs_validation = matches!(
+        cli.command,
+        Commands::Ingest { .. }
+            | Commands::Reindex { .. }
+            | Commands::Update { .. }
+            | Commands::Remove { .. }
+    ) || matches!(&cli.command, Commands::Prune { remove_orphans, .. } if *remove_orphans);
+
+    let store = if needs_validation {
+        // Write operations use validated connection
+        info!(
+            "Validating collection '{}' for write operation...",
+            config.collection_name
+        );
+        QdrantStore::connect_validated(&config, &embedding_config, &db).await?
+    } else {
+        // Read-only operations use regular connection
+        QdrantStore::new(
+            &config.qdrant_url,
+            &config.collection_name,
+            embedder.dimension(),
+            Some(&embedding_config),
+        )
+        .await?
+    };
 
     // Handle commands
     match cli.command {
@@ -588,6 +611,7 @@ async fn handle_init(cli: Cli) -> Result<()> {
 
 async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Result<()> {
     let embedding_config = config.resolve_embedding_config().await?;
+    let db = MetaDb::new(&config.paths.db_file).await?;
     let store = QdrantStore::connect(config, &embedding_config).await?;
 
     match action {
@@ -599,28 +623,158 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
                 println!("✓ Qdrant collection initialized");
             }
         }
-        DbAction::Status => match store.get_collection_info().await? {
-            Some(info) => {
-                if json {
-                    println!(
-                        r#"{{"exists": true, "points_count": {}, "indexed_vectors_count": {}, "status": "{}"}}"#,
-                        info.points_count, info.indexed_vectors_count, info.status
-                    );
-                } else {
-                    println!("Qdrant Collection Status:");
-                    println!("  Status: {}", info.status);
-                    println!("  Points: {}", info.points_count);
-                    println!("  Indexed Vectors: {}", info.indexed_vectors_count);
+        DbAction::Check => {
+            use librarian::store::{CollectionConfig, ValidationResult};
+
+            let expected =
+                CollectionConfig::from_embedding_config(&config.collection_name, &embedding_config);
+
+            let validation = store.validate_collection_state(&db, &expected).await?;
+            let stored_config = db.get_collection_config(&config.collection_name).await?;
+
+            if json {
+                let status = serde_json::json!({
+                    "collection": config.collection_name,
+                    "validation_result": format!("{:?}", validation),
+                    "stored_config": stored_config.as_ref().map(|c| serde_json::json!({
+                        "dimension": c.vector_dimension,
+                        "model": c.embedding_model,
+                        "family": c.embedding_family,
+                        "verified_at": c.verified_at,
+                    })),
+                    "current_config": {
+                        "dimension": embedding_config.dimension,
+                        "model": &embedding_config.model_id,
+                        "family": &embedding_config.family,
+                    },
+                });
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            } else {
+                match validation {
+                    ValidationResult::Valid => {
+                        println!("✓ Collection '{}' is healthy", config.collection_name);
+                        println!("  Dimension: {}", embedding_config.dimension);
+                        println!(
+                            "  Model: {} ({})",
+                            embedding_config.model_id, embedding_config.family
+                        );
+                        if let Some(cfg) = stored_config {
+                            if let Some(verified) = cfg.verified_at {
+                                println!("  Last verified: {}", verified);
+                            }
+                        }
+                    }
+                    ValidationResult::NotFound => {
+                        println!("⚠ Collection '{}' does not exist", config.collection_name);
+                        println!("  Run 'librarian db init' to create it");
+                    }
+                    ValidationResult::NotFoundButConfigured {
+                        stored_dimension,
+                        stored_model,
+                    } => {
+                        println!(
+                            "⚠ Collection '{}' is missing from Qdrant",
+                            config.collection_name
+                        );
+                        println!(
+                            "  Previously configured: {} dimensions, model '{}'",
+                            stored_dimension, stored_model
+                        );
+                        if stored_dimension != embedding_config.dimension {
+                            println!("  ❌ Current config has different dimension: {}", embedding_config.dimension);
+                            println!(
+                                "  Remediation: Run 'librarian db reset' to align with current config"
+                            );
+                        } else {
+                            println!("  Run 'librarian db init' to recreate");
+                        }
+                    }
+                    ValidationResult::DimensionMismatch {
+                        qdrant_dimension,
+                        expected_dimension,
+                        source,
+                    } => {
+                        println!(
+                            "❌ Collection '{}' has dimension mismatch",
+                            config.collection_name
+                        );
+                        println!("  Qdrant dimension: {}", qdrant_dimension);
+                        println!("  Expected dimension: {} ({})", expected_dimension, source);
+                        println!("  Remediation: Change 'collection_name' in config to use a new collection,");
+                        println!(
+                            "               or run 'librarian db reset' to delete and recreate (WARNING: data loss)"
+                        );
+                    }
+                    ValidationResult::ConfigConflict {
+                        stored_dimension,
+                        stored_model,
+                        expected_dimension,
+                        expected_model,
+                    } => {
+                        println!(
+                            "❌ Collection '{}' has configuration conflict",
+                            config.collection_name
+                        );
+                        println!(
+                            "  Stored: {} dimensions, model '{}'",
+                            stored_dimension, stored_model
+                        );
+                        println!(
+                            "  Current: {} dimensions, model '{}'",
+                            expected_dimension, expected_model
+                        );
+                        println!("  Remediation: Run 'librarian db reset' and reindex, or revert config");
+                    }
                 }
             }
-            None => {
-                if json {
-                    println!(r#"{{"exists": false}}"#);
-                } else {
-                    println!("Collection does not exist. Run 'librarian db init' to create it.");
+        }
+        DbAction::Status => {
+            let stored_config = db.get_collection_config(&config.collection_name).await?;
+
+            match store.get_collection_info().await? {
+                Some(info) => {
+                    if json {
+                        let status = serde_json::json!({
+                            "exists": true,
+                            "points_count": info.points_count,
+                            "indexed_vectors_count": info.indexed_vectors_count,
+                            "status": info.status,
+                            "config": stored_config.as_ref().map(|c| serde_json::json!({
+                                "dimension": c.vector_dimension,
+                                "model": c.embedding_model,
+                                "family": c.embedding_family,
+                                "verified_at": c.verified_at,
+                            })),
+                            "current_dimension": embedding_config.dimension,
+                            "current_model": &embedding_config.model_id,
+                        });
+                        println!("{}", serde_json::to_string_pretty(&status)?);
+                    } else {
+                        println!("Qdrant Collection Status:");
+                        println!("  Status: {}", info.status);
+                        println!("  Points: {}", info.points_count);
+                        println!("  Indexed Vectors: {}", info.indexed_vectors_count);
+                        if let Some(cfg) = stored_config {
+                            println!("  Configured dimension: {}", cfg.vector_dimension);
+                            println!(
+                                "  Configured model: {} ({})",
+                                cfg.embedding_model, cfg.embedding_family
+                            );
+                            if let Some(verified) = cfg.verified_at {
+                                println!("  Last verified: {}", verified);
+                            }
+                        }
+                    }
+                }
+                None => {
+                    if json {
+                        println!(r#"{{"exists": false}}"#);
+                    } else {
+                        println!("Collection does not exist. Run 'librarian db init' to create it.");
+                    }
                 }
             }
-        },
+        }
         DbAction::Reset { yes } => {
             if !yes {
                 eprintln!("⚠️  This will delete ALL indexed data!");

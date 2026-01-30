@@ -96,7 +96,7 @@
 
 **Status:** REQUIRED  
 **Scope:** Embedding backend implementations and configuration resolution  
-**Rule:** Embedding backends must expose `/capabilities`, `/probe`, `/v1/embed/text`, and `/v1/embed/image_text`. `resolve_embedding_config` must call `/probe` and enforce that returned embeddings and dimensions match the configured model; custom backends must advertise the model id in `/capabilities` when the model list is non-empty.  
+**Rule:** Embedding backends must expose `/capabilities`, `/probe`, `/v1/embed/text`, and `/v1/embed/multimode`. `resolve_embedding_config` must call `/probe` and enforce that returned embeddings and dimensions match the configured model; custom backends must advertise the model id in `/capabilities` when the model list is non-empty.  
 **Rationale (Why this exists):**  
 
 - Prevents silent dimension mismatches that corrupt Qdrant vectors.  
@@ -110,6 +110,25 @@
 - `src/embedding_backend.rs`  
 - `src/embed/http_backend.rs`  
 - `sidecar/app.py`
+
+### Write operations must use validated Qdrant connections
+
+**Status:** REQUIRED  
+**Scope:** All code paths that write to Qdrant (ingest, reindex, update, prune)  
+**Rule:** Use `QdrantStore::connect_validated()` for any operation that will write points to Qdrant. This validates collection dimensions match both the current embedding config and the stored metadata from previous sessions.  
+**Rationale (Why this exists):**  
+
+- Prevents silent data corruption when embedding model/dimension changes between sessions.  
+- Catches configuration drift before vectors are written with wrong dimensions.  
+- Provides clear remediation guidance when mismatches are detected.  
+- Records collection configuration in SQLite for cross-session consistency checks.  
+**Examples:**  
+- Good: `QdrantStore::connect_validated(&config, &embedding_config, &db).await?` before ingest/reindex.  
+- Bad: Using `QdrantStore::connect()` directly for write operations (bypasses dimension validation).  
+**Related Files / Modules:**  
+- `src/store/mod.rs`  
+- `src/main.rs`  
+- `src/mcp/tools.rs`
 
 ## 3. Rationale and Examples
 
@@ -125,3 +144,4 @@
 - 2026-01-19: Added convention for modality-aware image chunks and multimodal cleanup.
 - 2026-01-19: Updated multimodal gating to use the model registry and reject late-interaction ingestion.
 - 2026-01-20: Added embedding backend probe contract convention.
+- 2026-01-30: Added convention for validated Qdrant connections on write operations.

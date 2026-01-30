@@ -111,7 +111,7 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
         id: "Qwen/Qwen3-VL-Embedding-2B",
         family: "qwen3-vl",
         default_dimension: None,
-        modalities: &["text", "image_text"],
+        modalities: &["text", "multimode"],
         capabilities: EmbeddingModelCapabilities {
             strategy: MultimodalStrategy::VlEmbedding,
             supports_text: true,
@@ -126,7 +126,7 @@ const EMBED_MODELS: &[EmbeddingModelSpec] = &[
         id: "Qwen/Qwen3-VL-Embedding-8B",
         family: "qwen3-vl",
         default_dimension: None,
-        modalities: &["text", "image_text"],
+        modalities: &["text", "multimode"],
         capabilities: EmbeddingModelCapabilities {
             strategy: MultimodalStrategy::VlEmbedding,
             supports_text: true,
@@ -199,7 +199,7 @@ const RERANK_MODELS: &[RerankerModelSpec] = &[
     RerankerModelSpec {
         id: "Qwen/Qwen3-VL-Reranker-2B",
         family: "qwen3-vl",
-        modalities: &["text", "image_text"],
+        modalities: &["text", "multimode"],
         capabilities: RerankerModelCapabilities {
             supports_text: true,
             supports_image: true,
@@ -210,7 +210,7 @@ const RERANK_MODELS: &[RerankerModelSpec] = &[
     RerankerModelSpec {
         id: "Qwen/Qwen3-VL-Reranker-8B",
         family: "qwen3-vl",
-        modalities: &["text", "image_text"],
+        modalities: &["text", "multimode"],
         capabilities: RerankerModelCapabilities {
             supports_text: true,
             supports_image: true,
@@ -221,7 +221,7 @@ const RERANK_MODELS: &[RerankerModelSpec] = &[
     RerankerModelSpec {
         id: "jinaai/jina-reranker-m0",
         family: "jina",
-        modalities: &["text", "image_text"],
+        modalities: &["text", "multimode"],
         capabilities: RerankerModelCapabilities {
             supports_text: true,
             supports_image: true,
@@ -232,7 +232,7 @@ const RERANK_MODELS: &[RerankerModelSpec] = &[
     RerankerModelSpec {
         id: "lightonai/MonoQwen2-VL-v0.1",
         family: "monoqwen2",
-        modalities: &["text", "image_text"],
+        modalities: &["text", "multimode"],
         capabilities: RerankerModelCapabilities {
             supports_text: true,
             supports_image: true,

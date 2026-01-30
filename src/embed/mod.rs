@@ -51,7 +51,7 @@ pub trait Embedder: Send + Sync {
     }
 
     /// Embed a batch of image + optional text inputs (joint models)
-    async fn embed_image_text(&self, _inputs: Vec<ImageEmbedInput>) -> Result<Vec<Vec<f32>>> {
+    async fn embed_multimode(&self, _inputs: Vec<ImageEmbedInput>) -> Result<Vec<Vec<f32>>> {
         Err(Error::Embedding(
             "Image+text embedding is not supported by this backend".to_string(),
         ))
@@ -105,7 +105,7 @@ pub async fn embed_images_in_batches(
 }
 
 /// Helper to embed image+text inputs in batches
-pub async fn embed_image_text_in_batches(
+pub async fn embed_multimode_in_batches(
     embedder: &dyn Embedder,
     inputs: Vec<ImageEmbedInput>,
     batch_size: usize,
@@ -114,7 +114,7 @@ pub async fn embed_image_text_in_batches(
 
     for chunk in inputs.chunks(batch_size) {
         let batch_inputs: Vec<ImageEmbedInput> = chunk.to_vec();
-        let embeddings = embedder.embed_image_text(batch_inputs).await?;
+        let embeddings = embedder.embed_multimode(batch_inputs).await?;
         all_embeddings.extend(embeddings);
     }
 

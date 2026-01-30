@@ -2,7 +2,7 @@
 
 use crate::config::{Config, ResolvedEmbeddingConfig};
 use crate::embed::{
-    embed_image_text_in_batches, embed_images_in_batches, embed_in_batches, Embedder,
+    embed_multimode_in_batches, embed_images_in_batches, embed_in_batches, Embedder,
     ImageEmbedInput, fuse_embeddings,
 };
 use crate::error::{Error, Result};
@@ -298,7 +298,7 @@ async fn reindex_document(
                         text: text.clone(),
                     })
                     .collect::<Vec<_>>();
-                embed_image_text_in_batches(embedder, inputs, batch_size).await?
+                embed_multimode_in_batches(embedder, inputs, batch_size).await?
             } else {
                 let image_embeddings = embed_images_in_batches(embedder, image_paths, batch_size).await?;
                 let mut fused_embeddings = image_embeddings.clone();

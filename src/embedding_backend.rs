@@ -224,12 +224,12 @@ impl EmbeddingBackendClient {
         Ok(parsed.into_embeddings())
     }
 
-    pub async fn embed_image_text(
+    pub async fn embed_multimode(
         &self,
         model: &str,
         inputs: Vec<ImageTextInput>,
     ) -> Result<Vec<Vec<f32>>> {
-        let url = self.endpoint("/v1/embed/image_text")?;
+        let url = self.endpoint("/v1/embed/multimode")?;
         let request = EmbedImageTextRequest {
             model: model.to_string(),
             inputs,

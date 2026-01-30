@@ -299,6 +299,19 @@ impl IngestionRun {
     }
 }
 
+/// Collection configuration record for tracking embedding model/dimension consistency
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct CollectionConfigRecord {
+    pub collection_name: String,
+    pub vector_dimension: i32,
+    pub embedding_model: String,
+    pub embedding_family: String,
+    pub distance_metric: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub verified_at: Option<String>,
+}
+
 /// Metadata database handle
 #[derive(Clone)]
 pub struct MetaDb {
@@ -387,6 +400,143 @@ impl MetaDb {
                 .execute(&self.pool)
                 .await?;
         }
+
+        // Run migrations for new schema features
+        self.run_migrations().await?;
+
+        Ok(())
+    }
+
+    // ===== Schema Migration Infrastructure =====
+
+    /// Get current schema version, returns 0 if schema_version table doesn't exist
+    pub async fn get_schema_version(&self) -> Result<i32> {
+        // Check if schema_version table exists
+        let exists: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if exists.is_none() {
+            return Ok(0);
+        }
+
+        let version: Option<(i32,)> =
+            sqlx::query_as("SELECT MAX(version) FROM schema_version")
+                .fetch_optional(&self.pool)
+                .await?;
+
+        Ok(version.map(|v| v.0).unwrap_or(0))
+    }
+
+    /// Run all pending migrations
+    pub async fn run_migrations(&self) -> Result<()> {
+        let current = self.get_schema_version().await?;
+
+        if current < 1 {
+            self.apply_migration_v1().await?;
+        }
+
+        // Future migrations: if current < 2 { self.apply_migration_v2().await?; }
+
+        Ok(())
+    }
+
+    /// Migration v1: Add schema_version and collection_config tables
+    async fn apply_migration_v1(&self) -> Result<()> {
+        info!("Applying migration v1: collection config tracking");
+
+        // Create schema_version if not exists
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Create collection_config if not exists
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS collection_config (
+                collection_name TEXT PRIMARY KEY,
+                vector_dimension INTEGER NOT NULL,
+                embedding_model TEXT NOT NULL,
+                embedding_family TEXT NOT NULL,
+                distance_metric TEXT NOT NULL DEFAULT 'cosine',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                verified_at TEXT
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Record migration
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (1, ?)")
+            .bind(&now)
+            .execute(&self.pool)
+            .await?;
+
+        debug!("Migration v1 applied successfully");
+        Ok(())
+    }
+
+    // ===== Collection Config Operations =====
+
+    /// Get collection configuration by name
+    pub async fn get_collection_config(
+        &self,
+        collection_name: &str,
+    ) -> Result<Option<CollectionConfigRecord>> {
+        let record = sqlx::query_as::<_, CollectionConfigRecord>(
+            "SELECT * FROM collection_config WHERE collection_name = ?",
+        )
+        .bind(collection_name)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(record)
+    }
+
+    /// Upsert collection configuration
+    pub async fn upsert_collection_config(&self, config: &CollectionConfigRecord) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO collection_config 
+             (collection_name, vector_dimension, embedding_model, embedding_family, distance_metric, created_at, updated_at, verified_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(collection_name) DO UPDATE SET
+             vector_dimension = excluded.vector_dimension,
+             embedding_model = excluded.embedding_model,
+             embedding_family = excluded.embedding_family,
+             distance_metric = excluded.distance_metric,
+             updated_at = excluded.updated_at,
+             verified_at = excluded.verified_at",
+        )
+        .bind(&config.collection_name)
+        .bind(config.vector_dimension)
+        .bind(&config.embedding_model)
+        .bind(&config.embedding_family)
+        .bind(&config.distance_metric)
+        .bind(&config.created_at)
+        .bind(&now)
+        .bind(&config.verified_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update verification timestamp for a collection
+    pub async fn update_collection_verified_at(&self, collection_name: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("UPDATE collection_config SET verified_at = ?, updated_at = ? WHERE collection_name = ?")
+            .bind(&now)
+            .bind(&now)
+            .bind(collection_name)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -1179,5 +1329,108 @@ mod tests {
         // Verify both chunks exist under the same document
         let chunks = db.get_chunks(&original_doc_id).await.unwrap();
         assert_eq!(chunks.len(), 2);
+    }
+
+    // ===== Migration and Collection Config Tests =====
+
+    #[tokio::test]
+    async fn test_schema_version_fresh_db() {
+        let (db, _tmp) = setup_test_db().await;
+        let version = db.get_schema_version().await.unwrap();
+        // After init_schema, we should be at version 1
+        assert_eq!(version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_migrations_idempotent() {
+        let (db, _tmp) = setup_test_db().await;
+        // Run migrations multiple times - should not fail
+        db.run_migrations().await.unwrap();
+        db.run_migrations().await.unwrap();
+        let version = db.get_schema_version().await.unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[tokio::test]
+    async fn test_collection_config_crud() {
+        let (db, _tmp) = setup_test_db().await;
+
+        // Initially no config
+        let config = db.get_collection_config("test_collection").await.unwrap();
+        assert!(config.is_none());
+
+        // Insert config
+        let record = CollectionConfigRecord {
+            collection_name: "test_collection".to_string(),
+            vector_dimension: 384,
+            embedding_model: "test-model".to_string(),
+            embedding_family: "test-family".to_string(),
+            distance_metric: "cosine".to_string(),
+            created_at: "2026-01-30T00:00:00Z".to_string(),
+            updated_at: "2026-01-30T00:00:00Z".to_string(),
+            verified_at: None,
+        };
+        db.upsert_collection_config(&record).await.unwrap();
+
+        // Retrieve config
+        let config = db.get_collection_config("test_collection").await.unwrap();
+        assert!(config.is_some());
+        let config = config.unwrap();
+        assert_eq!(config.vector_dimension, 384);
+        assert_eq!(config.embedding_model, "test-model");
+        assert_eq!(config.embedding_family, "test-family");
+        assert!(config.verified_at.is_none());
+
+        // Update verification timestamp
+        db.update_collection_verified_at("test_collection")
+            .await
+            .unwrap();
+        let config = db
+            .get_collection_config("test_collection")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(config.verified_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_collection_config_upsert_updates_existing() {
+        let (db, _tmp) = setup_test_db().await;
+
+        // Insert initial config
+        let record1 = CollectionConfigRecord {
+            collection_name: "test_collection".to_string(),
+            vector_dimension: 384,
+            embedding_model: "model-v1".to_string(),
+            embedding_family: "family-v1".to_string(),
+            distance_metric: "cosine".to_string(),
+            created_at: "2026-01-30T00:00:00Z".to_string(),
+            updated_at: "2026-01-30T00:00:00Z".to_string(),
+            verified_at: None,
+        };
+        db.upsert_collection_config(&record1).await.unwrap();
+
+        // Upsert with updated values
+        let record2 = CollectionConfigRecord {
+            collection_name: "test_collection".to_string(),
+            vector_dimension: 768,
+            embedding_model: "model-v2".to_string(),
+            embedding_family: "family-v2".to_string(),
+            distance_metric: "cosine".to_string(),
+            created_at: "2026-01-30T00:00:00Z".to_string(),
+            updated_at: "2026-01-30T01:00:00Z".to_string(),
+            verified_at: Some("2026-01-30T01:00:00Z".to_string()),
+        };
+        db.upsert_collection_config(&record2).await.unwrap();
+
+        // Verify update occurred
+        let config = db
+            .get_collection_config("test_collection")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(config.vector_dimension, 768);
+        assert_eq!(config.embedding_model, "model-v2");
+        assert_eq!(config.embedding_family, "family-v2");
     }
 }

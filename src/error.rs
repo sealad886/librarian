@@ -74,6 +74,33 @@ pub enum Error {
     #[error("MCP protocol error: {0}")]
     McpProtocol(String),
 
+    /// Dimension mismatch between Qdrant collection and expected config.
+    /// Includes actionable remediation guidance.
+    #[error("Dimension mismatch: collection '{collection}' has {stored} dimensions, but {expected} expected ({dimension_source}). Remediation: {remediation}")]
+    DimensionMismatch {
+        collection: String,
+        stored: usize,
+        expected: usize,
+        dimension_source: String,
+        remediation: String,
+    },
+
+    /// Collection not found in Qdrant.
+    #[error("Collection not found: '{collection}'. {hint}")]
+    CollectionNotFound { collection: String, hint: String },
+
+    /// Configuration conflict between stored metadata and current config.
+    /// Indicates the embedding model/dimension has changed since last run.
+    #[error("Configuration conflict: stored config for '{collection}' has {stored_dim} dimensions (model '{stored_model}'), but current config expects {config_dim} (model '{config_model}'). {remediation}")]
+    ConfigCollectionConflict {
+        collection: String,
+        stored_dim: usize,
+        stored_model: String,
+        config_dim: usize,
+        config_model: String,
+        remediation: String,
+    },
+
     #[error("{0}")]
     Other(String),
 }

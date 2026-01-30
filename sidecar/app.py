@@ -23,13 +23,13 @@ class ModelSpec(BaseModel):
     max_batch: Optional[int] = None
 
     def supports_text(self) -> bool:
-        return "text" in self.modalities or "image_text" in self.modalities
+        return "text" in self.modalities or "multimode" in self.modalities
 
     def supports_image(self) -> bool:
-        return "image" in self.modalities or "image_text" in self.modalities
+        return "image" in self.modalities or "multimode" in self.modalities
 
     def supports_joint(self) -> bool:
-        return "image_text" in self.modalities
+        return "multimode" in self.modalities
 
 
 class BackendCapabilities(BaseModel):
@@ -179,8 +179,8 @@ async def embed_text(request: EmbedTextRequest) -> EmbeddingsResponse:
     return EmbeddingsResponse(embeddings=embeddings)
 
 
-@app.post("/v1/embed/image_text", response_model=EmbeddingsResponse)
-async def embed_image_text(request: EmbedImageTextRequest) -> EmbeddingsResponse:
+@app.post("/v1/embed/multimode", response_model=EmbeddingsResponse)
+async def embed_multimode(request: EmbedImageTextRequest) -> EmbeddingsResponse:
     model = get_model(request.model)
     if not model.supports_image():
         raise HTTPException(status_code=400, detail="Model does not support image inputs")

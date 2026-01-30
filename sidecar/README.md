@@ -8,7 +8,7 @@ It is intended as a reference implementation and a lightweight local backend for
 - `GET /capabilities`
 - `POST /probe`
 - `POST /v1/embed/text`
-- `POST /v1/embed/image_text`
+- `POST /v1/embed/multimode`
 
 Responses follow the schema used by librarian's embedding backend client.
 

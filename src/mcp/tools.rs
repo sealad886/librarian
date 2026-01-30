@@ -492,7 +492,8 @@ async fn run_ingest_background(
     db.init_schema().await?;
     let embedding_config = config.resolve_embedding_config().await?;
     let embedder = create_embedder(&embedding_config)?;
-    let store = QdrantStore::connect(&config, &embedding_config).await?;
+    // Use validated connection for write operations
+    let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
 
     match source_type {
         SourceType::Dir => {
@@ -559,7 +560,8 @@ async fn run_update_background(
     db.init_schema().await?;
     let embedding_config = config.resolve_embedding_config().await?;
     let embedder = create_embedder(&embedding_config)?;
-    let store = QdrantStore::connect(&config, &embedding_config).await?;
+    // Use validated connection for write operations
+    let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
 
     let options = UpdateOptions {
         source_ids,
@@ -579,7 +581,8 @@ async fn run_reindex_background(
     db.init_schema().await?;
     let embedding_config = config.resolve_embedding_config().await?;
     let embedder = create_embedder(&embedding_config)?;
-    let store = QdrantStore::connect(&config, &embedding_config).await?;
+    // Use validated connection for write operations
+    let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
 
     let options = ReindexOptions {
         source_ids,

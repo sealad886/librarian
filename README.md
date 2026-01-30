@@ -21,14 +21,14 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
 │                      librarian CLI                           │
 ├──────────────────────────────────────────────────────────────┤
 │  Commands: init | ingest | list | status | query | mcp | ... │
-└──────────────────────┬───────────────────────────────────────┘
-                       │
-       ┌───────────────┼───────────────┐
-       ▼               ▼               ▼
-┌──────────┐    ┌──────────┐    ┌──────────┐
-│  SQLite  │    │  Qdrant  │    │ Embedding│
-│ Metadata │    │ Vectors  │    │ Backend  │
-└──────────┘    └──────────┘    └──────────┘
+└───────────────────────────────┬──────────────────────────────┘
+                                │
+                ┌───────────────┼───────────────┐
+                ▼               ▼               ▼
+          ┌──────────┐    ┌──────────┐    ┌──────────┐
+          │  SQLite  │    │  Qdrant  │    │ Embedding│
+          │ Metadata │    │ Vectors  │    │ Backend  │
+          └──────────┘    └──────────┘    └──────────┘
 ```
 
 ## Installation
@@ -173,6 +173,9 @@ fields for easy discovery.
 
 ### `ingest`
 
+<!-- TODO: add appropriate Embeddings prompts to the embedding process, for models that support (and recommend) it. MUST look at model card to validate this. -->
+<!-- TODO: add appropriate Reranking prompts to the rerank process, for models that support (and recommend) it. MUST look at model card to validate this. -->
+
 Add content to the RAG index.
 
 #### Directory Ingestion
@@ -214,7 +217,11 @@ Options:
 
 Supports: sitemap.xml, sitemap index files, plain text URL lists.
 
+<!-- TODO: Include specific examples in `docs/` for the exact format(s) supported for each sitemap file type and reference them here -->
+
 ### `query`
+
+<!-- TODO: add appropriate Query prompts to the query/retrieval process, for models that support (and recommend) it. MUST look at model card to validate this. -->
 
 Search the RAG index.
 

@@ -86,12 +86,12 @@ impl Embedder for HttpEmbedder {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let embeddings = self.client.embed_image_text(&self.model_id, inputs).await?;
+        let embeddings = self.client.embed_multimode(&self.model_id, inputs).await?;
         self.validate_dimensions(&embeddings)?;
         Ok(embeddings)
     }
 
-    async fn embed_image_text(&self, inputs: Vec<ImageEmbedInput>) -> Result<Vec<Vec<f32>>> {
+    async fn embed_multimode(&self, inputs: Vec<ImageEmbedInput>) -> Result<Vec<Vec<f32>>> {
         if inputs.is_empty() {
             return Ok(Vec::new());
         }
@@ -117,7 +117,7 @@ impl Embedder for HttpEmbedder {
 
         let embeddings = self
             .client
-            .embed_image_text(&self.model_id, request_inputs)
+            .embed_multimode(&self.model_id, request_inputs)
             .await?;
         self.validate_dimensions(&embeddings)?;
         Ok(embeddings)

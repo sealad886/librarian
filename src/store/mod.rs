@@ -34,6 +34,8 @@ pub struct QdrantStore {
     collection: String,
     dimension: usize,
     embedding_context: Option<EmbeddingContext>,
+    /// Flag indicating whether validation has been performed via connect_validated()
+    validated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +55,74 @@ impl From<&ResolvedEmbeddingConfig> for EmbeddingContext {
             dimension_source: config.dimension_source,
         }
     }
+}
+
+/// Collection configuration for validation against Qdrant and SQLite metadata
+#[derive(Debug, Clone)]
+pub struct CollectionConfig {
+    pub collection_name: String,
+    pub vector_dimension: usize,
+    pub embedding_model: String,
+    pub embedding_family: String,
+    pub distance_metric: String,
+}
+
+impl CollectionConfig {
+    /// Create from embedding config and collection name
+    pub fn from_embedding_config(
+        collection_name: &str,
+        embedding: &ResolvedEmbeddingConfig,
+    ) -> Self {
+        Self {
+            collection_name: collection_name.to_string(),
+            vector_dimension: embedding.dimension,
+            embedding_model: embedding.model_id.clone(),
+            embedding_family: embedding.family.clone(),
+            distance_metric: "cosine".to_string(),
+        }
+    }
+
+    /// Convert to record for persistence in SQLite
+    pub fn to_record(&self) -> crate::meta::CollectionConfigRecord {
+        let now = chrono::Utc::now().to_rfc3339();
+        crate::meta::CollectionConfigRecord {
+            collection_name: self.collection_name.clone(),
+            vector_dimension: self.vector_dimension as i32,
+            embedding_model: self.embedding_model.clone(),
+            embedding_family: self.embedding_family.clone(),
+            distance_metric: self.distance_metric.clone(),
+            created_at: now.clone(),
+            updated_at: now,
+            verified_at: None,
+        }
+    }
+}
+
+/// Result of collection validation
+#[derive(Debug)]
+pub enum ValidationResult {
+    /// Collection exists and dimensions match
+    Valid,
+    /// Collection doesn't exist in Qdrant (but may or may not have SQLite config)
+    NotFound,
+    /// Collection doesn't exist in Qdrant but has conflicting SQLite config
+    NotFoundButConfigured {
+        stored_dimension: usize,
+        stored_model: String,
+    },
+    /// Collection exists but has different dimension than expected
+    DimensionMismatch {
+        qdrant_dimension: usize,
+        expected_dimension: usize,
+        source: String,
+    },
+    /// SQLite stored config doesn't match current embedding config
+    ConfigConflict {
+        stored_dimension: usize,
+        stored_model: String,
+        expected_dimension: usize,
+        expected_model: String,
+    },
 }
 
 impl QdrantStore {
@@ -86,9 +156,191 @@ impl QdrantStore {
             collection: collection.to_string(),
             dimension,
             embedding_context: embedding.map(EmbeddingContext::from),
+            validated: false,
         };
 
         Ok(store)
+    }
+
+    /// Connect to Qdrant and validate collection state against configuration.
+    ///
+    /// This is the preferred constructor for write-path operations (ingest, reindex, update).
+    /// It ensures:
+    /// - The collection exists with the correct vector dimension
+    /// - The dimension matches both current config and stored metadata
+    /// - Configuration is recorded in SQLite for cross-session consistency
+    ///
+    /// # Errors
+    ///
+    /// Returns `Error::DimensionMismatch` if the existing collection has different dimensions.
+    /// Returns `Error::ConfigCollectionConflict` if stored metadata doesn't match current config.
+    pub async fn connect_validated(
+        config: &Config,
+        embedding: &ResolvedEmbeddingConfig,
+        db: &crate::meta::MetaDb,
+    ) -> Result<Self> {
+        let mut store = Self::connect(config, embedding).await?;
+
+        let expected = CollectionConfig::from_embedding_config(&config.collection_name, embedding);
+
+        let validation = store.validate_collection_state(db, &expected).await?;
+
+        match validation {
+            ValidationResult::Valid => {
+                // Update verification timestamp
+                db.update_collection_verified_at(&config.collection_name)
+                    .await?;
+                debug!(
+                    "Collection '{}' validated successfully",
+                    config.collection_name
+                );
+            }
+            ValidationResult::NotFound => {
+                // Collection will be created by ensure_collection()
+                // Record expected config
+                db.upsert_collection_config(&expected.to_record()).await?;
+                debug!(
+                    "Collection '{}' not found, config recorded for creation",
+                    config.collection_name
+                );
+            }
+            ValidationResult::NotFoundButConfigured {
+                stored_dimension,
+                stored_model,
+            } => {
+                // SQLite has config but Qdrant doesn't have collection
+                if stored_dimension != embedding.dimension {
+                    return Err(Error::ConfigCollectionConflict {
+                        collection: config.collection_name.clone(),
+                        stored_dim: stored_dimension,
+                        stored_model,
+                        config_dim: embedding.dimension,
+                        config_model: embedding.model_id.clone(),
+                        remediation: "Run 'librarian db reset' to recreate collection with current config, or restore Qdrant data".to_string(),
+                    });
+                }
+                // Dimensions match, collection will be recreated
+                debug!(
+                    "Collection '{}' missing from Qdrant but config matches, will recreate",
+                    config.collection_name
+                );
+            }
+            ValidationResult::DimensionMismatch {
+                qdrant_dimension,
+                expected_dimension,
+                source,
+            } => {
+                return Err(Error::DimensionMismatch {
+                    collection: config.collection_name.clone(),
+                    stored: qdrant_dimension,
+                    expected: expected_dimension,
+                    dimension_source: source,
+                    remediation: "Change 'collection_name' in config to use a new collection, or run 'librarian db reset' to delete and recreate (WARNING: data loss)".to_string(),
+                });
+            }
+            ValidationResult::ConfigConflict {
+                stored_dimension,
+                stored_model,
+                expected_dimension,
+                expected_model,
+            } => {
+                return Err(Error::ConfigCollectionConflict {
+                    collection: config.collection_name.clone(),
+                    stored_dim: stored_dimension,
+                    stored_model,
+                    config_dim: expected_dimension,
+                    config_model: expected_model,
+                    remediation: "Your config has changed embedding models. Run 'librarian db reset' and reindex, or revert config".to_string(),
+                });
+            }
+        }
+
+        // Record/update config metadata
+        db.upsert_collection_config(&expected.to_record()).await?;
+
+        // Mark as validated
+        store.validated = true;
+
+        Ok(store)
+    }
+
+    /// Validate collection state against expected configuration and stored metadata
+    pub async fn validate_collection_state(
+        &self,
+        db: &crate::meta::MetaDb,
+        expected: &CollectionConfig,
+    ) -> Result<ValidationResult> {
+        // 1. Check if collection exists in Qdrant
+        let exists = self.client.collection_exists(&self.collection).await?;
+
+        if !exists {
+            // Collection doesn't exist - check for conflicting SQLite record
+            if let Some(stored) = db.get_collection_config(&self.collection).await? {
+                return Ok(ValidationResult::NotFoundButConfigured {
+                    stored_dimension: stored.vector_dimension as usize,
+                    stored_model: stored.embedding_model,
+                });
+            }
+            return Ok(ValidationResult::NotFound);
+        }
+
+        // 2. Get Qdrant collection dimension
+        let qdrant_dim = self.get_collection_dimension().await?;
+
+        // 3. Check dimension matches expected config
+        if qdrant_dim != expected.vector_dimension {
+            return Ok(ValidationResult::DimensionMismatch {
+                qdrant_dimension: qdrant_dim,
+                expected_dimension: expected.vector_dimension,
+                source: format!(
+                    "model '{}' ({})",
+                    expected.embedding_model, expected.embedding_family
+                ),
+            });
+        }
+
+        // 4. Check against stored metadata
+        if let Some(stored) = db.get_collection_config(&self.collection).await? {
+            if stored.vector_dimension as usize != expected.vector_dimension {
+                return Ok(ValidationResult::ConfigConflict {
+                    stored_dimension: stored.vector_dimension as usize,
+                    stored_model: stored.embedding_model,
+                    expected_dimension: expected.vector_dimension,
+                    expected_model: expected.embedding_model.clone(),
+                });
+            }
+        }
+
+        Ok(ValidationResult::Valid)
+    }
+
+    /// Get the actual dimension of the collection from Qdrant
+    async fn get_collection_dimension(&self) -> Result<usize> {
+        if let Some(sizes) = self.collection_vector_sizes().await? {
+            if let Some((_, size)) = sizes.first() {
+                return Ok(*size as usize);
+            }
+        }
+        Err(Error::Qdrant(
+            "Could not determine collection dimension".to_string(),
+        ))
+    }
+
+    /// Check that store has been validated before write operations.
+    ///
+    /// This is a safeguard to catch code paths that bypass connect_validated().
+    /// In debug builds, it will panic. In release builds, it logs a warning.
+    pub fn pre_write_check(&self, operation: &str) {
+        if !self.validated {
+            let msg = format!(
+                "QdrantStore.{} called without prior validation. Use connect_validated() for write operations.",
+                operation
+            );
+            #[cfg(debug_assertions)]
+            tracing::warn!("{}", msg);
+            #[cfg(not(debug_assertions))]
+            tracing::warn!("{}", msg);
+        }
     }
 
     /// Get the expected vector dimension for this store
@@ -206,6 +458,8 @@ impl QdrantStore {
 
     /// Upsert ChunkPoint objects (converts to PointStruct internally)
     pub async fn upsert_points(&self, points: Vec<ChunkPoint>) -> Result<()> {
+        self.pre_write_check("upsert_points");
+
         if points.is_empty() {
             return Ok(());
         }
@@ -248,6 +502,8 @@ impl QdrantStore {
 
     /// Delete points by UUID
     pub async fn delete_points(&self, point_ids: &[Uuid]) -> Result<()> {
+        self.pre_write_check("delete_points");
+
         if point_ids.is_empty() {
             return Ok(());
         }
@@ -570,5 +826,82 @@ mod tests {
             Error::Qdrant(message) => assert!(message.contains("Vector dimension mismatch")),
             other => panic!("expected qdrant error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_dimension_mismatch_error_format() {
+        let err = Error::DimensionMismatch {
+            collection: "test".to_string(),
+            stored: 768,
+            expected: 384,
+            dimension_source: "model 'bge-small' (bge)".to_string(),
+            remediation: "Change collection_name or run db reset".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("768"));
+        assert!(msg.contains("384"));
+        assert!(msg.contains("Remediation"));
+        assert!(msg.contains("bge-small"));
+    }
+
+    #[test]
+    fn test_config_collection_conflict_error_format() {
+        let err = Error::ConfigCollectionConflict {
+            collection: "test".to_string(),
+            stored_dim: 768,
+            stored_model: "old-model".to_string(),
+            config_dim: 384,
+            config_model: "new-model".to_string(),
+            remediation: "Run db reset".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("768"));
+        assert!(msg.contains("384"));
+        assert!(msg.contains("old-model"));
+        assert!(msg.contains("new-model"));
+        assert!(msg.contains("Run db reset"));
+    }
+
+    #[test]
+    fn test_collection_config_construction() {
+        // Test that CollectionConfig can be constructed and converts to record correctly
+        let config = CollectionConfig {
+            collection_name: "my_collection".to_string(),
+            vector_dimension: 384,
+            embedding_model: "test-model".to_string(),
+            embedding_family: "test-family".to_string(),
+            distance_metric: "cosine".to_string(),
+        };
+
+        assert_eq!(config.collection_name, "my_collection");
+        assert_eq!(config.vector_dimension, 384);
+        assert_eq!(config.embedding_model, "test-model");
+        assert_eq!(config.embedding_family, "test-family");
+        assert_eq!(config.distance_metric, "cosine");
+
+        let record = config.to_record();
+        assert_eq!(record.collection_name, "my_collection");
+        assert_eq!(record.vector_dimension, 384);
+        assert_eq!(record.embedding_model, "test-model");
+        assert_eq!(record.embedding_family, "test-family");
+        assert!(!record.created_at.is_empty());
+        assert!(record.verified_at.is_none());
+    }
+
+    #[test]
+    fn test_validation_result_debug() {
+        let valid = ValidationResult::Valid;
+        assert!(format!("{:?}", valid).contains("Valid"));
+
+        let not_found = ValidationResult::NotFound;
+        assert!(format!("{:?}", not_found).contains("NotFound"));
+
+        let mismatch = ValidationResult::DimensionMismatch {
+            qdrant_dimension: 768,
+            expected_dimension: 384,
+            source: "test".to_string(),
+        };
+        assert!(format!("{:?}", mismatch).contains("DimensionMismatch"));
+        assert!(format!("{:?}", mismatch).contains("768"));
     }
 }

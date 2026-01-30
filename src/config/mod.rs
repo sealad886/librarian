@@ -85,7 +85,7 @@ pub struct CustomEmbeddingConfig {
     #[serde(default)]
     pub family: Option<String>,
 
-    /// Supported modalities (text, image, image_text)
+    /// Supported modalities (text, image, multimode)
     #[serde(default)]
     pub modalities: Vec<String>,
 
@@ -830,7 +830,7 @@ impl Config {
                     .custom
                     .modalities
                     .iter()
-                    .any(|m| m == "image" || m == "image_text"));
+                    .any(|m| m == "image" || m == "multimode"));
 
         let probe = client
             .probe(
@@ -878,7 +878,7 @@ impl Config {
                 spec.capabilities.strategy,
             )
         } else {
-            let supports_joint_inputs = modalities.iter().any(|m| m == "image_text");
+            let supports_joint_inputs = modalities.iter().any(|m| m == "multimode");
             let supports_image = supports_joint_inputs || modalities.iter().any(|m| m == "image");
             let supports_text = supports_joint_inputs || modalities.iter().any(|m| m == "text");
             let strategy = if supports_joint_inputs {

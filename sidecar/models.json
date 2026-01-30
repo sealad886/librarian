@@ -38,8 +38,8 @@
   {
     "id": "Qwen/Qwen3-VL-Embedding-2B",
     "family": "qwen3-vl",
-    "modalities": ["text", "image_text"],
-    "embedding_dim": 768,
+    "modalities": ["text", "multimode"],
+    "embedding_dim": 2048,
     "multivector": false,
     "supports_mrl": false,
     "max_batch": 8
@@ -47,8 +47,8 @@
   {
     "id": "Qwen/Qwen3-VL-Embedding-8B",
     "family": "qwen3-vl",
-    "modalities": ["text", "image_text"],
-    "embedding_dim": 1024,
+    "modalities": ["text", "multimode"],
+    "embedding_dim": 4096,
     "multivector": false,
     "supports_mrl": false,
     "max_batch": 4
@@ -56,7 +56,7 @@
   {
     "id": "jinaai/jina-clip-v2",
     "family": "jina-clip",
-    "modalities": ["text", "image"],
+    "modalities": ["text", "multimode"],
     "embedding_dim": 768,
     "multivector": false,
     "supports_mrl": false,
@@ -65,7 +65,7 @@
   {
     "id": "google/siglip2-base-patch16-224",
     "family": "siglip2",
-    "modalities": ["text", "image"],
+    "modalities": ["text", "multimode"],
     "embedding_dim": 768,
     "multivector": false,
     "supports_mrl": false,

@@ -1,5 +1,8 @@
 //! SQLite schema definition
 
+/// Current schema version - increment when adding migrations
+pub const CURRENT_SCHEMA_VERSION: i32 = 1;
+
 /// SQL schema for the metadata database
 pub const SCHEMA_SQL: &str = r#"
 -- Sources: registered ingestion sources
@@ -58,6 +61,24 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
     chunks_updated INTEGER DEFAULT 0,
     chunks_deleted INTEGER DEFAULT 0,
     errors_json TEXT
+);
+
+-- Schema version tracking for migrations
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+
+-- Track collection configuration for consistency checks
+CREATE TABLE IF NOT EXISTS collection_config (
+    collection_name TEXT PRIMARY KEY,
+    vector_dimension INTEGER NOT NULL,
+    embedding_model TEXT NOT NULL,
+    embedding_family TEXT NOT NULL,
+    distance_metric TEXT NOT NULL DEFAULT 'cosine',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    verified_at TEXT
 );
 
 -- Indexes for performance
