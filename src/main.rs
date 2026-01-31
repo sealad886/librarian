@@ -948,15 +948,7 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
 
     match action {
         DbAction::Init => {
-            let store = match QdrantStore::connect(config, &embedding_config).await {
-                Ok(store) => store,
-                Err(err) if is_qdrant_connection_refused(&err) => {
-                    ensure_local_qdrant_running(config).await?;
-                    QdrantStore::connect(config, &embedding_config).await?
-                }
-                Err(err) => return Err(err),
-            };
-            store.ensure_collection().await?;
+            ensure_collection_with_autostart(config, &embedding_config).await?;
             if json {
                 println!(r#"{{"status": "ok", "message": "Collection initialized"}}"#);
             } else {
@@ -1151,6 +1143,22 @@ fn is_qdrant_connection_refused(err: &Error) -> bool {
                 || msg.contains("Failed to connect")
         }
         _ => false,
+    }
+}
+
+async fn ensure_collection_with_autostart(
+    config: &Config,
+    embedding_config: &librarian::config::ResolvedEmbeddingConfig,
+) -> Result<()> {
+    let store = QdrantStore::connect(config, embedding_config).await?;
+    match store.ensure_collection().await {
+        Ok(()) => Ok(()),
+        Err(err) if is_qdrant_connection_refused(&err) => {
+            ensure_local_qdrant_running(config).await?;
+            let store = QdrantStore::connect(config, embedding_config).await?;
+            store.ensure_collection().await
+        }
+        Err(err) => Err(err),
     }
 }
 
