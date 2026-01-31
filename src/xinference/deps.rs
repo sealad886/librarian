@@ -2,8 +2,10 @@
 //!
 //! Handles checking and installing Python dependencies for Xinference.
 
+use crate::config::Config;
 use crate::error::{Error, Result};
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 use tracing::{debug, info, warn};
@@ -11,41 +13,140 @@ use tracing::{debug, info, warn};
 /// Cached result of xinference installation check
 static XINFERENCE_READY: OnceLock<bool> = OnceLock::new();
 
-/// Check if Python is available and return the path to the Python executable
-pub fn check_python() -> Result<PathBuf> {
-    // Try python3 first, then python
-    for cmd in ["python3", "python"] {
-        if let Ok(output) = Command::new(cmd).args(["--version"]).output() {
-            if output.status.success() {
-                debug!("Found Python at: {}", cmd);
-                return Ok(PathBuf::from(cmd));
-            }
+/// Ensure uv is available to manage the dedicated Python environment.
+pub fn ensure_uv_available() -> Result<()> {
+    match Command::new("uv").arg("--version").output() {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(Error::Embedding(format!(
+                "uv is required to manage the Xinference Python environment. Install uv and retry. ({})",
+                stderr.trim()
+            )))
         }
+        Err(e) => Err(Error::Embedding(format!(
+            "uv is required to manage the Xinference Python environment but was not found: {}",
+            e
+        ))),
     }
-    Err(Error::Embedding(
-        "Python not found in PATH. Please install Python 3.8+ to use Xinference backend.".into(),
-    ))
 }
 
-/// Check if pip is available for the given Python
-pub fn check_pip(python: &PathBuf) -> Result<()> {
-    let output = Command::new(python)
-        .args(["-m", "pip", "--version"])
-        .output()
-        .map_err(|e| Error::Embedding(format!("Failed to check pip: {}", e)))?;
+fn xinference_venv_dir() -> PathBuf {
+    Config::default_base_dir().join("xinference").join(".venv")
+}
 
-    if output.status.success() {
-        debug!("pip is available");
-        Ok(())
+fn venv_bin_dir(venv_dir: &Path) -> PathBuf {
+    if cfg!(windows) {
+        venv_dir.join("Scripts")
     } else {
-        Err(Error::Embedding(
-            "pip not available. Please install pip to use Xinference backend.".into(),
-        ))
+        venv_dir.join("bin")
     }
+}
+
+fn venv_python_path(venv_dir: &Path) -> PathBuf {
+    if cfg!(windows) {
+        venv_bin_dir(venv_dir).join("python.exe")
+    } else {
+        venv_bin_dir(venv_dir).join("python")
+    }
+}
+
+fn xinference_local_path(venv_dir: &Path) -> PathBuf {
+    if cfg!(windows) {
+        venv_bin_dir(venv_dir).join("xinference-local.exe")
+    } else {
+        venv_bin_dir(venv_dir).join("xinference-local")
+    }
+}
+
+fn python_is_310(python: &Path) -> Result<bool> {
+    let output = Command::new(python)
+        .args([
+            "-c",
+            "import sys; print(f\"{sys.version_info[0]}.{sys.version_info[1]}\")",
+        ])
+        .output()
+        .map_err(|e| Error::Embedding(format!("Failed to check Python version: {}", e)))?;
+
+    if !output.status.success() {
+        return Ok(false);
+    }
+
+    let version = String::from_utf8_lossy(&output.stdout);
+    Ok(version.trim() == "3.10")
+}
+
+fn ensure_xinference_venv() -> Result<PathBuf> {
+    ensure_uv_available()?;
+
+    let venv_dir = xinference_venv_dir();
+    let python = venv_python_path(&venv_dir);
+
+    if python.exists() {
+        if python_is_310(&python)? {
+            debug!("Using existing Xinference venv at {}", venv_dir.display());
+            return Ok(python);
+        }
+
+        warn!(
+            "Xinference venv at {} is not Python 3.10; recreating",
+            venv_dir.display()
+        );
+        fs::remove_dir_all(&venv_dir)?;
+    }
+
+    if let Some(parent) = venv_dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let venv_dir_str = venv_dir
+        .to_str()
+        .ok_or_else(|| Error::Embedding("Invalid Xinference venv path (non-UTF8)".to_string()))?;
+
+    let output = Command::new("uv")
+        .args(["venv", "--python", "3.10", venv_dir_str])
+        .output()
+        .map_err(|e| Error::Embedding(format!("Failed to create Xinference venv: {}", e)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::Embedding(format!(
+            "Failed to create Xinference Python 3.10 environment: {}",
+            stderr.trim()
+        )));
+    }
+
+    if !python.exists() || !python_is_310(&python)? {
+        return Err(Error::Embedding(
+            "Xinference venv does not contain Python 3.10 after creation".into(),
+        ));
+    }
+
+    Ok(python)
+}
+
+fn ensure_venv_on_path(venv_dir: &Path) -> Result<()> {
+    let bin_dir = venv_bin_dir(venv_dir);
+    let bin_str = bin_dir.to_str().ok_or_else(|| {
+        Error::Embedding("Invalid Xinference venv bin path (non-UTF8)".to_string())
+    })?;
+
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths: Vec<PathBuf> = std::env::split_paths(&current).collect();
+    if paths.iter().any(|p| p == &bin_dir) {
+        return Ok(());
+    }
+
+    paths.insert(0, PathBuf::from(bin_str));
+    let new_path = std::env::join_paths(paths).map_err(|e| {
+        Error::Embedding(format!("Failed to update PATH for Xinference venv: {}", e))
+    })?;
+    std::env::set_var("PATH", new_path);
+    Ok(())
 }
 
 /// Check if xinference is installed
-pub fn check_xinference_installed(python: &PathBuf) -> Result<bool> {
+pub fn check_xinference_installed(python: &Path) -> Result<bool> {
     let output = Command::new(python)
         .args(["-c", "import xinference; print(xinference.__version__)"])
         .output()
@@ -55,7 +156,7 @@ pub fn check_xinference_installed(python: &PathBuf) -> Result<bool> {
 }
 
 /// Get the installed xinference version
-pub fn get_xinference_version(python: &PathBuf) -> Result<Option<String>> {
+pub fn get_xinference_version(python: &Path) -> Result<Option<String>> {
     let output = Command::new(python)
         .args(["-c", "import xinference; print(xinference.__version__)"])
         .output()
@@ -70,19 +171,23 @@ pub fn get_xinference_version(python: &PathBuf) -> Result<Option<String>> {
 }
 
 /// Install xinference with transformers support
-pub fn install_xinference(python: &PathBuf) -> Result<()> {
+pub fn install_xinference(python: &Path) -> Result<()> {
     info!("Installing xinference[transformers]... This may take a few minutes.");
 
-    let output = Command::new(python)
+    let python_str = python
+        .to_str()
+        .ok_or_else(|| Error::Embedding("Invalid Xinference Python path (non-UTF8)".to_string()))?;
+    let output = Command::new("uv")
         .args([
-            "-m",
             "pip",
             "install",
+            "--python",
+            python_str,
             "--quiet",
             "xinference[transformers]",
         ])
         .output()
-        .map_err(|e| Error::Embedding(format!("Failed to run pip install: {}", e)))?;
+        .map_err(|e| Error::Embedding(format!("Failed to run uv pip install: {}", e)))?;
 
     if output.status.success() {
         info!("xinference installed successfully");
@@ -97,7 +202,7 @@ pub fn install_xinference(python: &PathBuf) -> Result<()> {
 }
 
 /// Ensure xinference is installed, installing it if necessary
-pub fn ensure_xinference_installed(python: &PathBuf) -> Result<()> {
+pub fn ensure_xinference_installed(python: &Path) -> Result<()> {
     if check_xinference_installed(python)? {
         if let Ok(Some(version)) = get_xinference_version(python) {
             debug!("xinference version {} is installed", version);
@@ -119,8 +224,13 @@ pub fn ensure_xinference_installed(python: &PathBuf) -> Result<()> {
 }
 
 /// Check if xinference-local command is available in PATH
-pub fn check_xinference_command() -> Result<bool> {
-    match Command::new("xinference-local").arg("--help").output() {
+pub fn check_xinference_command(venv_dir: &Path) -> Result<bool> {
+    let path = xinference_local_path(venv_dir);
+    if !path.exists() {
+        return Ok(false);
+    }
+
+    match Command::new(path).arg("--help").output() {
         Ok(output) => Ok(output.status.success()),
         Err(_) => Ok(false),
     }
@@ -132,19 +242,20 @@ pub fn check_xinference_command() -> Result<bool> {
 pub fn ensure_xinference_ready() -> Result<PathBuf> {
     // Fast path: already checked
     if XINFERENCE_READY.get().copied() == Some(true) {
-        return check_python();
+        return Ok(venv_python_path(&xinference_venv_dir()));
     }
 
-    let python = check_python()?;
-    check_pip(&python)?;
+    let python = ensure_xinference_venv()?;
+    let venv_dir = xinference_venv_dir();
+    ensure_venv_on_path(&venv_dir)?;
     ensure_xinference_installed(&python)?;
     ensure_xoscar_compatible(&python)?;
 
     // Verify the xinference-local command is available
-    if !check_xinference_command()? {
-        warn!("xinference-local command not found in PATH after installation");
+    if !check_xinference_command(&venv_dir)? {
+        warn!("xinference-local command not found in Xinference venv after installation");
         return Err(Error::Embedding(
-            "xinference-local not found in PATH. Try restarting your terminal or activating your Python environment.".into(),
+            "xinference-local not found in Xinference venv. Try reinstalling xinference or removing the venv to recreate it.".into(),
         ));
     }
 
@@ -154,7 +265,7 @@ pub fn ensure_xinference_ready() -> Result<PathBuf> {
     Ok(python)
 }
 
-fn xoscar_supports_start_method(python: &PathBuf) -> Result<Option<bool>> {
+fn xoscar_supports_start_method(python: &Path) -> Result<Option<bool>> {
     let output = Command::new(python)
         .args([
             "-c",
@@ -178,7 +289,7 @@ fn xoscar_supports_start_method(python: &PathBuf) -> Result<Option<bool>> {
     }
 }
 
-fn ensure_xoscar_compatible(python: &PathBuf) -> Result<()> {
+fn ensure_xoscar_compatible(python: &Path) -> Result<()> {
     let supports = xoscar_supports_start_method(python)?;
     if supports == Some(true) {
         return Ok(());
@@ -207,12 +318,18 @@ pub fn is_xinference_ready() -> bool {
         return true;
     }
 
-    let Ok(python) = check_python() else {
+    let venv_dir = xinference_venv_dir();
+    let python = venv_python_path(&venv_dir);
+    if !python.exists() {
         return false;
-    };
+    }
 
-    check_xinference_installed(&python).unwrap_or(false)
-        && check_xinference_command().unwrap_or(false)
+    if python_is_310(&python).unwrap_or(false) {
+        check_xinference_installed(&python).unwrap_or(false)
+            && check_xinference_command(&venv_dir).unwrap_or(false)
+    } else {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -221,9 +338,9 @@ mod tests {
 
     #[test]
     fn test_check_python() {
-        // This test assumes Python is installed on the test system
-        // It's okay if it fails in environments without Python
-        let result = check_python();
+        // This test assumes uv is installed and accessible on the test system
+        // It's okay if it fails in environments without uv
+        let result = ensure_xinference_venv();
         // Just verify it doesn't panic
         let _ = result;
     }
@@ -231,7 +348,7 @@ mod tests {
     #[test]
     fn test_check_xinference_command_when_not_installed() {
         // This should return Ok(false) or Ok(true) depending on system state
-        let result = check_xinference_command();
+        let result = check_xinference_command(&xinference_venv_dir());
         assert!(result.is_ok());
     }
 }
