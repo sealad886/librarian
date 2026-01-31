@@ -22,6 +22,7 @@ use crate::error::{Error, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -332,47 +333,75 @@ impl XinferenceManager {
     pub async fn launch_model(&mut self, model_name: &str, model_type: &str) -> Result<String> {
         info!("Launching {} model: {}", model_type, model_name);
 
-        let url = self
-            .base_url
-            .join("/v1/models")
-            .map_err(|e| Error::Config(format!("Invalid URL: {}", e)))?;
+        let mut attempted_fallback = false;
+        loop {
+            let url = self
+                .base_url
+                .join("/v1/models")
+                .map_err(|e| Error::Config(format!("Invalid URL: {}", e)))?;
 
-        let request = ModelLaunchRequest {
-            model_name: model_name.to_string(),
-            model_type: model_type.to_string(),
-        };
+            let request = ModelLaunchRequest {
+                model_name: model_name.to_string(),
+                model_type: model_type.to_string(),
+            };
 
-        let response = self
-            .client
-            .post(url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| Error::Embedding(format!("Failed to launch model: {}", e)))?;
+            let response = self
+                .client
+                .post(url)
+                .json(&request)
+                .send()
+                .await
+                .map_err(|e| Error::Embedding(format!("Failed to launch model: {}", e)))?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Embedding(format!(
-                "Failed to launch model '{}': HTTP {} - {}",
-                model_name, status, body
-            )));
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                if !attempted_fallback && is_xoscar_start_method_error(&body) {
+                    attempted_fallback = true;
+                    warn!(
+                        "Detected incompatible xinference server on port {} (xoscar start_method mismatch). Starting managed server on a new port...",
+                        self.port
+                    );
+                    self.restart_on_fallback_port().await?;
+                    continue;
+                }
+                return Err(Error::Embedding(format!(
+                    "Failed to launch model '{}': HTTP {} - {}",
+                    model_name, status, body
+                )));
+            }
+
+            let launch_response: ModelLaunchResponse = response
+                .json()
+                .await
+                .map_err(|e| Error::Embedding(format!("Failed to parse launch response: {}", e)))?;
+
+            self.launched_models
+                .insert(model_name.to_string(), launch_response.model_uid.clone());
+
+            info!(
+                "Model {} launched with UID: {}",
+                model_name, launch_response.model_uid
+            );
+
+            return Ok(launch_response.model_uid);
         }
+    }
 
-        let launch_response: ModelLaunchResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::Embedding(format!("Failed to parse launch response: {}", e)))?;
+    async fn restart_on_fallback_port(&mut self) -> Result<()> {
+        let new_port = find_available_port()?;
+        self.stop().await?;
+        self.set_port(new_port)?;
+        self.start().await?;
+        Ok(())
+    }
 
-        self.launched_models
-            .insert(model_name.to_string(), launch_response.model_uid.clone());
-
-        info!(
-            "Model {} launched with UID: {}",
-            model_name, launch_response.model_uid
-        );
-
-        Ok(launch_response.model_uid)
+    fn set_port(&mut self, port: u16) -> Result<()> {
+        let base_url = Url::parse(&format!("http://127.0.0.1:{}", port))
+            .map_err(|e| Error::Config(format!("Invalid Xinference URL: {}", e)))?;
+        self.port = port;
+        self.base_url = base_url;
+        Ok(())
     }
 
     /// Check if a model is already launched (in our tracking)
@@ -459,6 +488,20 @@ fn truncate_body(body: &str, limit: usize) -> String {
     } else {
         trimmed
     }
+}
+
+fn is_xoscar_start_method_error(body: &str) -> bool {
+    body.contains("append_sub_pool() got an unexpected keyword argument 'start_method'")
+}
+
+fn find_available_port() -> Result<u16> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| Error::Embedding(format!("Failed to bind a local port: {}", e)))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| Error::Embedding(format!("Failed to read local port: {}", e)))?
+        .port();
+    Ok(port)
 }
 
 #[cfg(test)]
