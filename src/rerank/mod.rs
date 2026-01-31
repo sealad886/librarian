@@ -16,6 +16,7 @@ use crate::xinference::{
     ensure_xinference_ready, get_or_init_xinference_manager, XinferenceManager, XinferenceReranker,
 };
 use async_trait::async_trait;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -51,7 +52,10 @@ pub fn create_reranker(config: &RerankerConfig, backend_url: &str) -> Result<Box
 /// and model is launched before creating the reranker.
 ///
 /// For http backend: creates HttpReranker directly.
-pub async fn create_reranker_auto(config: &RerankerConfig) -> Result<Box<dyn Reranker>> {
+pub async fn create_reranker_auto(
+    config: &RerankerConfig,
+    base_dir: &Path,
+) -> Result<Box<dyn Reranker>> {
     let backend_kind: EmbeddingBackendKind = config
         .backend
         .parse()
@@ -62,7 +66,7 @@ pub async fn create_reranker_auto(config: &RerankerConfig) -> Result<Box<dyn Rer
             info!("Using Xinference reranker backend, ensuring dependencies...");
 
             // Ensure xinference is installed and ready (sync check)
-            ensure_xinference_ready()?;
+            ensure_xinference_ready(base_dir)?;
 
             // Extract port from URL
             let port = extract_port_from_url(&config.url)?;

@@ -4,6 +4,7 @@ use crate::config::{check_ffmpeg_deps_available, render_config_toml, Config};
 use crate::error::{Error, Result};
 use crate::meta::MetaDb;
 use crate::store::QdrantStore;
+use crate::xinference::prepare_xinference_env;
 use crossterm::cursor;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::execute;
@@ -104,6 +105,8 @@ pub async fn cmd_init(options: InitOptions) -> Result<()> {
     }
     std::fs::write(&config_path, rendered)?;
     info!("Created config at {:?}", config_path);
+
+    prepare_xinference_env(&base_dir)?;
 
     let db = MetaDb::connect(&config).await?;
     db.init_schema().await?;

@@ -2,7 +2,6 @@
 //!
 //! Handles checking and installing Python dependencies for Xinference.
 
-use crate::config::Config;
 use crate::error::{Error, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,8 +9,8 @@ use std::process::Command;
 use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 
-/// Cached result of xinference installation check
-static XINFERENCE_READY: OnceLock<bool> = OnceLock::new();
+/// Cached Python path for the Xinference environment
+static XINFERENCE_PYTHON: OnceLock<PathBuf> = OnceLock::new();
 
 /// Ensure uv is available to manage the dedicated Python environment.
 pub fn ensure_uv_available() -> Result<()> {
@@ -31,8 +30,8 @@ pub fn ensure_uv_available() -> Result<()> {
     }
 }
 
-fn xinference_venv_dir() -> PathBuf {
-    Config::default_base_dir().join("xinference").join(".venv")
+fn xinference_venv_dir(base_dir: &Path) -> PathBuf {
+    base_dir.join("xinference").join(".venv")
 }
 
 fn venv_bin_dir(venv_dir: &Path) -> PathBuf {
@@ -76,10 +75,10 @@ fn python_is_310(python: &Path) -> Result<bool> {
     Ok(version.trim() == "3.10")
 }
 
-fn ensure_xinference_venv() -> Result<PathBuf> {
+fn ensure_xinference_venv(base_dir: &Path) -> Result<PathBuf> {
     ensure_uv_available()?;
 
-    let venv_dir = xinference_venv_dir();
+    let venv_dir = xinference_venv_dir(base_dir);
     let python = venv_python_path(&venv_dir);
 
     if python.exists() {
@@ -170,9 +169,9 @@ pub fn get_xinference_version(python: &Path) -> Result<Option<String>> {
     }
 }
 
-/// Install xinference with transformers support
+/// Install xinference with all extras
 pub fn install_xinference(python: &Path) -> Result<()> {
-    info!("Installing xinference[transformers]... This may take a few minutes.");
+    info!("Installing xinference[all]... This may take a few minutes.");
 
     let python_str = python
         .to_str()
@@ -184,7 +183,7 @@ pub fn install_xinference(python: &Path) -> Result<()> {
             "--python",
             python_str,
             "--quiet",
-            "xinference[transformers]",
+            "xinference[all]",
         ])
         .output()
         .map_err(|e| Error::Embedding(format!("Failed to run uv pip install: {}", e)))?;
@@ -223,6 +222,25 @@ pub fn ensure_xinference_installed(python: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Prepare the dedicated Xinference environment (used by init).
+pub fn prepare_xinference_env(base_dir: &Path) -> Result<PathBuf> {
+    let python = ensure_xinference_venv(base_dir)?;
+    let venv_dir = xinference_venv_dir(base_dir);
+    ensure_venv_on_path(&venv_dir)?;
+    install_xinference(&python)?;
+    ensure_xoscar_compatible(&python)?;
+
+    if !check_xinference_command(&venv_dir)? {
+        warn!("xinference-local command not found in Xinference venv after installation");
+        return Err(Error::Embedding(
+            "xinference-local not found in Xinference venv. Try reinstalling xinference or removing the venv to recreate it.".into(),
+        ));
+    }
+
+    let _ = XINFERENCE_PYTHON.set(python.clone());
+    Ok(python)
+}
+
 /// Check if xinference-local command is available in PATH
 pub fn check_xinference_command(venv_dir: &Path) -> Result<bool> {
     let path = xinference_local_path(venv_dir);
@@ -239,14 +257,17 @@ pub fn check_xinference_command(venv_dir: &Path) -> Result<bool> {
 /// Ensure all xinference dependencies are ready.
 /// Returns the Python path to use.
 /// Results are cached for the lifetime of the process.
-pub fn ensure_xinference_ready() -> Result<PathBuf> {
+/// Ensure all xinference dependencies are ready for a given base directory.
+/// Returns the Python path to use.
+/// Results are cached for the lifetime of the process.
+pub fn ensure_xinference_ready(base_dir: &Path) -> Result<PathBuf> {
     // Fast path: already checked
-    if XINFERENCE_READY.get().copied() == Some(true) {
-        return Ok(venv_python_path(&xinference_venv_dir()));
+    if let Some(python) = XINFERENCE_PYTHON.get() {
+        return Ok(python.clone());
     }
 
-    let python = ensure_xinference_venv()?;
-    let venv_dir = xinference_venv_dir();
+    let python = ensure_xinference_venv(base_dir)?;
+    let venv_dir = xinference_venv_dir(base_dir);
     ensure_venv_on_path(&venv_dir)?;
     ensure_xinference_installed(&python)?;
     ensure_xoscar_compatible(&python)?;
@@ -260,7 +281,7 @@ pub fn ensure_xinference_ready() -> Result<PathBuf> {
     }
 
     // Mark as ready
-    let _ = XINFERENCE_READY.set(true);
+    let _ = XINFERENCE_PYTHON.set(python.clone());
 
     Ok(python)
 }
@@ -313,12 +334,12 @@ fn ensure_xoscar_compatible(python: &Path) -> Result<()> {
 }
 
 /// Check if xinference dependencies are ready without installing
-pub fn is_xinference_ready() -> bool {
-    if XINFERENCE_READY.get().copied() == Some(true) {
+pub fn is_xinference_ready(base_dir: &Path) -> bool {
+    if XINFERENCE_PYTHON.get().is_some() {
         return true;
     }
 
-    let venv_dir = xinference_venv_dir();
+    let venv_dir = xinference_venv_dir(base_dir);
     let python = venv_python_path(&venv_dir);
     if !python.exists() {
         return false;
@@ -340,7 +361,8 @@ mod tests {
     fn test_check_python() {
         // This test assumes uv is installed and accessible on the test system
         // It's okay if it fails in environments without uv
-        let result = ensure_xinference_venv();
+        let base_dir = std::env::temp_dir().join("librarian-xinference-test");
+        let result = ensure_xinference_venv(&base_dir);
         // Just verify it doesn't panic
         let _ = result;
     }
@@ -348,7 +370,8 @@ mod tests {
     #[test]
     fn test_check_xinference_command_when_not_installed() {
         // This should return Ok(false) or Ok(true) depending on system state
-        let result = check_xinference_command(&xinference_venv_dir());
+        let base_dir = std::env::temp_dir().join("librarian-xinference-test");
+        let result = check_xinference_command(&xinference_venv_dir(&base_dir));
         assert!(result.is_ok());
     }
 }

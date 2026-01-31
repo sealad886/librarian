@@ -219,7 +219,7 @@ async fn handle_search(
         Ok(cfg) => cfg,
         Err(e) => return ToolResult::error(format!("Embedding config error: {}", e)),
     };
-    let embedder = match create_embedder_auto(&embedding_config).await {
+    let embedder = match create_embedder_auto(&embedding_config, &config.paths.base_dir).await {
         Ok(embedder) => embedder,
         Err(e) => return ToolResult::error(format!("Embedding backend error: {}", e)),
     };
@@ -489,7 +489,7 @@ async fn run_ingest_background(
     let db = MetaDb::connect(&config).await?;
     db.init_schema().await?;
     let embedding_config = config.resolve_embedding_config().await?;
-    let embedder = create_embedder_auto(&embedding_config).await?;
+    let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
     // Use validated connection for write operations
     let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
 
@@ -557,7 +557,7 @@ async fn run_update_background(
     let db = MetaDb::connect(&config).await?;
     db.init_schema().await?;
     let embedding_config = config.resolve_embedding_config().await?;
-    let embedder = create_embedder_auto(&embedding_config).await?;
+    let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
     // Use validated connection for write operations
     let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
 
@@ -586,7 +586,7 @@ async fn run_reindex_background(
     let db = MetaDb::connect(&config).await?;
     db.init_schema().await?;
     let embedding_config = config.resolve_embedding_config().await?;
-    let embedder = create_embedder_auto(&embedding_config).await?;
+    let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
     // Use validated connection for write operations
     let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
 

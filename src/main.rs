@@ -454,7 +454,7 @@ async fn run() -> Result<()> {
             | Commands::Update { .. }
     );
     let embedder = if needs_embedder {
-        Some(create_embedder_auto(&embedding_config).await?)
+        Some(create_embedder_auto(&embedding_config, &config.paths.base_dir).await?)
     } else {
         None
     };

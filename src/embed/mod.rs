@@ -18,6 +18,7 @@ use crate::xinference::{
     ensure_xinference_ready, get_or_init_xinference_manager, XinferenceEmbedder, XinferenceManager,
 };
 use async_trait::async_trait;
+use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::info;
@@ -270,13 +271,16 @@ pub fn create_embedder(config: &ResolvedEmbeddingConfig) -> Result<Box<dyn Embed
 /// and model is launched before creating the embedder.
 ///
 /// For http backend: creates HttpEmbedder directly.
-pub async fn create_embedder_auto(config: &ResolvedEmbeddingConfig) -> Result<Box<dyn Embedder>> {
+pub async fn create_embedder_auto(
+    config: &ResolvedEmbeddingConfig,
+    base_dir: &Path,
+) -> Result<Box<dyn Embedder>> {
     match config.backend.kind {
         EmbeddingBackendKind::Xinference => {
             info!("Using Xinference backend, ensuring dependencies...");
 
             // Ensure xinference is installed and ready (sync check)
-            ensure_xinference_ready()?;
+            ensure_xinference_ready(base_dir)?;
 
             // Extract port from URL
             let port = extract_port_from_url(&config.backend.url)?;
