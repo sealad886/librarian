@@ -426,9 +426,20 @@ async fn run() -> Result<()> {
         return Ok(());
     }
 
-    // Resolve embedding config and create embedder to get dimension
+    // Resolve embedding config and only create embedder when needed
     let embedding_config = config.resolve_embedding_config().await?;
-    let embedder = create_embedder_auto(&embedding_config).await?;
+    let needs_embedder = matches!(
+        cli.command,
+        Commands::Ingest { .. }
+            | Commands::Query { .. }
+            | Commands::Reindex { .. }
+            | Commands::Update { .. }
+    );
+    let embedder = if needs_embedder {
+        Some(create_embedder_auto(&embedding_config).await?)
+    } else {
+        None
+    };
 
     // Determine if this command needs validated connection (write operations)
     let needs_validation = matches!(
@@ -451,7 +462,7 @@ async fn run() -> Result<()> {
         QdrantStore::new(
             &config.qdrant_url,
             &config.collection_name,
-            embedder.dimension(),
+            embedding_config.dimension,
             Some(&embedding_config),
         )
         .await?
@@ -462,6 +473,9 @@ async fn run() -> Result<()> {
         Commands::Init { .. } => unreachable!(),
 
         Commands::Ingest { source } => {
+            let embedder = embedder
+                .as_ref()
+                .expect("embedder must be initialized for ingest");
             handle_ingest(
                 &config,
                 &embedding_config,
@@ -480,6 +494,9 @@ async fn run() -> Result<()> {
             source,
             dedupe,
         } => {
+            let embedder = embedder
+                .as_ref()
+                .expect("embedder must be initialized for query");
             let options = QueryOptions {
                 k: Some(limit),
                 min_score,
@@ -557,6 +574,9 @@ async fn run() -> Result<()> {
         }
 
         Commands::Reindex { source, batch_size } => {
+            let embedder = embedder
+                .as_ref()
+                .expect("embedder must be initialized for reindex");
             let options = ReindexOptions {
                 source_ids: source,
                 batch_size,
@@ -580,6 +600,9 @@ async fn run() -> Result<()> {
         }
 
         Commands::Update { source, skip_prune } => {
+            let embedder = embedder
+                .as_ref()
+                .expect("embedder must be initialized for update");
             let options = UpdateOptions {
                 source_ids: source,
                 prune_orphans: !skip_prune,
