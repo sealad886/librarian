@@ -921,7 +921,7 @@ impl Config {
 
             match mgr.fetch_model_registration("embedding", &xinf_name).await {
                 Ok(registration) => {
-                    registry_dimension = registration.dimensions;
+                    registry_dimension = registration.dimension;
                 }
                 Err(err) => {
                     if !self.embedding.allow_custom {

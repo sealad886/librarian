@@ -122,7 +122,7 @@ enum ModelListResponse {
 struct ModelRegistration {
     model_name: String,
     #[serde(default)]
-    dimensions: Option<usize>,
+    pub(crate) dimensions: Option<usize>,
     #[serde(default)]
     max_tokens: Option<usize>,
 }

@@ -82,7 +82,7 @@ impl XinferenceEmbedder {
                 );
             } else {
                 let registration = mgr.fetch_model_registration("embedding", &xinf_name).await?;
-                if let Some(dim) = registration.dimensions {
+                if let Some(dim) = registration.dimension {
                     if dim != expected_dimension {
                         return Err(Error::Config(format!(
                             "Xinference model '{}' reports dimension {}, but config expects {}. Update embedding.dimension or reset the collection.",
