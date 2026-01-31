@@ -19,11 +19,15 @@ use librarian::{
     progress::LogWriterFactory,
     store::QdrantStore,
 };
+use std::fs;
 use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use tokio::process::Command;
+use tokio::time::sleep;
 use tracing::{debug, error, info};
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use url::Url;
 
 #[derive(Parser)]
 #[command(name = "librarian")]
@@ -941,21 +945,17 @@ async fn handle_init(cli: Cli) -> Result<()> {
 async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Result<()> {
     let embedding_config = config.resolve_embedding_config().await?;
     let db = MetaDb::new(&config.paths.db_file).await?;
-    let store = match QdrantStore::connect(config, &embedding_config).await {
-        Ok(store) => store,
-        Err(Error::Qdrant(msg))
-            if msg.contains("Connection refused") || msg.contains("tcp connect error") =>
-        {
-            return Err(Error::Config(format!(
-                "Qdrant is not reachable at {}. Start Qdrant and try again. Details: {}",
-                config.qdrant_url, msg
-            )));
-        }
-        Err(err) => return Err(err),
-    };
 
     match action {
         DbAction::Init => {
+            let store = match QdrantStore::connect(config, &embedding_config).await {
+                Ok(store) => store,
+                Err(err) if is_qdrant_connection_refused(&err) => {
+                    ensure_local_qdrant_running(config).await?;
+                    QdrantStore::connect(config, &embedding_config).await?
+                }
+                Err(err) => return Err(err),
+            };
             store.ensure_collection().await?;
             if json {
                 println!(r#"{{"status": "ok", "message": "Collection initialized"}}"#);
@@ -964,6 +964,7 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
             }
         }
         DbAction::Check => {
+            let store = qdrant_store_or_error(config, &embedding_config).await?;
             use librarian::store::{CollectionConfig, ValidationResult};
 
             let expected =
@@ -1074,6 +1075,7 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
             }
         }
         DbAction::Status => {
+            let store = qdrant_store_or_error(config, &embedding_config).await?;
             let stored_config = db.get_collection_config(&config.collection_name).await?;
 
             match store.get_collection_info().await? {
@@ -1123,6 +1125,7 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
             }
         }
         DbAction::Reset { yes } => {
+            let store = qdrant_store_or_error(config, &embedding_config).await?;
             if !yes {
                 eprintln!("⚠️  This will delete ALL indexed data!");
                 eprintln!("Run with --yes to confirm.");
@@ -1138,6 +1141,184 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
     }
 
     Ok(())
+}
+
+fn is_qdrant_connection_refused(err: &Error) -> bool {
+    match err {
+        Error::Qdrant(msg) => {
+            msg.contains("Connection refused")
+                || msg.contains("tcp connect error")
+                || msg.contains("Failed to connect")
+        }
+        _ => false,
+    }
+}
+
+async fn qdrant_store_or_error(
+    config: &Config,
+    embedding_config: &librarian::config::ResolvedEmbeddingConfig,
+) -> Result<QdrantStore> {
+    match QdrantStore::connect(config, embedding_config).await {
+        Ok(store) => Ok(store),
+        Err(err) if is_qdrant_connection_refused(&err) => Err(Error::Config(format!(
+            "Qdrant is not reachable at {}. Start Qdrant and try again.",
+            config.qdrant_url
+        ))),
+        Err(err) => Err(err),
+    }
+}
+
+async fn ensure_local_qdrant_running(config: &Config) -> Result<()> {
+    if !is_local_qdrant_url(&config.qdrant_url) {
+        return Err(Error::Config(format!(
+            "Qdrant is not reachable at {} and auto-start is only supported for local URLs.",
+            config.qdrant_url
+        )));
+    }
+
+    let base_dir = if config.paths.base_dir.as_os_str().is_empty() {
+        Config::default_base_dir()
+    } else {
+        config.paths.base_dir.clone()
+    };
+    let storage_dir = base_dir.join("qdrant_storage");
+    fs::create_dir_all(&storage_dir)?;
+
+    let compose_path = base_dir.join("qdrant-compose.yml");
+    let compose_contents = build_qdrant_compose(&storage_dir, &config.qdrant_api_key_env);
+    if fs::read_to_string(&compose_path).ok().as_deref() != Some(&compose_contents) {
+        fs::write(&compose_path, compose_contents)?;
+    }
+
+    start_qdrant_compose(&compose_path).await?;
+    wait_for_qdrant_ready(&config.qdrant_url).await?;
+    Ok(())
+}
+
+fn is_local_qdrant_url(qdrant_url: &str) -> bool {
+    let Ok(url) = Url::parse(qdrant_url) else {
+        return false;
+    };
+    matches!(
+        url.host_str(),
+        Some("127.0.0.1") | Some("localhost") | Some("0.0.0.0") | Some("::1")
+    )
+}
+
+fn build_qdrant_compose(storage_dir: &Path, api_key_env: &str) -> String {
+    let mut compose = format!(
+        r#"version: "3.9"
+services:
+  qdrant:
+    image: qdrant/qdrant
+    container_name: qdrant_librarian
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - "{storage}:/qdrant/storage"
+    restart: unless-stopped
+"#,
+        storage = storage_dir.display()
+    );
+
+    if !api_key_env.is_empty() && std::env::var(api_key_env).is_ok() {
+        compose.push_str("    environment:\n");
+        compose.push_str(&format!(
+            "      - QDRANT__SERVICE__API_KEY=${{{}}}\n",
+            api_key_env
+        ));
+    }
+
+    compose
+}
+
+async fn start_qdrant_compose(compose_path: &Path) -> Result<()> {
+    let mut compose_cmd = Command::new("docker");
+    compose_cmd
+        .arg("compose")
+        .arg("-f")
+        .arg(compose_path)
+        .arg("up")
+        .arg("-d")
+        .arg("qdrant");
+
+    match compose_cmd.output().await {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if docker_compose_unavailable(&stderr, &stdout) {
+                start_qdrant_compose_legacy(compose_path).await
+            } else {
+                Err(Error::Config(format!(
+                    "Failed to start Qdrant via docker compose: {}",
+                    stderr.trim()
+                )))
+            }
+        }
+        Err(_) => start_qdrant_compose_legacy(compose_path).await,
+    }
+}
+
+fn docker_compose_unavailable(stderr: &str, stdout: &str) -> bool {
+    let combined = format!("{}{}", stdout, stderr).to_lowercase();
+    combined.contains("unknown command")
+        || combined.contains("not a docker command")
+        || combined.contains("docker: 'compose'")
+}
+
+async fn start_qdrant_compose_legacy(compose_path: &Path) -> Result<()> {
+    let mut legacy_cmd = Command::new("docker-compose");
+    legacy_cmd
+        .arg("-f")
+        .arg(compose_path)
+        .arg("up")
+        .arg("-d")
+        .arg("qdrant");
+    let output = legacy_cmd.output().await.map_err(|e| {
+        Error::Config(format!(
+            "Docker is required to auto-start Qdrant but was not found: {}",
+            e
+        ))
+    })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(Error::Config(format!(
+            "Failed to start Qdrant via docker-compose: {}",
+            stderr.trim()
+        )))
+    }
+}
+
+async fn wait_for_qdrant_ready(qdrant_url: &str) -> Result<()> {
+    let health_url = qdrant_health_url(qdrant_url).ok_or_else(|| {
+        Error::Config("Unable to derive Qdrant health URL for readiness check".to_string())
+    })?;
+    let client = reqwest::Client::new();
+    for _ in 0..30 {
+        if let Ok(resp) = client.get(&health_url).send().await {
+            if resp.status().is_success() {
+                return Ok(());
+            }
+        }
+        sleep(std::time::Duration::from_millis(500)).await;
+    }
+    Err(Error::Config(format!(
+        "Qdrant did not become ready at {}",
+        health_url
+    )))
+}
+
+fn qdrant_health_url(qdrant_url: &str) -> Option<String> {
+    let url = Url::parse(qdrant_url).ok()?;
+    let host = url.host_str()?;
+    let scheme = url.scheme();
+    let port = url.port().unwrap_or(6334);
+    let rest_port = if port == 6334 { 6333 } else { port };
+    Some(format!("{}://{}:{}/health", scheme, host, rest_port))
 }
 
 async fn load_config(path: Option<&std::path::Path>) -> Result<Config> {
