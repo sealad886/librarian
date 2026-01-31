@@ -414,11 +414,13 @@ async fn run() -> Result<()> {
             "Resolved embedding dimension for MCP store"
         );
 
+        let api_key = config.qdrant_api_key();
         let store = QdrantStore::new(
             &config.qdrant_url,
             &config.collection_name,
             dimension.dimension,
             None,
+            api_key.as_deref(),
         )
         .await?;
 
@@ -466,6 +468,7 @@ async fn run() -> Result<()> {
             | Commands::Remove { .. }
     ) || matches!(&cli.command, Commands::Prune { remove_orphans, .. } if *remove_orphans);
 
+    let api_key = config.qdrant_api_key();
     let store = if needs_validation {
         // Write operations use validated connection
         info!(
@@ -480,6 +483,7 @@ async fn run() -> Result<()> {
             &config.collection_name,
             embedding_config.dimension,
             Some(&embedding_config),
+            api_key.as_deref(),
         )
         .await?
     };

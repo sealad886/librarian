@@ -128,11 +128,13 @@ pub enum ValidationResult {
 impl QdrantStore {
     /// Connect to Qdrant using config
     pub async fn connect(config: &Config, embedding: &ResolvedEmbeddingConfig) -> Result<Self> {
+        let api_key = config.qdrant_api_key();
         Self::new(
             &config.qdrant_url,
             &config.collection_name,
             embedding.dimension,
             Some(embedding),
+            api_key.as_deref(),
         )
         .await
     }
@@ -143,11 +145,16 @@ impl QdrantStore {
         collection: &str,
         dimension: usize,
         embedding: Option<&ResolvedEmbeddingConfig>,
+        api_key: Option<&str>,
     ) -> Result<Self> {
         debug!("Connecting to Qdrant at {}", url);
 
-        let client = Qdrant::from_url(url)
-            .skip_compatibility_check()
+        let mut client_builder = Qdrant::from_url(url).skip_compatibility_check();
+        if let Some(key) = api_key {
+            client_builder = client_builder.api_key(key);
+        }
+
+        let client = client_builder
             .build()
             .map_err(|e| Error::Qdrant(e.to_string()))?;
 
@@ -796,7 +803,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_upsert_points_rejects_dimension_mismatch() {
-        let store = QdrantStore::new("http://127.0.0.1:6334", "test_collection", 3, None)
+        let store = QdrantStore::new("http://127.0.0.1:6334", "test_collection", 3, None, None)
             .await
             .expect("store should initialize");
 
