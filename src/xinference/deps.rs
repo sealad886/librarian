@@ -138,6 +138,7 @@ pub fn ensure_xinference_ready() -> Result<PathBuf> {
     let python = check_python()?;
     check_pip(&python)?;
     ensure_xinference_installed(&python)?;
+    ensure_xoscar_compatible(&python)?;
 
     // Verify the xinference-local command is available
     if !check_xinference_command()? {
@@ -151,6 +152,53 @@ pub fn ensure_xinference_ready() -> Result<PathBuf> {
     let _ = XINFERENCE_READY.set(true);
 
     Ok(python)
+}
+
+fn xoscar_supports_start_method(python: &PathBuf) -> Result<Option<bool>> {
+    let output = Command::new(python)
+        .args([
+            "-c",
+            "import inspect; from xoscar.core.pool import MainActorPool; sig = inspect.signature(MainActorPool.append_sub_pool); print('start_method' in sig.parameters)",
+        ])
+        .output()
+        .map_err(|e| Error::Embedding(format!("Failed to check xoscar: {}", e)))?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value = stdout.trim();
+    if value.eq_ignore_ascii_case("true") {
+        Ok(Some(true))
+    } else if value.eq_ignore_ascii_case("false") {
+        Ok(Some(false))
+    } else {
+        Ok(None)
+    }
+}
+
+fn ensure_xoscar_compatible(python: &PathBuf) -> Result<()> {
+    let supports = xoscar_supports_start_method(python)?;
+    if supports == Some(true) {
+        return Ok(());
+    }
+
+    info!("Upgrading xoscar for Xinference compatibility...");
+    let output = Command::new(python)
+        .args(["-m", "pip", "install", "--quiet", "--upgrade", "xoscar"])
+        .output()
+        .map_err(|e| Error::Embedding(format!("Failed to run pip install: {}", e)))?;
+
+    if output.status.success() && xoscar_supports_start_method(python)? == Some(true) {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(Error::Embedding(format!(
+        "xoscar upgrade did not resolve Xinference compatibility: {}",
+        stderr.trim()
+    )))
 }
 
 /// Check if xinference dependencies are ready without installing
