@@ -180,10 +180,7 @@ fn reranker_spec_from_entry(entry: &RegistryEntry) -> RerankerModelSpec {
     }
 }
 
-fn apply_strategy_override(
-    capabilities: &mut EmbeddingModelCapabilities,
-    entry: &RegistryEntry,
-) {
+fn apply_strategy_override(capabilities: &mut EmbeddingModelCapabilities, entry: &RegistryEntry) {
     let Some(Value::String(strategy)) = entry.metadata.get("strategy") else {
         return;
     };

@@ -98,10 +98,20 @@ pub fn get_xinference_model_spec(model: &str) -> Option<XinferenceModelSpec> {
 /// Running model information from Xinference
 #[derive(Debug, Clone, Deserialize)]
 pub struct RunningModel {
-    #[serde(alias = "id")]
+    #[serde(alias = "id", alias = "model_uid")]
     pub model_uid: String,
+    #[serde(default, alias = "model_name", alias = "model")]
     pub model_name: String,
+    #[serde(default, alias = "model_type")]
     pub model_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ModelListResponse {
+    Array(Vec<RunningModel>),
+    Data { data: Vec<RunningModel> },
+    Models { models: Vec<RunningModel> },
 }
 
 /// Model launch request
@@ -281,10 +291,30 @@ impl XinferenceManager {
             )));
         }
 
-        let models: Vec<RunningModel> = response
-            .json()
+        let body = response
+            .text()
             .await
-            .map_err(|e| Error::Embedding(format!("Failed to parse models response: {}", e)))?;
+            .map_err(|e| Error::Embedding(format!("Failed to read models response: {}", e)))?;
+
+        let parsed: ModelListResponse = serde_json::from_str(&body).map_err(|e| {
+            Error::Embedding(format!(
+                "Failed to parse models response: {} (body: {})",
+                e,
+                truncate_body(&body, 1000)
+            ))
+        })?;
+
+        let mut models = match parsed {
+            ModelListResponse::Array(models) => models,
+            ModelListResponse::Data { data } => data,
+            ModelListResponse::Models { models } => models,
+        };
+
+        for model in &mut models {
+            if model.model_name.is_empty() {
+                model.model_name = model.model_uid.clone();
+            }
+        }
 
         Ok(models)
     }
@@ -419,6 +449,15 @@ pub async fn shutdown_global_xinference() {
             }
         }
         *guard = None;
+    }
+}
+
+fn truncate_body(body: &str, limit: usize) -> String {
+    let trimmed: String = body.chars().take(limit).collect();
+    if body.chars().count() > limit {
+        format!("{}…", trimmed)
+    } else {
+        trimmed
     }
 }
 
