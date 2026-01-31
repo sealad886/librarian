@@ -321,11 +321,29 @@ pub fn ensure_xinference_ready(base_dir: &Path) -> Result<PathBuf> {
     Ok(python)
 }
 
-fn xoscar_supports_start_method(python: &Path) -> Result<Option<bool>> {
+fn xoscar_supports_start_python(python: &Path) -> Result<Option<bool>> {
     let output = Command::new(python)
         .args([
             "-c",
-            "import inspect; from xoscar.core.pool import MainActorPool; sig = inspect.signature(MainActorPool.append_sub_pool); print('start_method' in sig.parameters)",
+            r#"import inspect
+targets = [("xoscar.backends.indigen.pool", "MainActorPool"), ("xoscar.core.pool", "MainActorPool")]
+result = None
+for module_name, attr in targets:
+    try:
+        mod = __import__(module_name, fromlist=[attr])
+        cls = getattr(mod, attr)
+        sig = inspect.signature(cls.append_sub_pool)
+        result = "start_python" in sig.parameters
+        break
+    except Exception:
+        continue
+if result is True:
+    print("true")
+elif result is False:
+    print("false")
+else:
+    print("unknown")
+"#,
         ])
         .output()
         .map_err(|e| Error::Embedding(format!("Failed to check xoscar: {}", e)))?;
@@ -346,7 +364,7 @@ fn xoscar_supports_start_method(python: &Path) -> Result<Option<bool>> {
 }
 
 fn ensure_xoscar_compatible(python: &Path) -> Result<()> {
-    let supports = xoscar_supports_start_method(python)?;
+    let supports = xoscar_supports_start_python(python)?;
     if supports == Some(true) {
         return Ok(());
     }
@@ -357,7 +375,7 @@ fn ensure_xoscar_compatible(python: &Path) -> Result<()> {
         .output()
         .map_err(|e| Error::Embedding(format!("Failed to run pip install: {}", e)))?;
 
-    if output.status.success() && xoscar_supports_start_method(python)? == Some(true) {
+    if output.status.success() && xoscar_supports_start_python(python)? == Some(true) {
         return Ok(());
     }
 
