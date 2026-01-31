@@ -12,7 +12,7 @@ use librarian::{
     },
     config::Config,
     embed::create_embedder_auto,
-    error::Result,
+    error::{Error, Result},
     mcp::McpServer,
     meta::{MetaDb, RunOperation},
     models::embedding_model_spec,
@@ -428,6 +428,18 @@ async fn run() -> Result<()> {
 
     // Resolve embedding config and only create embedder when needed
     let embedding_config = config.resolve_embedding_config().await?;
+
+    // Commands that don't need a store connection
+    if let Commands::Xinference { action } = cli.command {
+        handle_xinference_action(&config, action, cli.json).await?;
+        return Ok(());
+    }
+
+    if let Commands::Db { action } = cli.command {
+        handle_db_action(&config, action, cli.json).await?;
+        return Ok(());
+    }
+
     let needs_embedder = matches!(
         cli.command,
         Commands::Ingest { .. }
@@ -649,17 +661,10 @@ async fn run() -> Result<()> {
             }
         }
 
-        Commands::Db { action } => {
-            handle_db_action(&config, action, cli.json).await?;
-        }
-
         Commands::Config { action } => {
             handle_config_action(action)?;
         }
-
-        Commands::Xinference { action } => {
-            handle_xinference_action(&config, action, cli.json).await?;
-        }
+        Commands::Db { .. } | Commands::Xinference { .. } => unreachable!(),
 
         Commands::Mcp => unreachable!(),
 
@@ -936,7 +941,18 @@ async fn handle_init(cli: Cli) -> Result<()> {
 async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Result<()> {
     let embedding_config = config.resolve_embedding_config().await?;
     let db = MetaDb::new(&config.paths.db_file).await?;
-    let store = QdrantStore::connect(config, &embedding_config).await?;
+    let store = match QdrantStore::connect(config, &embedding_config).await {
+        Ok(store) => store,
+        Err(Error::Qdrant(msg))
+            if msg.contains("Connection refused") || msg.contains("tcp connect error") =>
+        {
+            return Err(Error::Config(format!(
+                "Qdrant is not reachable at {}. Start Qdrant and try again. Details: {}",
+                config.qdrant_url, msg
+            )));
+        }
+        Err(err) => return Err(err),
+    };
 
     match action {
         DbAction::Init => {
