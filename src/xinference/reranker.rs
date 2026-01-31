@@ -4,15 +4,12 @@
 
 use crate::error::{Error, Result};
 use crate::rerank::{RerankResult, Reranker};
-use crate::xinference::{hf_to_xinference_name, xinference_reranker_models, XinferenceManager};
+use crate::xinference::{hf_to_xinference_name, xinference_request_json, SharedXinferenceManager};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tracing::debug;
-use url::Url;
 
 /// Xinference rerank request
 #[derive(Debug, Serialize)]
@@ -43,11 +40,9 @@ struct RerankResultData {
 
 /// Xinference reranker implementation
 pub struct XinferenceReranker {
-    manager: Arc<Mutex<XinferenceManager>>,
+    manager: SharedXinferenceManager,
     model_name: String,
-    xinf_model_name: String,
     client: Client,
-    base_url: Url,
 }
 
 impl XinferenceReranker {
@@ -57,94 +52,55 @@ impl XinferenceReranker {
     /// 1. Ensure the Xinference server is running
     /// 2. Launch the reranker model if not already running
     /// 3. Return a reranker ready for use
-    pub async fn new(manager: Arc<Mutex<XinferenceManager>>, model: &str) -> Result<Self> {
+    pub async fn new(manager: SharedXinferenceManager, model: &str) -> Result<Self> {
         let xinf_name = hf_to_xinference_name(model);
 
-        // Verify model is a known reranker model
-        if !xinference_reranker_models().contains(xinf_name.as_str()) {
-            let allowed = crate::models::allowlisted_reranker_models().join(", ");
-            return Err(Error::Config(format!(
-                "Unknown Xinference reranker model: '{}'. Supported models: {}",
-                model, allowed
-            )));
-        }
-
-        let base_url = {
-            let mut mgr = manager.lock().await;
+        {
+            let mut guard = manager.lock().await;
+            let mgr = guard
+                .as_mut()
+                .ok_or_else(|| Error::Config("Xinference manager not initialized".into()))?;
 
             // Ensure server is running
             mgr.ensure_running().await?;
 
+            // Ensure model is registered
+            let _ = mgr.fetch_model_registration("rerank", &xinf_name).await?;
+
             // Ensure reranker model is launched
-            mgr.ensure_model_launched(model, "rerank").await?;
-
-            mgr.base_url().clone()
-        };
-
-        let client = Client::builder()
-            .timeout(Duration::from_secs(60))
-            .build()
-            .map_err(|e| Error::Embedding(format!("Failed to create HTTP client: {}", e)))?;
+            let model_uid = mgr
+                .ensure_model_launched(model, "rerank", true)
+                .await?;
+            debug!(
+                model_name = %xinf_name,
+                model_uid = %model_uid,
+                "Xinference reranker model ready"
+            );
+        }
 
         Ok(Self {
             manager,
             model_name: model.to_string(),
-            xinf_model_name: xinf_name,
-            client,
-            base_url,
+            client: build_xinference_client()?,
         })
     }
 
     /// Create a new XinferenceReranker using the global manager
     ///
     /// This is used by the automatic reranker creation flow.
-    pub async fn from_global_manager(model: &str) -> Result<Self> {
-        use crate::xinference::get_or_init_xinference_manager;
-
-        let xinf_name = hf_to_xinference_name(model);
-
-        // Verify model is a known reranker model
-        if !xinference_reranker_models().contains(xinf_name.as_str()) {
-            let allowed = crate::models::allowlisted_reranker_models().join(", ");
-            return Err(Error::Config(format!(
-                "Unknown Xinference reranker model: '{}'. Supported models: {}",
-                model, allowed
-            )));
-        }
-
-        // Get the global manager lock
-        let manager_lock = get_or_init_xinference_manager(9997).await?;
-        let base_url = {
-            let mut guard = manager_lock.lock().await;
-            let mgr = guard
-                .as_mut()
-                .ok_or_else(|| Error::Config("Xinference manager not initialized".into()))?;
-
-            // Ensure model is launched
-            mgr.ensure_model_launched(model, "rerank").await?;
-            mgr.base_url().clone()
-        };
-
-        let client = Client::builder()
-            .timeout(Duration::from_secs(60))
-            .build()
-            .map_err(|e| Error::Embedding(format!("Failed to create HTTP client: {}", e)))?;
-
-        // Create a dummy Arc<Mutex<XinferenceManager>> since we use the global one
-        let dummy_manager = Arc::new(Mutex::new(crate::xinference::XinferenceManager::new(9997)?));
-
-        Ok(Self {
-            manager: dummy_manager,
-            model_name: model.to_string(),
-            xinf_model_name: xinf_name,
-            client,
-            base_url,
-        })
+    pub async fn from_global_manager(
+        manager: SharedXinferenceManager,
+        model: &str,
+    ) -> Result<Self> {
+        Self::new(manager, model).await
     }
 
     /// Internal rerank implementation
     async fn rerank_internal(
         &self,
+        base_url: url::Url,
+        auth_token: Option<String>,
+        model_uid: String,
         query: &str,
         documents: Vec<String>,
     ) -> Result<Vec<RerankResult>> {
@@ -152,13 +108,12 @@ impl XinferenceReranker {
             return Ok(vec![]);
         }
 
-        let url = self
-            .base_url
+        let url = base_url
             .join("/v1/rerank")
             .map_err(|e| Error::Config(format!("Invalid URL: {}", e)))?;
 
         let request = RerankRequest {
-            model: self.xinf_model_name.clone(),
+            model: model_uid,
             query: query.to_string(),
             documents,
             top_n: None, // Return all results
@@ -169,27 +124,17 @@ impl XinferenceReranker {
             request.documents.len()
         );
 
-        let response = self
-            .client
-            .post(url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| Error::Embedding(format!("Rerank request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Embedding(format!(
-                "Rerank request failed: HTTP {} - {}",
-                status, body
-            )));
-        }
-
-        let rerank_response: RerankResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::Embedding(format!("Failed to parse rerank response: {}", e)))?;
+        let body = serde_json::to_value(&request)
+            .map_err(|e| Error::Embedding(format!("Failed to serialize rerank request: {}", e)))?;
+        let rerank_response: RerankResponse = xinference_request_json(
+            &self.client,
+            reqwest::Method::POST,
+            url,
+            auth_token.as_deref(),
+            Some(body),
+            "rerank",
+        )
+        .await?;
 
         Ok(rerank_response
             .results
@@ -206,21 +151,36 @@ impl XinferenceReranker {
 impl Reranker for XinferenceReranker {
     async fn rerank(&self, query: &str, documents: Vec<String>) -> Result<Vec<RerankResult>> {
         // Ensure server and model are still running
-        {
+        let (base_url, auth_token, model_uid) = {
             let mut mgr = self.manager.lock().await;
-            mgr.ensure_running().await?;
-            if !mgr.is_model_launched(&self.xinf_model_name) {
-                mgr.ensure_model_launched(&self.model_name, "rerank")
-                    .await?;
-            }
-        }
+            let manager = mgr
+                .as_mut()
+                .ok_or_else(|| Error::Config("Xinference manager not initialized".into()))?;
+            manager.ensure_running().await?;
+            let uid = manager
+                .ensure_model_launched(&self.model_name, "rerank", true)
+                .await?;
+            (
+                manager.base_url().clone(),
+                manager.auth_token().map(|t| t.to_string()),
+                uid,
+            )
+        };
 
-        self.rerank_internal(query, documents).await
+        self.rerank_internal(base_url, auth_token, model_uid, query, documents)
+            .await
     }
 
     fn model_name(&self) -> &str {
         &self.model_name
     }
+}
+
+fn build_xinference_client() -> Result<Client> {
+    Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| Error::Embedding(format!("Failed to create HTTP client: {}", e)))
 }
 
 #[cfg(test)]
@@ -230,7 +190,7 @@ mod tests {
     #[test]
     fn test_rerank_request_serialization() {
         let request = RerankRequest {
-            model: "bge-reranker-base".to_string(),
+            model: "model_uid".to_string(),
             query: "What is Rust?".to_string(),
             documents: vec![
                 "Rust is a programming language".to_string(),
@@ -239,10 +199,16 @@ mod tests {
             top_n: None,
         };
 
-        let json = serde_json::to_string(&request).unwrap();
-        assert!(json.contains("bge-reranker-base"));
-        assert!(json.contains("What is Rust?"));
-        assert!(!json.contains("top_n")); // Should be skipped when None
+        let json = serde_json::to_value(&request).unwrap();
+        let expected = serde_json::json!({
+            "model": "model_uid",
+            "query": "What is Rust?",
+            "documents": [
+                "Rust is a programming language",
+                "Python is a scripting language"
+            ]
+        });
+        assert_eq!(json, expected);
     }
 
     #[test]

@@ -3,15 +3,16 @@
 //! Implements the Embedder trait using Xinference's OpenAI-compatible API.
 
 use crate::embed::{Embedder, ImageEmbedInput, MediaModality};
+use crate::config::ResolvedEmbeddingConfig;
 use crate::error::{Error, Result};
-use crate::xinference::{get_xinference_model_spec, hf_to_xinference_name, XinferenceManager};
+use crate::xinference::{
+    hf_to_xinference_name, xinference_request_json, SharedXinferenceManager,
+};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
-use tracing::debug;
+use tracing::{debug, info};
 use url::Url;
 
 /// OpenAI-compatible embedding request
@@ -41,12 +42,11 @@ struct EmbeddingData {
 /// Xinference embedder implementation
 #[allow(dead_code)]
 pub struct XinferenceEmbedder {
-    manager: Arc<Mutex<XinferenceManager>>,
+    manager: SharedXinferenceManager,
     model_name: String,
-    xinf_model_name: String,
     dimension: usize,
+    allow_custom: bool,
     client: Client,
-    base_url: Url,
 }
 
 impl XinferenceEmbedder {
@@ -56,107 +56,90 @@ impl XinferenceEmbedder {
     /// 1. Ensure the Xinference server is running
     /// 2. Launch the embedding model if not already running
     /// 3. Return an embedder ready for use
-    pub async fn new(manager: Arc<Mutex<XinferenceManager>>, model: &str) -> Result<Self> {
+    pub async fn new(
+        manager: SharedXinferenceManager,
+        config: &ResolvedEmbeddingConfig,
+    ) -> Result<Self> {
+        let model = config.model_id.as_str();
         let xinf_name = hf_to_xinference_name(model);
+        let expected_dimension = config.dimension;
+        let allow_custom = config.allow_custom;
+        let mut dimension = expected_dimension;
 
-        // Get model spec for dimension
-        let spec = get_xinference_model_spec(model).ok_or_else(|| {
-            let allowed = crate::models::allowlisted_embedding_models().join(", ");
-            Error::Config(format!(
-                "Unknown Xinference embedding model: '{}'. Supported models: {}",
-                model, allowed
-            ))
-        })?;
-
-        let (base_url, _model_uid) = {
-            let mut mgr = manager.lock().await;
+        {
+            let mut guard = manager.lock().await;
+            let mgr = guard
+                .as_mut()
+                .ok_or_else(|| Error::Config("Xinference manager not initialized".into()))?;
 
             // Ensure server is running
             mgr.ensure_running().await?;
 
-            // Ensure model is launched
-            let uid = mgr.ensure_model_launched(model, "embedding").await?;
+            if allow_custom {
+                info!(
+                    model = %model,
+                    "Using custom Xinference embedding model; skipping registry lookup"
+                );
+            } else {
+                let registration = mgr.fetch_model_registration("embedding", &xinf_name).await?;
+                if let Some(dim) = registration.dimensions {
+                    if dim != expected_dimension {
+                        return Err(Error::Config(format!(
+                            "Xinference model '{}' reports dimension {}, but config expects {}. Update embedding.dimension or reset the collection.",
+                            xinf_name, dim, expected_dimension
+                        )));
+                    }
+                    dimension = dim;
+                }
+            }
 
-            (mgr.base_url().clone(), uid)
-        };
-
-        let client = Client::builder()
-            .timeout(Duration::from_secs(120))
-            .build()
-            .map_err(|e| Error::Embedding(format!("Failed to create HTTP client: {}", e)))?;
+            let model_uid = mgr
+                .ensure_model_launched(model, "embedding", !allow_custom)
+                .await?;
+            debug!(
+                model_name = %xinf_name,
+                model_uid = %model_uid,
+                "Xinference embedding model ready"
+            );
+        }
 
         Ok(Self {
             manager,
             model_name: model.to_string(),
-            xinf_model_name: xinf_name,
-            dimension: spec.dimension,
-            client,
-            base_url,
+            dimension,
+            allow_custom,
+            client: build_xinference_client()?,
         })
     }
 
     /// Create a new XinferenceEmbedder using the global manager
     ///
     /// This is used by the automatic embedder creation flow.
-    pub async fn from_global_manager(model: &str) -> Result<Self> {
-        use crate::xinference::get_or_init_xinference_manager;
-
-        let xinf_name = hf_to_xinference_name(model);
-
-        // Get model spec for dimension
-        let spec = get_xinference_model_spec(model).ok_or_else(|| {
-            let allowed = crate::models::allowlisted_embedding_models().join(", ");
-            Error::Config(format!(
-                "Unknown Xinference embedding model: '{}'. Supported models: {}",
-                model, allowed
-            ))
-        })?;
-
-        // Get the global manager lock
-        let manager_lock = get_or_init_xinference_manager(9997).await?;
-        let (base_url, _model_uid) = {
-            let mut guard = manager_lock.lock().await;
-            let mgr = guard
-                .as_mut()
-                .ok_or_else(|| Error::Config("Xinference manager not initialized".into()))?;
-
-            // Ensure model is launched
-            let uid = mgr.ensure_model_launched(model, "embedding").await?;
-            (mgr.base_url().clone(), uid)
-        };
-
-        let client = Client::builder()
-            .timeout(Duration::from_secs(120))
-            .build()
-            .map_err(|e| Error::Embedding(format!("Failed to create HTTP client: {}", e)))?;
-
-        // Create a dummy Arc<Mutex<XinferenceManager>> since we use the global one
-        // This is a temporary workaround; ideally we'd refactor to not need this field
-        let dummy_manager = Arc::new(Mutex::new(crate::xinference::XinferenceManager::new(9997)?));
-
-        Ok(Self {
-            manager: dummy_manager,
-            model_name: model.to_string(),
-            xinf_model_name: xinf_name,
-            dimension: spec.dimension,
-            client,
-            base_url,
-        })
+    pub async fn from_global_manager(
+        manager: SharedXinferenceManager,
+        config: &ResolvedEmbeddingConfig,
+    ) -> Result<Self> {
+        Self::new(manager, config).await
     }
 
     /// Internal embed implementation
-    async fn embed_internal(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
+    async fn embed_internal(
+        &self,
+        base_url: Url,
+        auth_token: Option<String>,
+        model_uid: String,
+        texts: Vec<String>,
+    ) -> Result<Vec<Vec<f32>>> {
         if texts.is_empty() {
             return Ok(vec![]);
         }
 
-        let url = self
-            .base_url
+        let url = base_url
             .join("/v1/embeddings")
             .map_err(|e| Error::Config(format!("Invalid URL: {}", e)))?;
 
         let request = OpenAIEmbedRequest {
-            model: self.xinf_model_name.clone(),
+            model: model_uid,
             input: texts,
         };
 
@@ -165,27 +148,17 @@ impl XinferenceEmbedder {
             request.input.len()
         );
 
-        let response = self
-            .client
-            .post(url)
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| Error::Embedding(format!("Embedding request failed: {}", e)))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(Error::Embedding(format!(
-                "Embedding request failed: HTTP {} - {}",
-                status, body
-            )));
-        }
-
-        let embed_response: OpenAIEmbedResponse = response
-            .json()
-            .await
-            .map_err(|e| Error::Embedding(format!("Failed to parse embedding response: {}", e)))?;
+        let body = serde_json::to_value(&request)
+            .map_err(|e| Error::Embedding(format!("Failed to serialize embedding request: {}", e)))?;
+        let embed_response: OpenAIEmbedResponse = xinference_request_json(
+            &self.client,
+            reqwest::Method::POST,
+            url,
+            auth_token.as_deref(),
+            Some(body),
+            "embeddings",
+        )
+        .await?;
 
         // Validate dimensions
         for data in &embed_response.data {
@@ -209,16 +182,24 @@ impl XinferenceEmbedder {
 impl Embedder for XinferenceEmbedder {
     async fn embed(&self, texts: Vec<String>) -> Result<Vec<Vec<f32>>> {
         // Ensure server and model are still running before embedding
-        {
+        let (base_url, auth_token, model_uid) = {
             let mut mgr = self.manager.lock().await;
-            mgr.ensure_running().await?;
-            if !mgr.is_model_launched(&self.xinf_model_name) {
-                mgr.ensure_model_launched(&self.model_name, "embedding")
-                    .await?;
-            }
-        }
+            let manager = mgr
+                .as_mut()
+                .ok_or_else(|| Error::Config("Xinference manager not initialized".into()))?;
+            manager.ensure_running().await?;
+            let uid = manager
+                .ensure_model_launched(&self.model_name, "embedding", !self.allow_custom)
+                .await?;
+            (
+                manager.base_url().clone(),
+                manager.auth_token().map(|t| t.to_string()),
+                uid,
+            )
+        };
 
-        self.embed_internal(texts).await
+        self.embed_internal(base_url, auth_token, model_uid, texts)
+            .await
     }
 
     async fn embed_images(&self, _images: Vec<String>) -> Result<Vec<Vec<f32>>> {
@@ -247,6 +228,13 @@ impl Embedder for XinferenceEmbedder {
     }
 }
 
+fn build_xinference_client() -> Result<Client> {
+    Client::builder()
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| Error::Embedding(format!("Failed to create HTTP client: {}", e)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,13 +242,16 @@ mod tests {
     #[test]
     fn test_openai_embed_request_serialization() {
         let request = OpenAIEmbedRequest {
-            model: "bge-small-en-v1.5".to_string(),
-            input: vec!["Hello world".to_string(), "Test".to_string()],
+            model: "model_uid".to_string(),
+            input: vec!["Hello world".to_string()],
         };
 
-        let json = serde_json::to_string(&request).unwrap();
-        assert!(json.contains("bge-small-en-v1.5"));
-        assert!(json.contains("Hello world"));
+        let json = serde_json::to_value(&request).unwrap();
+        let expected = serde_json::json!({
+            "model": "model_uid",
+            "input": ["Hello world"]
+        });
+        assert_eq!(json, expected);
     }
 
     #[test]

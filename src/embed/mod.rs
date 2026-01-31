@@ -15,12 +15,12 @@ use crate::config::ResolvedEmbeddingConfig;
 use crate::embedding_backend::EmbeddingBackendKind;
 use crate::error::{Error, Result};
 use crate::xinference::{
-    ensure_xinference_ready, get_or_init_xinference_manager, XinferenceEmbedder, XinferenceManager,
+    ensure_xinference_ready, get_or_init_xinference_manager, normalize_xinference_base_url,
+    xinference_auth_token, SharedXinferenceManager, XinferenceEmbedder,
 };
 use async_trait::async_trait;
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::info;
 
 /// Supported media modalities for multimodal embedding
@@ -282,11 +282,11 @@ pub async fn create_embedder_auto(
             // Ensure xinference is installed and ready (sync check)
             ensure_xinference_ready(base_dir)?;
 
-            // Extract port from URL
-            let port = extract_port_from_url(&config.backend.url)?;
+            let base_url = normalize_xinference_base_url(&config.backend.url)?;
+            let auth_token = xinference_auth_token();
 
             // Get or initialize the global manager
-            let manager_lock = get_or_init_xinference_manager(port).await?;
+            let manager_lock = get_or_init_xinference_manager(&base_url, auth_token).await?;
 
             // Ensure server is running
             {
@@ -297,7 +297,8 @@ pub async fn create_embedder_auto(
             }
 
             // Create embedder (this will launch model if needed)
-            let embedder = XinferenceEmbedder::from_global_manager(&config.model_id).await?;
+            let embedder = XinferenceEmbedder::from_global_manager(manager_lock.clone(), config)
+                .await?;
             Ok(Box::new(embedder))
         }
         EmbeddingBackendKind::Http => {
@@ -307,25 +308,17 @@ pub async fn create_embedder_auto(
     }
 }
 
-/// Extract port number from a URL string
-fn extract_port_from_url(url: &str) -> Result<u16> {
-    Ok(url::Url::parse(url)
-        .map_err(|e| Error::Config(format!("Invalid backend URL: {}", e)))?
-        .port()
-        .unwrap_or(9997)) // Default xinference port
-}
-
 /// Create an embedder with optional Xinference manager support
 pub async fn create_embedder_with_xinference(
     config: &ResolvedEmbeddingConfig,
-    xinf_manager: Option<Arc<Mutex<XinferenceManager>>>,
+    xinf_manager: Option<SharedXinferenceManager>,
 ) -> Result<Box<dyn Embedder>> {
     match config.backend.kind {
         EmbeddingBackendKind::Xinference => {
             let manager = xinf_manager.ok_or_else(|| {
                 Error::Config("Xinference manager required for xinference backend".into())
             })?;
-            let embedder = XinferenceEmbedder::new(manager, &config.model_id).await?;
+            let embedder = XinferenceEmbedder::new(manager, config).await?;
             Ok(Box::new(embedder))
         }
         EmbeddingBackendKind::Http => {

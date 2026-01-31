@@ -2865,6 +2865,7 @@ mod tests {
                 kind: EmbeddingBackendKind::Http,
                 url: "http://localhost:9997".to_string(),
             },
+            allow_custom: false,
             strategy: if multi_vector {
                 MultimodalStrategy::LateInteraction
             } else {

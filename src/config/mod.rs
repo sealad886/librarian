@@ -16,7 +16,8 @@ use crate::models::{
     MultimodalStrategy,
 };
 use crate::xinference::{
-    get_xinference_model_spec, hf_to_xinference_name, DEFAULT_XINFERENCE_PORT,
+    ensure_xinference_ready, get_or_init_xinference_manager, hf_to_xinference_name,
+    normalize_xinference_base_url, xinference_auth_token,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -201,6 +202,7 @@ pub struct ResolvedEmbeddingConfig {
     pub dimension: usize,
     pub dimension_source: EmbeddingDimensionSource,
     pub backend: EmbeddingBackendConfig,
+    pub allow_custom: bool,
     pub strategy: MultimodalStrategy,
     pub supports_text: bool,
     pub supports_image: bool,
@@ -898,14 +900,46 @@ impl Config {
         allowlisted: Option<&crate::models::EmbeddingModelSpec>,
     ) -> Result<ResolvedEmbeddingConfig> {
         let xinf_name = hf_to_xinference_name(model_id);
+        let backend_url = normalize_xinference_base_url(&self.embedding.url)?;
+        let auth_token = xinference_auth_token();
 
-        // Try Xinference model registry first, then fall back to allowlist
-        let xinf_spec = get_xinference_model_spec(model_id);
+        if matches!(
+            backend_url.host_str(),
+            Some("127.0.0.1") | Some("localhost") | Some("0.0.0.0") | Some("::1")
+        ) {
+            ensure_xinference_ready(&self.paths.base_dir)?;
+        }
+
+        let manager_lock = get_or_init_xinference_manager(&backend_url, auth_token).await?;
+        let mut registry_dimension = None;
+        {
+            let mut guard = manager_lock.lock().await;
+            let mgr = guard
+                .as_mut()
+                .ok_or_else(|| Error::Config("Xinference manager not initialized".into()))?;
+            mgr.ensure_running().await?;
+
+            match mgr.fetch_model_registration("embedding", &xinf_name).await {
+                Ok(registration) => {
+                    registry_dimension = registration.dimensions;
+                }
+                Err(err) => {
+                    if !self.embedding.allow_custom {
+                        return Err(err);
+                    }
+                    info!(
+                        model_id = %model_id,
+                        "Skipping Xinference registry lookup for custom model; falling back to config dimension ({})",
+                        self.embedding.dimension.unwrap_or(0)
+                    );
+                }
+            }
+        }
 
         let dimension = if let Some(config_dim) = self.embedding.dimension {
             config_dim
-        } else if let Some(ref spec) = xinf_spec {
-            spec.dimension
+        } else if let Some(reg_dim) = registry_dimension {
+            reg_dim
         } else if let Some(spec) = allowlisted {
             spec.default_dimension.ok_or_else(|| {
                 Error::Config(format!(
@@ -915,14 +949,14 @@ impl Config {
             })?
         } else {
             return Err(Error::Config(format!(
-                "Unknown Xinference embedding model: '{}'. Supported models include: bge-small-en-v1.5, bge-base-en-v1.5, bge-large-en-v1.5, all-MiniLM-L6-v2. Set embedding.dimension if using a custom model.",
+                "Embedding dimension could not be determined for model '{}'; set embedding.dimension",
                 model_id
             )));
         };
 
         let dimension_source = if self.embedding.dimension.is_some() {
             EmbeddingDimensionSource::Config
-        } else if xinf_spec.is_some() || allowlisted.is_some() {
+        } else if registry_dimension.is_some() || allowlisted.is_some() {
             EmbeddingDimensionSource::Registry
         } else {
             EmbeddingDimensionSource::Config
@@ -971,12 +1005,9 @@ impl Config {
             .map(|spec| spec.max_batch)
             .unwrap_or(self.embedding.batch_size.max(1));
 
-        // Xinference backend URL uses default port
-        let backend_url = format!("http://127.0.0.1:{}", DEFAULT_XINFERENCE_PORT);
-
         let backend = EmbeddingBackendConfig {
             kind: EmbeddingBackendKind::Xinference,
-            url: backend_url,
+            url: backend_url.to_string(),
         };
 
         if supports_multi_vector || strategy == MultimodalStrategy::LateInteraction {
@@ -1005,6 +1036,7 @@ impl Config {
             dimension,
             dimension_source,
             backend,
+            allow_custom: self.embedding.allow_custom,
             strategy,
             supports_text,
             supports_image,
@@ -1416,6 +1448,7 @@ impl Config {
             dimension,
             dimension_source,
             backend,
+            allow_custom: self.embedding.allow_custom,
             strategy,
             supports_text,
             supports_image,

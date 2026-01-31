@@ -13,12 +13,11 @@ use crate::embedding_backend::EmbeddingBackendKind;
 use crate::error::{Error, Result};
 use crate::models::reranker_model_spec;
 use crate::xinference::{
-    ensure_xinference_ready, get_or_init_xinference_manager, XinferenceManager, XinferenceReranker,
+    ensure_xinference_ready, get_or_init_xinference_manager, normalize_xinference_base_url,
+    xinference_auth_token, SharedXinferenceManager, XinferenceReranker,
 };
 use async_trait::async_trait;
 use std::path::Path;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use tracing::info;
 
 #[derive(Debug, Clone)]
@@ -68,11 +67,11 @@ pub async fn create_reranker_auto(
             // Ensure xinference is installed and ready (sync check)
             ensure_xinference_ready(base_dir)?;
 
-            // Extract port from URL
-            let port = extract_port_from_url(&config.url)?;
+            let base_url = normalize_xinference_base_url(&config.url)?;
+            let auth_token = xinference_auth_token();
 
             // Get or initialize the global manager
-            let manager_lock = get_or_init_xinference_manager(port).await?;
+            let manager_lock = get_or_init_xinference_manager(&base_url, auth_token).await?;
 
             // Ensure server is running
             {
@@ -83,7 +82,9 @@ pub async fn create_reranker_auto(
             }
 
             // Create reranker (this will launch model if needed)
-            let reranker = XinferenceReranker::from_global_manager(&config.model).await?;
+            let reranker =
+                XinferenceReranker::from_global_manager(manager_lock.clone(), &config.model)
+                    .await?;
             Ok(Box::new(reranker) as Box<dyn Reranker>)
         }
         EmbeddingBackendKind::Http => {
@@ -99,20 +100,12 @@ pub async fn create_reranker_auto(
     }
 }
 
-/// Extract port number from a URL string
-fn extract_port_from_url(url: &str) -> Result<u16> {
-    Ok(url::Url::parse(url)
-        .map_err(|e| Error::Config(format!("Invalid backend URL: {}", e)))?
-        .port()
-        .unwrap_or(9997)) // Default xinference port
-}
-
 /// Create a reranker with optional Xinference manager support
 pub async fn create_reranker_with_xinference(
     config: &RerankerConfig,
     backend_kind: EmbeddingBackendKind,
     backend_url: &str,
-    xinf_manager: Option<Arc<Mutex<XinferenceManager>>>,
+    xinf_manager: Option<SharedXinferenceManager>,
 ) -> Result<Box<dyn Reranker>> {
     match backend_kind {
         EmbeddingBackendKind::Xinference => {

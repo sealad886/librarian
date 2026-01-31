@@ -11,6 +11,7 @@ use tracing::{debug, info, warn};
 
 /// Cached Python path for the Xinference environment
 static XINFERENCE_PYTHON: OnceLock<PathBuf> = OnceLock::new();
+static XOSCAR_SUPPORTS_START_METHOD: OnceLock<bool> = OnceLock::new();
 
 /// Ensure uv is available to manage the dedicated Python environment.
 pub fn ensure_uv_available() -> Result<()> {
@@ -321,7 +322,40 @@ pub fn ensure_xinference_ready(base_dir: &Path) -> Result<PathBuf> {
     Ok(python)
 }
 
-fn xoscar_supports_start_python(python: &Path) -> Result<Option<bool>> {
+fn xoscar_supports_start_method_from_disk(python: &Path) -> Option<bool> {
+    let venv_dir = python.parent()?.parent()?;
+    let site_packages = if cfg!(windows) {
+        venv_dir.join("Lib").join("site-packages")
+    } else {
+        venv_dir.join("lib").join("python3.10").join("site-packages")
+    };
+    let candidates = [
+        site_packages
+            .join("xoscar")
+            .join("backends")
+            .join("indigen")
+            .join("pool.py"),
+        site_packages.join("xoscar").join("core").join("pool.py"),
+    ];
+
+    for candidate in candidates {
+        if let Ok(contents) = fs::read_to_string(&candidate) {
+            if let Some(start) = contents.find("def append_sub_pool") {
+                let tail = &contents[start..];
+                let limit = tail.len().min(512);
+                return Some(tail[..limit].contains("start_method"));
+            }
+        }
+    }
+
+    None
+}
+
+fn xoscar_supports_start_method(python: &Path) -> Result<Option<bool>> {
+    if let Some(supports) = xoscar_supports_start_method_from_disk(python) {
+        return Ok(Some(supports));
+    }
+
     let output = Command::new(python)
         .args([
             "-c",
@@ -333,7 +367,7 @@ for module_name, attr in targets:
         mod = __import__(module_name, fromlist=[attr])
         cls = getattr(mod, attr)
         sig = inspect.signature(cls.append_sub_pool)
-        result = "start_python" in sig.parameters
+        result = "start_method" in sig.parameters
         break
     except Exception:
         continue
@@ -364,8 +398,13 @@ else:
 }
 
 fn ensure_xoscar_compatible(python: &Path) -> Result<()> {
-    let supports = xoscar_supports_start_python(python)?;
+    if XOSCAR_SUPPORTS_START_METHOD.get() == Some(&true) {
+        return Ok(());
+    }
+
+    let supports = xoscar_supports_start_method(python)?;
     if supports == Some(true) {
+        let _ = XOSCAR_SUPPORTS_START_METHOD.set(true);
         return Ok(());
     }
 
@@ -375,7 +414,8 @@ fn ensure_xoscar_compatible(python: &Path) -> Result<()> {
         .output()
         .map_err(|e| Error::Embedding(format!("Failed to run pip install: {}", e)))?;
 
-    if output.status.success() && xoscar_supports_start_python(python)? == Some(true) {
+    if output.status.success() && xoscar_supports_start_method(python)? == Some(true) {
+        let _ = XOSCAR_SUPPORTS_START_METHOD.set(true);
         return Ok(());
     }
 
