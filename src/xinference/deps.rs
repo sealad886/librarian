@@ -50,6 +50,14 @@ fn venv_python_path(venv_dir: &Path) -> PathBuf {
     }
 }
 
+fn venv_pip_path(venv_dir: &Path) -> PathBuf {
+    if cfg!(windows) {
+        venv_bin_dir(venv_dir).join("pip.exe")
+    } else {
+        venv_bin_dir(venv_dir).join("pip")
+    }
+}
+
 fn xinference_local_path(venv_dir: &Path) -> PathBuf {
     if cfg!(windows) {
         venv_bin_dir(venv_dir).join("xinference-local.exe")
@@ -75,11 +83,34 @@ fn python_is_310(python: &Path) -> Result<bool> {
     Ok(version.trim() == "3.10")
 }
 
+fn ensure_venv_pip(python: &Path) -> Result<()> {
+    let output = Command::new(python)
+        .args(["-m", "ensurepip"])
+        .output()
+        .map_err(|e| Error::Embedding(format!("Failed to run ensurepip: {}", e)))?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    if output.status.success() || stdout.contains("a new release of pip is available") {
+        let _pip_upgrade_output = Command::new(python)
+            .args(["-m", "pip", "install", "--upgrade", "pip"])
+            .output()
+            .map_err(|e| Error::Embedding(format!("Failed to upgrade pip: {}", e)))?;
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(Error::Embedding(format!(
+            "Failed to bootstrap pip in Xinference venv: {}",
+            stderr.trim()
+        )))
+    }
+}
+
 fn ensure_xinference_venv(base_dir: &Path) -> Result<PathBuf> {
     ensure_uv_available()?;
 
     let venv_dir = xinference_venv_dir(base_dir);
     let python = venv_python_path(&venv_dir);
+    let pip = venv_pip_path(&venv_dir);
 
     if python.exists() {
         if python_is_310(&python)? {
@@ -119,6 +150,10 @@ fn ensure_xinference_venv(base_dir: &Path) -> Result<PathBuf> {
         return Err(Error::Embedding(
             "Xinference venv does not contain Python 3.10 after creation".into(),
         ));
+    }
+
+    if !pip.exists() {
+        ensure_venv_pip(&python)?;
     }
 
     Ok(python)
