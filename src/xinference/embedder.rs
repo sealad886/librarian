@@ -61,9 +61,10 @@ impl XinferenceEmbedder {
 
         // Get model spec for dimension
         let spec = get_xinference_model_spec(model).ok_or_else(|| {
+            let allowed = crate::models::allowlisted_embedding_models().join(", ");
             Error::Config(format!(
-                "Unknown Xinference embedding model: '{}'. Supported models include: bge-small-en-v1.5, bge-base-en-v1.5, bge-large-en-v1.5, all-MiniLM-L6-v2",
-                model
+                "Unknown Xinference embedding model: '{}'. Supported models: {}",
+                model, allowed
             ))
         })?;
 
@@ -104,9 +105,10 @@ impl XinferenceEmbedder {
 
         // Get model spec for dimension
         let spec = get_xinference_model_spec(model).ok_or_else(|| {
+            let allowed = crate::models::allowlisted_embedding_models().join(", ");
             Error::Config(format!(
-                "Unknown Xinference embedding model: '{}'. Supported models include: bge-small-en-v1.5, bge-base-en-v1.5, bge-large-en-v1.5, all-MiniLM-L6-v2",
-                model
+                "Unknown Xinference embedding model: '{}'. Supported models: {}",
+                model, allowed
             ))
         })?;
 

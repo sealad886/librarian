@@ -40,6 +40,9 @@ jobs:
           rustc -V
           cargo -V
 
+      - name: Guard against legacy backend reintroduction
+        run: scripts/ci/check_legacy_backend.sh
+
       - name: Format check
         run: cargo fmt --all -- --check
 

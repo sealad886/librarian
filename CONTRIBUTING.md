@@ -40,6 +40,24 @@ RUST_LOG=debug cargo run -- status
 `librarian init` now runs an interactive configuration wizard. For scripted
 setups, use `librarian init --non-interactive` to write defaults.
 
+### Xinference Registry Snapshots
+
+Xinference allowlisted models are sourced from versioned snapshots in
+`resources/xinference/`. When you bump the crate version in `Cargo.toml`, you
+must refresh these snapshots from a running Xinference server:
+
+```bash
+cargo xtask xinference-sync --types embedding,rerank,audio,video --out resources/xinference --write
+```
+
+The CI workflow will verify snapshots on version bumps and open an automated PR
+if they drift. For local validation without writing, omit `--write` (dry run is
+the default). You can also write a local cache via:
+
+```bash
+librarian xinference sync-models --endpoint http://127.0.0.1:9997 --write
+```
+
 ### Running Qdrant Locally
 
 ```bash
@@ -107,7 +125,6 @@ librarian/
         ├── server.rs    # stdio server loop
         ├── tools.rs     # Tool implementations
         └── types.rs     # MCP protocol types
-└── sidecar/              # Reference embedding backend (FastAPI)
 ```
 
 ## Code Style

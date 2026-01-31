@@ -8,6 +8,7 @@ pub mod reindex;
 pub mod sources;
 pub mod status;
 pub mod update;
+pub mod xinference;
 
 pub use ingest::*;
 pub use init::*;
@@ -17,3 +18,4 @@ pub use reindex::*;
 pub use sources::*;
 pub use status::*;
 pub use update::*;
+pub use xinference::*;

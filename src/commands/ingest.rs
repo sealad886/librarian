@@ -2863,7 +2863,7 @@ mod tests {
             dimension_source: EmbeddingDimensionSource::Config,
             backend: EmbeddingBackendConfig {
                 kind: EmbeddingBackendKind::Http,
-                url: "http://localhost:7997".to_string(),
+                url: "http://localhost:9997".to_string(),
             },
             strategy: if multi_vector {
                 MultimodalStrategy::LateInteraction

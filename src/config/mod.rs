@@ -140,7 +140,7 @@ pub struct EmbeddingConfig {
     #[serde(default = "default_embedding_model")]
     pub model: String,
 
-    /// Embedding backend kind (http)
+    /// Embedding backend kind (xinference or http)
     #[serde(default = "default_embedding_backend")]
     pub backend: String,
 

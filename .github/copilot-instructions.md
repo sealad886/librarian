@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-librarian is a high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP server for indexing and querying documentation. It's written in Rust and uses SQLite for metadata, Qdrant for vector storage, and an HTTP embedding backend.
+librarian is a high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP server for indexing and querying documentation. It's written in Rust and uses SQLite for metadata, Qdrant for vector storage, and the Xinference embedding backend.
 
 ## Development Environment
 
@@ -10,7 +10,7 @@ librarian is a high-performance local RAG (Retrieval Augmented Generation) CLI t
 - Rust 1.70+ (via rustup)
 - Qdrant vector database
 - SQLite
-- HTTP embedding backend (reference implementation in `sidecar/`)
+- Xinference embedding backend (managed automatically or provided externally)
 
 ### Building and Testing
 ```bash

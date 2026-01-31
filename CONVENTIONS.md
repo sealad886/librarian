@@ -109,7 +109,6 @@
 - `src/config/mod.rs`  
 - `src/embedding_backend.rs`  
 - `src/embed/http_backend.rs`  
-- `sidecar/app.py`
 
 ### Write operations must use validated Qdrant connections
 
@@ -187,6 +186,26 @@
 - `src/commands/query.rs`  
 - `src/config/mod.rs`
 
+### Xinference allowlists come from snapshots
+
+**Status:** REQUIRED  
+**Scope:** Model allowlisting and capability checks for Xinference-backed embeddings/rerankers  
+**Rule:** Load allowlisted models and capabilities from the versioned snapshots in `resources/xinference/` via `registry_snapshot`; do not query Xinference registry endpoints at runtime. Refresh snapshots only via `cargo xtask xinference-sync` during version bumps.  
+**Rationale (Why this exists):**  
+
+- Ensures deterministic allowlists and reproducible config validation.  
+- Avoids runtime network calls or registry drift in production.  
+- Keeps CI responsible for detecting registry changes on releases.  
+**Examples:**  
+- Good: `registry_snapshot(RegistryType::Embedding)` inside `src/models.rs` for allowlists.  
+- Bad: Calling `/v1/model_registrations` at startup to validate `embedding.model`.  
+**Related Files / Modules:**  
+- `src/models.rs`  
+- `src/xinference/registry.rs`  
+- `src/xinference/registry_sync.rs`  
+- `src/bin/xtask.rs`  
+- `resources/xinference/*.json`
+
 ## 3. Rationale and Examples
 
 - See examples embedded within each convention above for concrete good/bad patterns that align status reporting and background execution with run tracking.
@@ -203,3 +222,4 @@
 - 2026-01-20: Added embedding backend probe contract convention.
 - 2026-01-30: Added convention for validated Qdrant connections on write operations.
 - 2026-01-30: Added conventions for audio/video ffmpeg dependency, derived modalities, and named vectors storage.
+- 2026-02-02: Added Xinference registry snapshot rule for deterministic allowlists and version-bump sync.

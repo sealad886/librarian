@@ -6,9 +6,9 @@ use librarian::{
     commands::{
         cmd_ingest_dir, cmd_ingest_sitemap, cmd_ingest_url, cmd_init, cmd_list_sources, cmd_prune,
         cmd_query, cmd_reindex, cmd_remove_source, cmd_rename_source, cmd_status, cmd_update,
-        print_prune_stats, print_query_results, print_reindex_stats, print_source_completions,
-        print_sources, print_status, print_update_stats, PruneOptions, QueryOptions,
-        ReindexOptions, UpdateOptions,
+        cmd_xinference_sync_models, print_prune_stats, print_query_results, print_reindex_stats,
+        print_source_completions, print_sources, print_status, print_update_stats, PruneOptions,
+        QueryOptions, ReindexOptions, UpdateOptions, XinferenceSyncOptions,
     },
     config::Config,
     embed::create_embedder_auto,
@@ -178,6 +178,12 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+
+    /// Xinference registry tools
+    Xinference {
+        #[command(subcommand)]
+        action: XinferenceAction,
+    },
 }
 
 /// Configuration management actions
@@ -188,6 +194,41 @@ enum ConfigAction {
         /// Print all options including defaults (not just non-default values)
         #[arg(long)]
         all: bool,
+    },
+}
+
+/// Xinference registry actions
+#[derive(Subcommand)]
+enum XinferenceAction {
+    /// Sync Xinference model registry snapshots to the local cache
+    SyncModels {
+        /// Xinference base URL
+        #[arg(long, default_value = "http://127.0.0.1:9997")]
+        endpoint: String,
+
+        /// Comma-separated registry types to sync (embedding,rerank,audio,video,image,llm)
+        #[arg(long, default_value = "embedding,rerank,audio,video")]
+        types: String,
+
+        /// Write snapshots to disk (default is dry-run)
+        #[arg(long)]
+        write: bool,
+
+        /// Skip the update/refresh call (list only)
+        #[arg(long)]
+        skip_update: bool,
+
+        /// Override cache directory (defaults to ~/.librarian/xinference)
+        #[arg(long)]
+        cache_dir: Option<PathBuf>,
+
+        /// HTTP retries for each request
+        #[arg(long, default_value = "3")]
+        retries: usize,
+
+        /// Timeout in seconds for each request
+        #[arg(long, default_value = "30")]
+        timeout_secs: u64,
     },
 }
 
@@ -593,6 +634,10 @@ async fn run() -> Result<()> {
             handle_config_action(action)?;
         }
 
+        Commands::Xinference { action } => {
+            handle_xinference_action(&config, action, cli.json).await?;
+        }
+
         Commands::Mcp => unreachable!(),
 
         Commands::Completions { .. } => unreachable!(),
@@ -618,6 +663,80 @@ fn handle_config_action(action: ConfigAction) -> Result<()> {
     }
 }
 
+async fn handle_xinference_action(
+    config: &Config,
+    action: XinferenceAction,
+    json: bool,
+) -> Result<()> {
+    match action {
+        XinferenceAction::SyncModels {
+            endpoint,
+            types,
+            write,
+            skip_update,
+            cache_dir,
+            retries,
+            timeout_secs,
+        } => {
+            let out_dir = cache_dir.unwrap_or_else(|| config.paths.base_dir.join("xinference"));
+            let report = cmd_xinference_sync_models(XinferenceSyncOptions {
+                endpoint,
+                types,
+                out_dir: out_dir.clone(),
+                write,
+                skip_update,
+                retries,
+                timeout_secs,
+            })
+            .await?;
+
+            if json {
+                let payload = serde_json::json!({
+                    "out_dir": out_dir,
+                    "write": write,
+                    "has_changes": report.has_changes,
+                    "diffs": report.diffs.iter().map(|diff| {
+                        serde_json::json!({
+                            "type": diff.registry_type,
+                            "total_old": diff.total_old,
+                            "total_new": diff.total_new,
+                            "added": diff.added,
+                            "removed": diff.removed,
+                        })
+                    }).collect::<Vec<_>>(),
+                });
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else {
+                println!("Xinference registry sync:");
+                for diff in &report.diffs {
+                    println!(
+                        "  {}: {} → {} (added {}, removed {})",
+                        diff.registry_type,
+                        diff.total_old,
+                        diff.total_new,
+                        diff.added.len(),
+                        diff.removed.len()
+                    );
+                }
+
+                if write {
+                    println!("  Updated snapshots at {}", out_dir.display());
+                } else {
+                    println!("  Dry-run (no files written)");
+                }
+            }
+
+            if !write && report.has_changes {
+                return Err(librarian::error::Error::Config(
+                    "Xinference registry snapshots are out of date. Re-run with --write to update the local cache.".to_string(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn command_label(command: &Commands) -> &'static str {
     match command {
         Commands::Init { .. } => "init",
@@ -634,6 +753,7 @@ fn command_label(command: &Commands) -> &'static str {
         Commands::Completions { .. } => "completions",
         Commands::Db { .. } => "db",
         Commands::Config { .. } => "config",
+        Commands::Xinference { .. } => "xinference",
     }
 }
 

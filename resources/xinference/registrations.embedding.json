@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "model_type": "embedding",
+  "registrations": [
+    {
+      "model_id": "sentence-transformers/all-MiniLM-L6-v2",
+      "model_name": "all-MiniLM-L6-v2",
+      "model_type": "embedding",
+      "model_family": "minilm",
+      "dimension": 384,
+      "modalities": ["text"],
+      "max_batch": 32
+    },
+    {
+      "model_id": "BAAI/bge-base-en-v1.5",
+      "model_name": "bge-base-en-v1.5",
+      "model_type": "embedding",
+      "model_family": "bge",
+      "dimension": 768,
+      "modalities": ["text"],
+      "max_batch": 32
+    },
+    {
+      "model_id": "BAAI/bge-large-en-v1.5",
+      "model_name": "bge-large-en-v1.5",
+      "model_type": "embedding",
+      "model_family": "bge",
+      "dimension": 1024,
+      "modalities": ["text"],
+      "max_batch": 16
+    },
+    {
+      "model_id": "BAAI/bge-small-en-v1.5",
+      "model_name": "bge-small-en-v1.5",
+      "model_type": "embedding",
+      "model_family": "bge",
+      "dimension": 384,
+      "modalities": ["text"],
+      "max_batch": 32
+    },
+    {
+      "model_id": "Salesforce/blip2-itm-vit-g",
+      "model_name": "blip2-itm-vit-g",
+      "model_type": "embedding",
+      "model_family": "blip2",
+      "dimension": 768,
+      "modalities": ["text", "image"],
+      "max_batch": 4
+    },
+    {
+      "model_id": "laion/clap-htsat-unfused",
+      "model_name": "clap-htsat-unfused",
+      "model_type": "embedding",
+      "model_family": "clap",
+      "dimension": 512,
+      "modalities": ["text"],
+      "max_batch": 16
+    },
+    {
+      "model_id": "vidore/colpali",
+      "model_name": "colpali",
+      "model_type": "embedding",
+      "model_family": "colpali",
+      "modalities": ["text", "image"],
+      "max_batch": 8,
+      "supports_multi_vector": true,
+      "metadata": {
+        "strategy": "late_interaction"
+      }
+    },
+    {
+      "model_id": "facebook/ImageBind",
+      "model_name": "ImageBind",
+      "model_type": "embedding",
+      "model_family": "imagebind",
+      "dimension": 1024,
+      "modalities": ["text", "image"],
+      "max_batch": 4
+    },
+    {
+      "model_id": "OpenGVLab/InternVideo2-Stage2_1B-224p-f4",
+      "model_name": "InternVideo2-Stage2_1B-224p-f4",
+      "model_type": "embedding",
+      "model_family": "internvideo2",
+      "dimension": 1024,
+      "modalities": ["text"],
+      "max_batch": 4
+    },
+    {
+      "model_id": "jinaai/jina-clip-v2",
+      "model_name": "jina-clip-v2",
+      "model_type": "embedding",
+      "model_family": "jina-clip",
+      "modalities": ["text", "image"],
+      "max_batch": 16
+    },
+    {
+      "model_id": "Qwen/Qwen3-VL-Embedding-2B",
+      "model_name": "Qwen3-VL-Embedding-2B",
+      "model_type": "embedding",
+      "model_family": "qwen3-vl",
+      "dimension": 2048,
+      "modalities": ["text", "image"],
+      "max_batch": 8,
+      "metadata": {
+        "strategy": "vl_embedding"
+      }
+    },
+    {
+      "model_id": "Qwen/Qwen3-VL-Embedding-8B",
+      "model_name": "Qwen3-VL-Embedding-8B",
+      "model_type": "embedding",
+      "model_family": "qwen3-vl",
+      "dimension": 4096,
+      "modalities": ["text", "image"],
+      "max_batch": 4,
+      "metadata": {
+        "strategy": "vl_embedding"
+      }
+    },
+    {
+      "model_id": "google/siglip2-base-patch16-224",
+      "model_name": "siglip2-base-patch16-224",
+      "model_type": "embedding",
+      "model_family": "siglip2",
+      "modalities": ["text", "image"],
+      "max_batch": 16
+    }
+  ]
+}

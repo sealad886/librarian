@@ -16,7 +16,7 @@ impl FromStr for EmbeddingBackendKind {
 
     fn from_str(value: &str) -> Result<Self> {
         match value.to_lowercase().as_str() {
-            "http" | "https" | "python-sidecar" => Ok(Self::Http),
+            "http" | "https" => Ok(Self::Http),
             "xinference" | "xinf" | "auto" => Ok(Self::Xinference),
             "openai-compatible" => Err(Error::Config(
                 "Embedding backend 'openai-compatible' is not implemented".to_string(),

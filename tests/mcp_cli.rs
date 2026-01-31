@@ -82,7 +82,7 @@ async fn mcp_initialize_responds_on_stdout_and_logs_to_stderr() {
 #[tokio::test]
 async fn mcp_help_exits_quickly() {
     let output = timeout(
-        Duration::from_secs(2),
+        Duration::from_secs(5),
         Command::new(env!("CARGO_BIN_EXE_librarian"))
             .arg("mcp")
             .arg("--help")

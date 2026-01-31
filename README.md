@@ -73,8 +73,25 @@ Or install natively: [Qdrant installation guide](https://qdrant.tech/documentati
 
 ### Embedding Backend
 
-Librarian expects an HTTP embedding backend. A reference FastAPI sidecar lives in `sidecar/`.
-Start it (default port 7997) or point `embedding.url` at your own backend implementation.
+Librarian uses the Xinference backend for embeddings. By default it manages a local
+Xinference server (http://127.0.0.1:9997) and launches models automatically; set
+`embedding.url` if you run Xinference elsewhere.
+
+## Xinference Model Registry Snapshots
+
+Supported Xinference models are loaded from versioned snapshots under
+`resources/xinference/` and embedded into the binary at build time. At runtime,
+librarian never calls the Xinference registry unless you explicitly run a sync.
+
+To refresh the snapshots locally (requires a running Xinference server):
+
+```bash
+librarian xinference sync-models --endpoint http://127.0.0.1:9997 --write
+```
+
+Snapshots can also be written to a custom cache directory by setting
+`LIBRARIAN_XINFERENCE_CACHE_DIR`. Releases include refreshed snapshots when the
+crate version is bumped.
 
 ## Quick Start
 
@@ -420,8 +437,8 @@ collection_name = "librarian"
 # Embedding model
 [embedding]
 model = "BAAI/bge-small-en-v1.5"
-backend = "http"
-url = "http://localhost:7997"
+backend = "xinference"
+url = "http://localhost:9997"
 allow_custom = false
 multimodal = false
 dimension = 384
@@ -514,9 +531,9 @@ Then use the tools via GitHub Copilot or other MCP clients:
 
 ### Embedding Backend
 
-Embeddings are provided by an HTTP backend. Librarian probes `/capabilities` and `/probe` to
-verify model support, modalities, and dimensions before ingestion. A reference sidecar
-implementation lives in `sidecar/` for local development.
+Embeddings are provided by Xinference's OpenAI-compatible API. Librarian resolves model
+dimensions and capabilities via the Xinference registry and ensures the server/model
+are running before ingestion.
 
 ### Vector Database
 
@@ -586,8 +603,9 @@ librarian reindex
 LIBRARIAN_CONFIG=/path/to/config.toml  # Custom config path
 LIBRARIAN_LOG=debug                    # Log level (trace/debug/info/warn/error)
 QDRANT_URL=http://host:6333         # Override Qdrant URL
-LIBRARIAN_EMBEDDING_BACKEND_URL=http://host:7997  # Override embedding backend URL
-LIBRARIAN_CUSTOM_EMBEDDING_BACKEND_URL=http://host:7997  # Override custom backend URL
+LIBRARIAN_EMBEDDING_BACKEND_URL=http://host:9997  # Override embedding backend URL
+LIBRARIAN_CUSTOM_EMBEDDING_BACKEND_URL=http://host:9997  # Override custom backend URL
+LIBRARIAN_XINFERENCE_CACHE_DIR=/path/to/cache  # Override Xinference registry snapshot cache
 ```
 
 ## License

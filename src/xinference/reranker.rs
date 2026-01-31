@@ -62,9 +62,10 @@ impl XinferenceReranker {
 
         // Verify model is a known reranker model
         if !xinference_reranker_models().contains(xinf_name.as_str()) {
+            let allowed = crate::models::allowlisted_reranker_models().join(", ");
             return Err(Error::Config(format!(
-                "Unknown Xinference reranker model: '{}'. Supported models: bge-reranker-base, bge-reranker-large, bge-reranker-v2-m3",
-                model
+                "Unknown Xinference reranker model: '{}'. Supported models: {}",
+                model, allowed
             )));
         }
 
@@ -104,9 +105,10 @@ impl XinferenceReranker {
 
         // Verify model is a known reranker model
         if !xinference_reranker_models().contains(xinf_name.as_str()) {
+            let allowed = crate::models::allowlisted_reranker_models().join(", ");
             return Err(Error::Config(format!(
-                "Unknown Xinference reranker model: '{}'. Supported models: bge-reranker-base, bge-reranker-large, bge-reranker-v2-m3",
-                model
+                "Unknown Xinference reranker model: '{}'. Supported models: {}",
+                model, allowed
             )));
         }
 

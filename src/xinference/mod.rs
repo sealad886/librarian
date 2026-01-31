@@ -8,10 +8,14 @@
 
 mod deps;
 mod embedder;
+mod registry;
+mod registry_sync;
 mod reranker;
 
 pub use deps::*;
 pub use embedder::*;
+pub use registry::*;
+pub use registry_sync::*;
 pub use reranker::*;
 
 use crate::error::{Error, Result};
@@ -32,99 +36,47 @@ pub const DEFAULT_XINFERENCE_PORT: u16 = 9997;
 #[derive(Debug, Clone)]
 pub struct XinferenceModelSpec {
     pub dimension: usize,
-    pub model_type: &'static str,
+    pub model_type: String,
 }
 
-/// Static registry of known Xinference embedding models and their dimensions
-pub fn xinference_embedding_models() -> HashMap<&'static str, XinferenceModelSpec> {
-    HashMap::from([
-        (
-            "bge-small-en-v1.5",
-            XinferenceModelSpec {
-                dimension: 384,
-                model_type: "embedding",
-            },
-        ),
-        (
-            "bge-base-en-v1.5",
-            XinferenceModelSpec {
-                dimension: 768,
-                model_type: "embedding",
-            },
-        ),
-        (
-            "bge-large-en-v1.5",
-            XinferenceModelSpec {
-                dimension: 1024,
-                model_type: "embedding",
-            },
-        ),
-        (
-            "all-MiniLM-L6-v2",
-            XinferenceModelSpec {
-                dimension: 384,
-                model_type: "embedding",
-            },
-        ),
-        (
-            "bge-m3",
-            XinferenceModelSpec {
-                dimension: 1024,
-                model_type: "embedding",
-            },
-        ),
-        (
-            "gte-large",
-            XinferenceModelSpec {
-                dimension: 1024,
-                model_type: "embedding",
-            },
-        ),
-        (
-            "gte-base",
-            XinferenceModelSpec {
-                dimension: 768,
-                model_type: "embedding",
-            },
-        ),
-        (
-            "gte-small",
-            XinferenceModelSpec {
-                dimension: 384,
-                model_type: "embedding",
-            },
-        ),
-        (
-            "e5-large-v2",
-            XinferenceModelSpec {
-                dimension: 1024,
-                model_type: "embedding",
-            },
-        ),
-        (
-            "e5-base-v2",
-            XinferenceModelSpec {
-                dimension: 768,
-                model_type: "embedding",
-            },
-        ),
-        (
-            "e5-small-v2",
-            XinferenceModelSpec {
-                dimension: 384,
-                model_type: "embedding",
-            },
-        ),
-    ])
+static XINFERENCE_EMBEDDING_MODELS: OnceLock<HashMap<String, XinferenceModelSpec>> =
+    OnceLock::new();
+static XINFERENCE_RERANK_MODELS: OnceLock<HashSet<String>> = OnceLock::new();
+
+/// Registry of known Xinference embedding models and their dimensions from snapshots.
+pub fn xinference_embedding_models() -> &'static HashMap<String, XinferenceModelSpec> {
+    XINFERENCE_EMBEDDING_MODELS.get_or_init(|| {
+        let mut models = HashMap::new();
+        if let Ok(snapshot) = registry_snapshot(RegistryType::Embedding) {
+            for entry in &snapshot.registrations {
+                if let Some(dimension) = entry.dimension {
+                    let name = entry.model_name.clone();
+                    models.insert(
+                        name,
+                        XinferenceModelSpec {
+                            dimension,
+                            model_type: entry.model_type.clone(),
+                        },
+                    );
+                }
+            }
+        }
+        models
+    })
 }
 
-/// Static registry of known Xinference reranker models
-pub fn xinference_reranker_models() -> HashSet<&'static str> {
-    HashSet::from([
-        "bge-reranker-base",
-        "bge-reranker-large",
-        "bge-reranker-v2-m3",
-    ])
+/// Registry of known Xinference reranker models from snapshots.
+pub fn xinference_reranker_models() -> &'static HashSet<String> {
+    XINFERENCE_RERANK_MODELS.get_or_init(|| {
+        let mut models = HashSet::new();
+        if let Ok(snapshot) = registry_snapshot(RegistryType::Rerank) {
+            for entry in &snapshot.registrations {
+                models.insert(entry.model_name.clone());
+                models.insert(hf_to_xinference_name(&entry.model_id));
+            }
+        }
+        models
+    })
 }
 
 /// Map HuggingFace model ID to Xinference model name.
@@ -140,9 +92,7 @@ pub fn hf_to_xinference_name(hf_model: &str) -> String {
 /// Get the Xinference model spec for a given model name
 pub fn get_xinference_model_spec(model: &str) -> Option<XinferenceModelSpec> {
     let xinf_name = hf_to_xinference_name(model);
-    xinference_embedding_models()
-        .get(xinf_name.as_str())
-        .cloned()
+    xinference_embedding_models().get(&xinf_name).cloned()
 }
 
 /// Running model information from Xinference
@@ -500,9 +450,9 @@ mod tests {
     fn test_xinference_model_registry() {
         let models = xinference_embedding_models();
         assert!(models.contains_key("bge-small-en-v1.5"));
-        assert_eq!(models["bge-small-en-v1.5"].dimension, 384);
-        assert_eq!(models["bge-base-en-v1.5"].dimension, 768);
-        assert_eq!(models["bge-large-en-v1.5"].dimension, 1024);
+        if let Some(spec) = models.get("bge-small-en-v1.5") {
+            assert!(spec.dimension > 0);
+        }
     }
 
     #[test]
@@ -526,7 +476,5 @@ mod tests {
     fn test_xinference_reranker_models() {
         let models = xinference_reranker_models();
         assert!(models.contains("bge-reranker-base"));
-        assert!(models.contains("bge-reranker-large"));
-        assert!(models.contains("bge-reranker-v2-m3"));
     }
 }

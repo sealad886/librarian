@@ -49,7 +49,7 @@ pub fn default_embedding_custom_backend() -> String {
 /// Default custom embedding backend URL
 pub fn default_embedding_custom_url() -> String {
     std::env::var("LIBRARIAN_CUSTOM_EMBEDDING_BACKEND_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:7997".to_string())
+        .unwrap_or_else(|_| "http://127.0.0.1:9997".to_string())
 }
 
 /// Default batch size for embedding

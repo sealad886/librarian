@@ -1,0 +1,144 @@
+name: Xinference Registry Sync
+
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "Cargo.toml"
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: xinference-registry-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-version-bump:
+    runs-on: ubuntu-latest
+    outputs:
+      bumped: ${{ steps.bump.outputs.bumped }}
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect version bump
+        id: bump
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version=$(grep '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "${{ github.event_name }}" = "push" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            version=$(grep '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.sha }}"
+          if [ -z "$base" ]; then
+            base=$(git rev-parse HEAD~1)
+          fi
+
+          base_version=$(git show "$base:Cargo.toml" | grep '^version = ' | sed -E 's/version = "([^"]+)"/\1/')
+          head_version=$(git show "$head:Cargo.toml" | grep '^version = ' | sed -E 's/version = "([^"]+)"/\1/')
+
+          if [ "$base_version" != "$head_version" ]; then
+            echo "bumped=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bumped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "version=$head_version" >> "$GITHUB_OUTPUT"
+
+  sync-registry:
+    runs-on: ubuntu-latest
+    needs: detect-version-bump
+    if: needs.detect-version-bump.outputs.bumped == 'true'
+    env:
+      CARGO_TERM_COLOR: always
+      XINFERENCE_ENDPOINT: http://127.0.0.1:9997
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Xinference
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install xinference
+
+      - name: Start Xinference
+        run: |
+          xinference-local --host 127.0.0.1 --port 9997 > xinference.log 2>&1 &
+
+      - name: Wait for Xinference
+        run: |
+          set -euo pipefail
+          ready=false
+          for i in {1..30}; do
+            if curl --fail --silent "$XINFERENCE_ENDPOINT/openapi.json" > /dev/null; then
+              ready=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ready" != "true" ]; then
+            echo "Xinference did not become ready"
+            cat xinference.log
+            exit 1
+          fi
+
+      - name: Sync registry snapshots
+        run: |
+          cargo xtask xinference-sync --endpoint "$XINFERENCE_ENDPOINT" --types embedding,rerank,audio,video --out resources/xinference --write
+
+      - name: Snapshot tests
+        run: cargo test --workspace --all-features xinference
+
+      - name: Detect snapshot changes
+        id: changes
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create snapshot sync PR
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "chore(xinference): sync model registry snapshot"
+          title: "chore(xinference): sync Xinference model registry"
+          body: |
+            Automated snapshot refresh for Xinference registry after version bump.
+          branch: "automation/xinference-registry-${{ needs.detect-version-bump.outputs.version }}"
+          delete-branch: true
