@@ -119,19 +119,19 @@ enum ModelListResponse {
 }
 
 #[derive(Debug, Deserialize)]
-struct ModelRegistration {
-    model_name: String,
+pub struct ModelRegistration {
+    pub model_name: String,
+    #[serde(default, alias = "dimension", alias = "dimensions")]
+    pub dimension: Option<usize>,
     #[serde(default)]
-    pub(crate) dimensions: Option<usize>,
-    #[serde(default)]
-    max_tokens: Option<usize>,
+    pub max_tokens: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
-struct ModelRegistrationItem {
-    model_name: String,
+pub struct ModelRegistrationItem {
+    pub model_name: String,
     #[serde(default)]
-    is_builtin: bool,
+    pub is_builtin: bool,
 }
 
 /// Model launch request
@@ -374,7 +374,7 @@ impl XinferenceManager {
 
             debug!(
                 model_name = %registration.model_name,
-                dimensions = registration.dimensions,
+                dimension = registration.dimension,
                 max_tokens = registration.max_tokens,
                 "Resolved Xinference model registration"
             );
