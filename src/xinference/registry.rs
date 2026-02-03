@@ -137,7 +137,22 @@ pub fn registry_snapshot(registry_type: RegistryType) -> Result<&'static Registr
         .map_err(|msg| Error::Config(format!("Failed to load Xinference registry: {}", msg)))
 }
 
+/// Load registry snapshot from embedded resources (authoritative for allowlists).
+///
+/// This function always uses the embedded snapshot included at build time.
+/// User cache files are NOT consulted here to ensure deterministic allowlists
+/// per CONVENTIONS.md.
 pub fn load_registry_snapshot(registry_type: RegistryType) -> Result<RegistrySnapshot> {
+    let embedded = embedded_snapshot_json(registry_type);
+    let snapshot: RegistrySnapshot = serde_json::from_str(embedded)?;
+    validate_snapshot(&snapshot, registry_type)?;
+    Ok(snapshot)
+}
+
+/// Load registry snapshot from user cache directory if it exists, otherwise fall back to embedded.
+///
+/// This function is intended for sync operations that need to compare against user-synced data.
+pub fn load_user_registry_snapshot(registry_type: RegistryType) -> Result<RegistrySnapshot> {
     let path = registry_snapshot_path(&registry_cache_dir(), registry_type);
     if path.exists() {
         let content = std::fs::read_to_string(&path)?;
@@ -146,10 +161,8 @@ pub fn load_registry_snapshot(registry_type: RegistryType) -> Result<RegistrySna
         return Ok(snapshot);
     }
 
-    let embedded = embedded_snapshot_json(registry_type);
-    let snapshot: RegistrySnapshot = serde_json::from_str(embedded)?;
-    validate_snapshot(&snapshot, registry_type)?;
-    Ok(snapshot)
+    // Fall back to embedded snapshot
+    load_registry_snapshot(registry_type)
 }
 
 pub fn embedded_snapshot_json(registry_type: RegistryType) -> &'static str {
