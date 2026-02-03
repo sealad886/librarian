@@ -296,8 +296,8 @@ pub async fn create_embedder_auto(
             }
 
             // Create embedder (this will launch model if needed)
-            let embedder = XinferenceEmbedder::from_global_manager(manager_lock.clone(), config)
-                .await?;
+            let embedder =
+                XinferenceEmbedder::from_global_manager(manager_lock.clone(), config).await?;
             Ok(Box::new(embedder))
         }
         EmbeddingBackendKind::Http => {

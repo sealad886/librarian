@@ -68,9 +68,7 @@ impl XinferenceReranker {
             let _ = mgr.fetch_model_registration("rerank", &xinf_name).await?;
 
             // Ensure reranker model is launched
-            let model_uid = mgr
-                .ensure_model_launched(model, "rerank", true)
-                .await?;
+            let model_uid = mgr.ensure_model_launched(model, "rerank", true).await?;
             debug!(
                 model_name = %xinf_name,
                 model_uid = %model_uid,

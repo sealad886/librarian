@@ -139,6 +139,8 @@ pub struct ModelRegistrationItem {
 struct ModelLaunchRequest {
     model_name: String,
     model_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enable_virtual_env: Option<bool>,
 }
 
 /// Model launch response
@@ -217,11 +219,7 @@ impl XinferenceManager {
             )));
         }
 
-        let host = self
-            .base_url
-            .host_str()
-            .unwrap_or("127.0.0.1")
-            .to_string();
+        let host = self.base_url.host_str().unwrap_or("127.0.0.1").to_string();
         let port = self.port();
 
         info!("Starting Xinference server at {}...", self.base_url);
@@ -364,13 +362,14 @@ impl XinferenceManager {
         .await?;
 
         if status.is_success() {
-            let registration: ModelRegistration = serde_json::from_str(&body_text).map_err(|e| {
-                Error::Embedding(format!(
-                    "Failed to parse Xinference model registration: {} (body: {})",
-                    e,
-                    truncate_body(&body_text, 1000)
-                ))
-            })?;
+            let registration: ModelRegistration =
+                serde_json::from_str(&body_text).map_err(|e| {
+                    Error::Embedding(format!(
+                        "Failed to parse Xinference model registration: {} (body: {})",
+                        e,
+                        truncate_body(&body_text, 1000)
+                    ))
+                })?;
 
             debug!(
                 model_name = %registration.model_name,
@@ -484,12 +483,16 @@ impl XinferenceManager {
             .base_url
             .join("/v1/models")
             .map_err(|e| Error::Config(format!("Invalid URL: {}", e)))?;
-        url.query_pairs_mut()
-            .append_pair("wait_ready", "true");
+        url.query_pairs_mut().append_pair("wait_ready", "true");
 
         let request = ModelLaunchRequest {
             model_name: model_name.to_string(),
             model_type: model_type.to_string(),
+            enable_virtual_env: if cfg!(target_os = "macos") {
+                Some(false)
+            } else {
+                None
+            },
         };
         let body = serde_json::to_value(request)
             .map_err(|e| Error::Embedding(format!("Failed to serialize launch request: {}", e)))?;
@@ -544,7 +547,9 @@ impl XinferenceManager {
 
         // Ensure model exists in registry for deterministic selection
         if require_registry {
-            let _ = self.fetch_model_registration(model_type, &xinf_name).await?;
+            let _ = self
+                .fetch_model_registration(model_type, &xinf_name)
+                .await?;
         }
 
         // Check our local tracking
@@ -651,8 +656,8 @@ pub(crate) fn xinference_auth_token() -> Option<String> {
 }
 
 pub(crate) fn normalize_xinference_base_url(raw: &str) -> Result<Url> {
-    let mut url =
-        Url::parse(raw).map_err(|e| Error::Config(format!("Invalid Xinference URL '{}': {}", raw, e)))?;
+    let mut url = Url::parse(raw)
+        .map_err(|e| Error::Config(format!("Invalid Xinference URL '{}': {}", raw, e)))?;
 
     match url.scheme() {
         "http" | "https" => {}

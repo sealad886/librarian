@@ -7,7 +7,7 @@ pub fn default_qdrant_url() -> String {
 
 /// Default environment variable name for Qdrant API key
 pub fn default_qdrant_api_key_env() -> String {
-    "".to_string()
+    "QDRANT_API_KEY".to_string()
 }
 
 /// Default collection name

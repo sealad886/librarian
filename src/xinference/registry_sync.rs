@@ -13,6 +13,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct SyncOptions {
@@ -290,8 +291,21 @@ fn select_list_operation(operations: &[OpenApiOperation]) -> Result<OpenApiOpera
     for op in operations {
         if op.method == Method::GET && op.path.contains("model_registrations") {
             let mut score = 0;
-            if op.path.contains('{') {
+            let placeholders = op.path.matches('{').count() as i32;
+            if placeholders == 1 {
                 score += 3;
+            } else if placeholders == 0 {
+                score += 1;
+            } else {
+                score -= placeholders;
+            }
+            if op
+                .parameters
+                .iter()
+                .any(|p| p.name.eq_ignore_ascii_case("model_name"))
+                || op.path.to_lowercase().contains("model_name")
+            {
+                score -= 5;
             }
             if op
                 .parameters
@@ -374,9 +388,10 @@ async fn fetch_registry_for_type(
             let request = build_request_for_type(client, endpoint, update_op, registry_type)?;
             send_with_retry::<()>(request, retries).await?;
         } else {
-            return Err(Error::Embedding(
-                "Xinference OpenAPI spec does not expose a model update endpoint".to_string(),
-            ));
+            warn!(
+                registry_type = %registry_type.api_label(),
+                "Xinference OpenAPI spec does not expose a model update endpoint; skipping refresh"
+            );
         }
     }
 

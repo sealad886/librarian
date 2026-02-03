@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 /// Cached Python path for the Xinference environment
 static XINFERENCE_PYTHON: OnceLock<PathBuf> = OnceLock::new();
-static XOSCAR_SUPPORTS_START_METHOD: OnceLock<bool> = OnceLock::new();
+static XOSCAR_COMPATIBLE: OnceLock<bool> = OnceLock::new();
 
 /// Ensure uv is available to manage the dedicated Python environment.
 pub fn ensure_uv_available() -> Result<()> {
@@ -327,7 +327,10 @@ fn xoscar_supports_start_method_from_disk(python: &Path) -> Option<bool> {
     let site_packages = if cfg!(windows) {
         venv_dir.join("Lib").join("site-packages")
     } else {
-        venv_dir.join("lib").join("python3.10").join("site-packages")
+        venv_dir
+            .join("lib")
+            .join("python3.10")
+            .join("site-packages")
     };
     let candidates = [
         site_packages
@@ -343,7 +346,8 @@ fn xoscar_supports_start_method_from_disk(python: &Path) -> Option<bool> {
             if let Some(start) = contents.find("def append_sub_pool") {
                 let tail = &contents[start..];
                 let limit = tail.len().min(512);
-                return Some(tail[..limit].contains("start_method"));
+                let snippet = &tail[..limit];
+                return Some(snippet.contains("start_method") || snippet.contains("start_python"));
             }
         }
     }
@@ -367,7 +371,8 @@ for module_name, attr in targets:
         mod = __import__(module_name, fromlist=[attr])
         cls = getattr(mod, attr)
         sig = inspect.signature(cls.append_sub_pool)
-        result = "start_method" in sig.parameters
+        params = sig.parameters
+        result = ("start_method" in params) or ("start_python" in params)
         break
     except Exception:
         continue
@@ -398,13 +403,13 @@ else:
 }
 
 fn ensure_xoscar_compatible(python: &Path) -> Result<()> {
-    if XOSCAR_SUPPORTS_START_METHOD.get() == Some(&true) {
+    if XOSCAR_COMPATIBLE.get() == Some(&true) {
         return Ok(());
     }
 
     let supports = xoscar_supports_start_method(python)?;
     if supports == Some(true) {
-        let _ = XOSCAR_SUPPORTS_START_METHOD.set(true);
+        let _ = XOSCAR_COMPATIBLE.set(true);
         return Ok(());
     }
 
@@ -415,13 +420,15 @@ fn ensure_xoscar_compatible(python: &Path) -> Result<()> {
         .map_err(|e| Error::Embedding(format!("Failed to run pip install: {}", e)))?;
 
     if output.status.success() && xoscar_supports_start_method(python)? == Some(true) {
-        let _ = XOSCAR_SUPPORTS_START_METHOD.set(true);
+        let _ = XOSCAR_COMPATIBLE.set(true);
         return Ok(());
     }
 
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     Err(Error::Embedding(format!(
-        "xoscar upgrade did not resolve Xinference compatibility: {}",
+        "xoscar upgrade did not resolve Xinference compatibility. stdout: {} stderr: {}",
+        stdout.trim(),
         stderr.trim()
     )))
 }

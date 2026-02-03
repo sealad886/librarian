@@ -2,12 +2,10 @@
 //!
 //! Implements the Embedder trait using Xinference's OpenAI-compatible API.
 
-use crate::embed::{Embedder, ImageEmbedInput, MediaModality};
 use crate::config::ResolvedEmbeddingConfig;
+use crate::embed::{Embedder, ImageEmbedInput, MediaModality};
 use crate::error::{Error, Result};
-use crate::xinference::{
-    hf_to_xinference_name, xinference_request_json, SharedXinferenceManager,
-};
+use crate::xinference::{hf_to_xinference_name, xinference_request_json, SharedXinferenceManager};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -81,7 +79,9 @@ impl XinferenceEmbedder {
                     "Using custom Xinference embedding model; skipping registry lookup"
                 );
             } else {
-                let registration = mgr.fetch_model_registration("embedding", &xinf_name).await?;
+                let registration = mgr
+                    .fetch_model_registration("embedding", &xinf_name)
+                    .await?;
                 if let Some(dim) = registration.dimension {
                     if dim != expected_dimension {
                         return Err(Error::Config(format!(
@@ -148,8 +148,9 @@ impl XinferenceEmbedder {
             request.input.len()
         );
 
-        let body = serde_json::to_value(&request)
-            .map_err(|e| Error::Embedding(format!("Failed to serialize embedding request: {}", e)))?;
+        let body = serde_json::to_value(&request).map_err(|e| {
+            Error::Embedding(format!("Failed to serialize embedding request: {}", e))
+        })?;
         let embed_response: OpenAIEmbedResponse = xinference_request_json(
             &self.client,
             reqwest::Method::POST,
