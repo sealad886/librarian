@@ -263,7 +263,8 @@ impl HeadlessRenderer {
     pub async fn render(&self, url: &str) -> Result<RenderedPage> {
         Err(Error::Crawl(format!(
             "JavaScript rendering not available for {}. \
-             Compile with --features js-rendering to enable headless browser support.",
+             Rebuild with default features (omit --no-default-features) or add \
+             --features js-rendering to enable headless browser support.",
             url
         )))
     }

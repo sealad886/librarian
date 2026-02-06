@@ -225,7 +225,8 @@ impl Crawler {
                 } else {
                     warn!(
                         "SPA detected but JS rendering not available. \
-                         Compile with --features js-rendering or disable auto_js_rendering. \
+                         Rebuild with default features (omit --no-default-features) or add \
+                         --features js-rendering, or disable auto_js_rendering. \
                          URL: {}",
                         url
                     );

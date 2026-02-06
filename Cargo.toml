@@ -1,6 +1,6 @@
 [package]
 name = "librarian"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 authors = ["Dr Andrew Cox"]
 description = "A CLI tool for local RAG (Retrieval-Augmented Generation) with MCP server support"
@@ -10,7 +10,7 @@ keywords = ["rag", "retrieval", "mcp", "qdrant", "embedding"]
 categories = ["command-line-utilities", "text-processing"]
 
 [features]
-default = ["pdf-extract", "chromiumoxide"]
+default = ["pdf", "js-rendering"]
 pdf = ["pdf-extract"]
 js-rendering = ["chromiumoxide"]
 

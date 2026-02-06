@@ -151,6 +151,9 @@ cargo clippy -- -D warnings
 cargo clippy --all-features -- -D warnings
 ```
 
+Default builds include PDF and JS rendering. Use `--no-default-features` if you
+need to test without them.
+
 ### Guidelines
 
 1. **Error Handling**: Use the `Result` type from `error.rs`. Propagate errors with `?` operator.

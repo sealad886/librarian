@@ -15,7 +15,7 @@ librarian is a high-performance local RAG (Retrieval Augmented Generation) CLI t
 ### Building and Testing
 ```bash
 # Build
-cargo build --release --all-features
+cargo build --release
 
 # Run tests
 cargo test
@@ -27,8 +27,11 @@ RUST_LOG=debug cargo run -- <command>
 cargo fmt
 
 # Lint code (must pass with no warnings)
-cargo clippy --all-features -- -D warnings
+cargo clippy -- -D warnings
 ```
+
+Default builds include PDF and JS rendering. To exclude them, use
+`--no-default-features` (optionally re-adding a single feature).
 
 ## Coding Standards
 

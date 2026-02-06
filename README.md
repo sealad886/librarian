@@ -44,14 +44,15 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
 
 ```bash
 git clone https://github.com/sealad886/librarian.git
-cd librarian/librarian
-cargo build --release --all-features
-# optionally add the executable to your PATH
-#   [ ! -d /usr/local/bin ] && mkdir -p /usr/local/bin
-#   ln -s -F "$(pwd)/target/release/librarian" /usr/local/bin/  # if symlinks are supported on your system
-#   cp "$(pwd)/target/release/librarian" /usr/local/bin/  # to copy the executable directly
+cd librarian
+cargo build --release
+# install the built tool in your `cargo` bin:
+cargo install --path .
 
-# Binary will be at target/release/librarian
+# PDF + JS rendering are enabled by default. To exclude them:
+# cargo build --release --no-default-features
+# cargo build --release --no-default-features --features pdf
+# cargo build --release --no-default-features --features js-rendering
 ```
 
 ### Qdrant Setup
@@ -74,7 +75,7 @@ Or install natively: [Qdrant installation guide](https://qdrant.tech/documentati
 ### Embedding Backend
 
 Librarian uses the Xinference backend for embeddings. By default it manages a local
-Xinference server (http://127.0.0.1:9997) and launches models automatically; set
+Xinference server (<http://127.0.0.1:9997>) and launches models automatically; set
 `embedding.url` if you run Xinference elsewhere.
 
 ## Xinference Model Registry Snapshots
