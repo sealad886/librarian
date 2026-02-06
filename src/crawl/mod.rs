@@ -154,7 +154,7 @@ impl Crawler {
             let analysis = analyze_page(&content, url);
 
             if analysis.needs_js_rendering {
-                info!(
+                debug!(
                     "SPA detected ({}, confidence: {:.0}%): {}",
                     match &analysis.technology {
                         PageTechnology::Spa(fw) => fw.to_string(),
@@ -170,11 +170,11 @@ impl Crawler {
 
                 // Try JS rendering if available
                 if let Some(renderer) = &self.renderer {
-                    info!("Rendering with headless browser...");
+                    debug!("Rendering with headless browser...");
                     let renderer_guard = renderer.lock().await;
                     match renderer_guard.render(url).await {
                         Ok(rendered) => {
-                            info!(
+                            debug!(
                                 "Rendered in {}ms: {} ({} bytes)",
                                 rendered.render_time_ms,
                                 url,
