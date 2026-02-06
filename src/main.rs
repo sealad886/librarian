@@ -24,7 +24,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 use tokio::time::sleep;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use url::Url;
@@ -471,7 +471,7 @@ async fn run() -> Result<()> {
     let api_key = config.qdrant_api_key();
     let store = if needs_validation {
         // Write operations use validated connection
-        info!(
+        debug!(
             "Validating collection '{}' for write operation...",
             config.collection_name
         );

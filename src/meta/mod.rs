@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::FromRow;
 use std::str::FromStr;
-use tracing::{debug, info};
+use tracing::{debug};
 use uuid::Uuid;
 
 /// Source types
@@ -379,7 +379,7 @@ impl MetaDb {
 
     /// Initialize the database schema
     pub async fn init_schema(&self) -> Result<()> {
-        info!("Initializing database schema");
+        debug!("Initializing database schema");
         sqlx::query(SCHEMA_SQL).execute(&self.pool).await?;
 
         // Backfill optional columns for existing installations
@@ -474,7 +474,7 @@ impl MetaDb {
 
     /// Migration v1: Add schema_version and collection_config tables
     async fn apply_migration_v1(&self) -> Result<()> {
-        info!("Applying migration v1: collection config tracking");
+        debug!("Applying migration v1: collection config tracking");
 
         // Create schema_version if not exists
         sqlx::query(
@@ -532,6 +532,7 @@ impl MetaDb {
     /// Upsert collection configuration
     pub async fn upsert_collection_config(&self, config: &CollectionConfigRecord) -> Result<()> {
         let now = Utc::now().to_rfc3339();
+        debug!("Upserting collection config for {} at {}", config.collection_name, now);
         sqlx::query(
             "INSERT INTO collection_config 
              (collection_name, vector_dimension, embedding_model, embedding_family, distance_metric, created_at, updated_at, verified_at)

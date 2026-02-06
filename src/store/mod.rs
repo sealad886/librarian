@@ -394,7 +394,7 @@ impl QdrantStore {
             return Ok(());
         }
 
-        info!(
+        debug!(
             "Creating collection {} with dimension {}",
             self.collection, self.dimension
         );
@@ -409,7 +409,7 @@ impl QdrantStore {
             )
             .await?;
 
-        info!("Collection {} created successfully", self.collection);
+        debug!("Collection {} created successfully", self.collection);
         Ok(())
     }
 

@@ -9,7 +9,7 @@ use crate::rank::{RankedResult, Ranker};
 use crate::rerank::{create_reranker, Reranker};
 use crate::store::{QdrantStore, SearchFilter};
 use serde::Serialize;
-use tracing::{debug, info};
+use tracing::{debug};
 
 /// Query options
 #[derive(Debug, Clone, Default)]
@@ -46,7 +46,7 @@ pub async fn cmd_query(
     query: &str,
     options: QueryOptions,
 ) -> Result<QueryResult> {
-    info!("Querying: {}", query);
+    debug!("Querying: {}", query);
 
     let k = options.k.unwrap_or(config.query.default_k);
     let min_score = options.min_score.unwrap_or(config.query.min_score);
@@ -125,7 +125,7 @@ pub async fn cmd_query(
     ranked.truncate(k);
 
     let total = ranked.len();
-    info!("Returning {} results", total);
+    debug!("Returning {} results", total);
 
     Ok(QueryResult {
         results: ranked,

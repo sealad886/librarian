@@ -11,7 +11,7 @@ use crate::meta::{MetaDb, RunOperation, SourceType};
 use crate::store::QdrantStore;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 /// Update statistics
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -48,7 +48,7 @@ pub async fn cmd_update(
     store: &QdrantStore,
     options: UpdateOptions,
 ) -> Result<UpdateStats> {
-    info!("Starting update operation");
+    debug!("Starting update operation");
 
     let mut stats = UpdateStats::default();
 

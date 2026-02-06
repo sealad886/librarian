@@ -7,7 +7,7 @@ use crate::store::QdrantStore;
 use clap_complete::Shell;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
-use tracing::info;
+use tracing::{debug};
 
 /// Status information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +25,7 @@ pub struct StatusInfo {
 
 /// Get system status
 pub async fn cmd_status(config: &Config, db: &MetaDb, store: &QdrantStore) -> Result<StatusInfo> {
-    info!("Getting status");
+    debug!("Getting status");
 
     let db_stats = db.get_global_stats().await?;
 
@@ -115,7 +115,7 @@ impl From<IngestionRun> for RunSummary {
 
 /// List all sources with their stats
 pub async fn cmd_list_sources(db: &MetaDb) -> Result<Vec<SourceInfo>> {
-    info!("Listing sources");
+    debug!("Listing sources");
 
     let sources = db.list_sources().await?;
     let mut result = Vec::with_capacity(sources.len());

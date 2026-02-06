@@ -202,7 +202,7 @@ impl SitemapParser {
 
     /// Parse a sitemap URL and return all page URLs
     pub async fn parse(&self, sitemap_url: &str) -> Result<Vec<SitemapEntry>> {
-        info!("Parsing sitemap: {}", sitemap_url);
+        debug!("Parsing sitemap: {}", sitemap_url);
 
         // Validate initial sitemap URL for SSRF protection
         if let Err(e) = validate_url_safety(sitemap_url) {

@@ -719,7 +719,7 @@ async fn process_audio_file(
     store.upsert_points(points).await?;
     db.upsert_chunk(&chunk).await?;
 
-    info!(
+    debug!(
         path = %file_uri,
         duration = metadata.duration_secs,
         "Processed audio file"
@@ -1124,7 +1124,7 @@ async fn process_video_file(
         debug!(path = %video_temp_dir.display(), error = %e, "Failed to clean up video temp directory");
     }
 
-    info!(
+    debug!(
         path = %file_uri,
         duration = metadata.duration_secs,
         chunks = chunks_created,

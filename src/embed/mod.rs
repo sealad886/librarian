@@ -20,7 +20,7 @@ use crate::xinference::{
 };
 use async_trait::async_trait;
 use std::path::Path;
-use tracing::info;
+use tracing::{debug};
 
 /// Supported media modalities for multimodal embedding
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,7 +276,7 @@ pub async fn create_embedder_auto(
 ) -> Result<Box<dyn Embedder>> {
     match config.backend.kind {
         EmbeddingBackendKind::Xinference => {
-            info!("Using Xinference backend, ensuring dependencies...");
+            debug!("Using Xinference backend, ensuring dependencies...");
 
             // Ensure xinference is installed and ready (sync check)
             ensure_xinference_ready(base_dir)?;

@@ -8,7 +8,7 @@ use crate::store::QdrantStore;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 /// MCP Server implementation
 pub struct McpServer {
@@ -28,7 +28,7 @@ impl McpServer {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
 
-        info!("MCP server starting on stdio");
+        debug!("MCP server starting on stdio");
 
         for line in stdin.lock().lines() {
             let line = match line {
@@ -82,7 +82,7 @@ impl McpServer {
             }
         }
 
-        info!("MCP server shutting down");
+        debug!("MCP server shutting down");
         Ok(())
     }
 
@@ -108,10 +108,10 @@ impl McpServer {
     async fn handle_notification(&self, notification: McpNotification) {
         match notification.method.as_str() {
             "notifications/initialized" => {
-                info!("Client initialized");
+                debug!("Client initialized");
             }
             "notifications/cancelled" => {
-                info!("Request cancelled");
+                debug!("Request cancelled");
             }
             _ => {
                 debug!("Unknown notification: {}", notification.method);

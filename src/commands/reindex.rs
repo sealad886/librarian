@@ -9,7 +9,7 @@ use crate::error::{Error, Result};
 use crate::meta::{MetaDb, RunOperation, RunStatus};
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 /// Reindex statistics
@@ -48,7 +48,7 @@ pub async fn cmd_reindex(
     embedder: &dyn Embedder,
     options: ReindexOptions,
 ) -> Result<ReindexStats> {
-    info!("Starting reindex operation");
+    debug!("Starting reindex operation");
 
     store.ensure_collection().await?;
 
@@ -146,7 +146,7 @@ pub async fn cmd_reindex(
             .await;
     }
 
-    info!(
+    debug!(
         documents = stats.documents_processed,
         chunks = stats.chunks_reindexed,
         errors = stats.errors,

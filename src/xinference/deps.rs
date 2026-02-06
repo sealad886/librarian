@@ -225,7 +225,7 @@ pub fn install_xinference(python: &Path) -> Result<()> {
         .map_err(|e| Error::Embedding(format!("Failed to run uv pip install: {}", e)))?;
 
     if output.status.success() {
-        info!("xinference installed successfully");
+        debug!("xinference installed successfully");
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -245,7 +245,7 @@ pub fn ensure_xinference_installed(python: &Path) -> Result<()> {
         return Ok(());
     }
 
-    info!("xinference not found, installing...");
+    debug!("xinference not found, installing...");
     install_xinference(python)?;
 
     // Verify installation

@@ -208,7 +208,7 @@ impl XinferenceManager {
 
         // Check if xinference is already running externally on this port
         if self.health_check().await? {
-            info!("Xinference server already running at {}", self.base_url);
+            debug!("Xinference server already running at {}", self.base_url);
             return Ok(());
         }
 
@@ -242,14 +242,14 @@ impl XinferenceManager {
         // Wait for server to be ready
         self.wait_for_ready().await?;
 
-        info!("Xinference server started successfully");
+        debug!("Xinference server started successfully");
         Ok(())
     }
 
     /// Stop the Xinference server
     pub async fn stop(&mut self) -> Result<()> {
         if let Some(mut child) = self.process.take() {
-            info!("Stopping Xinference server...");
+            debug!("Stopping Xinference server...");
 
             // Send kill signal
             if let Err(e) = child.kill() {
@@ -261,7 +261,7 @@ impl XinferenceManager {
                 warn!("Failed to wait for xinference process: {}", e);
             }
 
-            info!("Xinference server stopped");
+            debug!("Xinference server stopped");
         }
 
         self.launched_models.clear();
@@ -477,7 +477,7 @@ impl XinferenceManager {
 
     /// Launch a model in Xinference
     pub async fn launch_model(&mut self, model_name: &str, model_type: &str) -> Result<String> {
-        info!("Launching {} model: {}", model_type, model_name);
+        debug!("Launching {} model: {}", model_type, model_name);
 
         let mut url = self
             .base_url
@@ -510,7 +510,7 @@ impl XinferenceManager {
         self.launched_models
             .insert(model_name.to_string(), launch_response.model_uid.clone());
 
-        info!(
+        debug!(
             model_name = %model_name,
             model_type = %model_type,
             model_uid = %launch_response.model_uid,

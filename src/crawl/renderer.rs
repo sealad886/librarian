@@ -54,7 +54,7 @@ mod browser_impl {
     use std::time::Duration;
     use tokio::sync::Mutex;
     use tokio::time::{timeout, Instant};
-    use tracing::{debug, info, warn};
+    use tracing::{debug, warn};
 
     /// Headless browser renderer
     pub struct HeadlessRenderer {
@@ -80,7 +80,7 @@ mod browser_impl {
                 return Ok(());
             }
 
-            info!("Launching headless Chrome browser...");
+            debug!("Launching headless Chrome browser...");
 
             let mut builder = BrowserConfig::builder();
 
@@ -137,7 +137,7 @@ mod browser_impl {
             *browser_guard = Some(browser);
             *self.handler_handle.lock().await = Some(handle);
 
-            info!("Headless browser launched successfully");
+            debug!("Headless browser launched successfully");
             Ok(())
         }
 
