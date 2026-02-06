@@ -26,16 +26,19 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             label: macos-arm64
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             label: macos-x86_64
+            cross: true
           # ── Linux ──────────────────────────────────────────
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             label: linux-x86_64
-          - os: ubuntu-24.04-arm64
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             label: linux-arm64
+            cross: true
+            linker: aarch64-linux-gnu-gcc
           # ── Windows ────────────────────────────────────────
           - os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -46,6 +49,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -66,6 +75,8 @@ jobs:
 
       # ── Full build (default features: pdf + js-rendering) ──
       - name: Build full
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker || '' }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package full (unix)
@@ -90,6 +101,8 @@ jobs:
 
       # ── Slim build (no default features) ───────────────────
       - name: Build slim
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker || '' }}
         run: cargo build --release --target ${{ matrix.target }} --no-default-features
 
       - name: Package slim (unix)
