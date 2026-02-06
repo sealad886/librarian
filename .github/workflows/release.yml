@@ -54,10 +54,30 @@ jobs:
         if: matrix.linker
         run: |
           sudo dpkg --add-architecture arm64
-          # Add arm64 sources for cross-compilation libraries
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list.d/*.list 2>/dev/null || true
-          echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse' | sudo tee /etc/apt/sources.list.d/arm64.list
-          echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse' | sudo tee -a /etc/apt/sources.list.d/arm64.list
+
+          # Constrain DEB822-format sources (.sources) to amd64 only
+          for f in /etc/apt/sources.list.d/*.sources; do
+            [ -f "$f" ] || continue
+            if ! grep -q '^Architectures:' "$f"; then
+              sudo sed -i '/^Types:/a Architectures: amd64' "$f"
+            fi
+          done
+
+          # Constrain .list-format sources — skip lines that already have [arch=...]
+          for f in /etc/apt/sources.list.d/*.list; do
+            [ -f "$f" ] || continue
+            sudo sed -i '/^deb \[/!s/^deb /deb [arch=amd64] /' "$f"
+          done
+
+          # Add arm64 package sources (DEB822 format)
+          cat <<'EOF' | sudo tee /etc/apt/sources.list.d/arm64-cross.sources
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: noble noble-updates
+          Components: main restricted universe multiverse
+          Architectures: arm64
+          EOF
+
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu libssl-dev:arm64 pkg-config
 
@@ -80,12 +100,18 @@ jobs:
 
       # ── Full build (default features: pdf + js-rendering) ──
       - name: Build full
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker || '' }}
-          OPENSSL_STATIC: ${{ matrix.linker && '1' || '' }}
-          OPENSSL_LIB_DIR: ${{ matrix.linker && '/usr/lib/aarch64-linux-gnu' || '' }}
-          OPENSSL_INCLUDE_DIR: ${{ matrix.linker && '/usr/include/aarch64-linux-gnu' || '' }}
-        run: cargo build --release --target ${{ matrix.target }}
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.linker }}" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="${{ matrix.linker }}"
+            export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+            export PKG_CONFIG_ALLOW_CROSS=1
+            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+            export OPENSSL_STATIC=1
+            export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
+            export OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu
+          fi
+          cargo build --release --target ${{ matrix.target }}
 
       - name: Package full (unix)
         if: runner.os != 'Windows'
@@ -109,12 +135,18 @@ jobs:
 
       # ── Slim build (no default features) ───────────────────
       - name: Build slim
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker || '' }}
-          OPENSSL_STATIC: ${{ matrix.linker && '1' || '' }}
-          OPENSSL_LIB_DIR: ${{ matrix.linker && '/usr/lib/aarch64-linux-gnu' || '' }}
-          OPENSSL_INCLUDE_DIR: ${{ matrix.linker && '/usr/include/aarch64-linux-gnu' || '' }}
-        run: cargo build --release --target ${{ matrix.target }} --no-default-features
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.linker }}" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER="${{ matrix.linker }}"
+            export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+            export PKG_CONFIG_ALLOW_CROSS=1
+            export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig
+            export OPENSSL_STATIC=1
+            export OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu
+            export OPENSSL_INCLUDE_DIR=/usr/include/aarch64-linux-gnu
+          fi
+          cargo build --release --target ${{ matrix.target }} --no-default-features
 
       - name: Package slim (unix)
         if: runner.os != 'Windows'
