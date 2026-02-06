@@ -35,7 +35,32 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
 
 ## Installation
 
-### Prerequisites
+### Prebuilt Binaries
+
+Download the latest release for your platform from
+[GitHub Releases](https://github.com/sealad886/librarian/releases).
+
+| Platform | Architecture | Variant | Archive |
+|----------|-------------|---------|-------------------------------------------|
+| macOS | arm64 | full | `librarian-v*-macos-arm64-full.tar.gz` |
+| macOS | x86_64 | full | `librarian-v*-macos-x86_64-full.tar.gz` |
+| Linux | x86_64 | full | `librarian-v*-linux-x86_64-full.tar.gz` |
+| Linux | arm64 | full | `librarian-v*-linux-arm64-full.tar.gz` |
+| Windows | x86_64 | full | `librarian-v*-windows-x86_64-full.zip` |
+
+Each platform also ships a **slim** variant (`-slim` suffix) built with
+`--no-default-features` — smaller binary without PDF parsing or headless
+browser rendering.
+
+Verify downloads against the `SHA256SUMS` file included in each release.
+
+```bash
+# Example: macOS arm64
+tar xzf librarian-v1.0.1-macos-arm64-full.tar.gz
+cp librarian-v1.0.1-macos-arm64-full/librarian /usr/local/bin/
+```
+
+### Prerequisites (Build from Source)
 
 - **Rust** (1.70+): Install via [rustup](https://rustup.rs/)
 - **Qdrant**: Vector database (see [Qdrant Installation](#qdrant-setup))
@@ -611,7 +636,7 @@ LIBRARIAN_XINFERENCE_CACHE_DIR=/path/to/cache  # Override Xinference registry sn
 
 ## License
 
-MIT License - see LICENSE file for details.
+GPL-3.0-or-later — see [LICENSE](LICENSE) for details.
 
 ## Contributing
 

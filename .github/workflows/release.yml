@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── macOS ──────────────────────────────────────────
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: macos-arm64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            label: macos-x86_64
+          # ── Linux ──────────────────────────────────────────
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            label: linux-x86_64
+          - os: ubuntu-24.04-arm64
+            target: aarch64-unknown-linux-gnu
+            label: linux-arm64
+          # ── Windows ────────────────────────────────────────
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x86_64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            version="v$(grep '^version = ' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')-dev"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Full build (default features: pdf + js-rendering) ──
+      - name: Build full
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package full (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          staging="librarian-${{ steps.version.outputs.version }}-${{ matrix.label }}-full"
+          mkdir "$staging"
+          cp "target/${{ matrix.target }}/release/librarian" "$staging/"
+          cp LICENSE "$staging/"
+          tar czf "$staging.tar.gz" "$staging"
+
+      - name: Package full (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          staging="librarian-${{ steps.version.outputs.version }}-${{ matrix.label }}-full"
+          mkdir "$staging"
+          cp "target/${{ matrix.target }}/release/librarian.exe" "$staging/"
+          cp LICENSE "$staging/"
+          7z a "$staging.zip" "$staging"
+
+      # ── Slim build (no default features) ───────────────────
+      - name: Build slim
+        run: cargo build --release --target ${{ matrix.target }} --no-default-features
+
+      - name: Package slim (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          staging="librarian-${{ steps.version.outputs.version }}-${{ matrix.label }}-slim"
+          mkdir "$staging"
+          cp "target/${{ matrix.target }}/release/librarian" "$staging/"
+          cp LICENSE "$staging/"
+          tar czf "$staging.tar.gz" "$staging"
+
+      - name: Package slim (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          staging="librarian-${{ steps.version.outputs.version }}-${{ matrix.label }}-slim"
+          mkdir "$staging"
+          cp "target/${{ matrix.target }}/release/librarian.exe" "$staging/"
+          cp LICENSE "$staging/"
+          7z a "$staging.zip" "$staging"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.label }}
+          path: |
+            librarian-*.tar.gz
+            librarian-*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd dist
+          sha256sum librarian-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/librarian-*.tar.gz
+            dist/librarian-*.zip
+            dist/SHA256SUMS

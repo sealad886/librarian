@@ -13,6 +13,10 @@ Thank you for your interest in contributing to librarian! This document provides
 
 ## Development Setup
 
+> **Not a contributor?** Prebuilt binaries for all major platforms are available on
+> the [Releases](https://github.com/sealad886/librarian/releases) page — no Rust
+> toolchain required.
+
 ### Prerequisites
 
 - Rust 1.70+ (install via [rustup](https://rustup.rs/))
