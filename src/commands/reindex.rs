@@ -1,16 +1,12 @@
 //! Reindex command - re-embed all documents
 
 use crate::config::{Config, ResolvedEmbeddingConfig};
-use crate::embed::{
-    embed_images_in_batches, embed_in_batches, embed_multimode_in_batches, fuse_embeddings,
-    Embedder, ImageEmbedInput,
-};
+use crate::embed::{embed_images_with_optional_text_fusion, Embedder};
 use crate::error::{Error, Result};
 use crate::meta::{MetaDb, RunOperation, RunStatus};
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
-use uuid::Uuid;
 
 /// Reindex statistics
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -63,18 +59,7 @@ pub async fn cmd_reindex(
     let mut stats = ReindexStats::default();
 
     // Get sources to reindex
-    let sources = match &options.source_ids {
-        Some(ids) => {
-            let mut sources = Vec::new();
-            for id in ids {
-                if let Some(source) = db.get_source(id).await? {
-                    sources.push(source);
-                }
-            }
-            sources
-        }
-        None => db.list_sources().await?,
-    };
+    let sources = db.resolve_sources(options.source_ids.as_deref()).await?;
 
     stats.sources_processed = sources.len();
 
@@ -199,8 +184,7 @@ async fn reindex_document(
         }
 
         for (chunk, embedding) in text_chunks.iter().zip(all_embeddings.into_iter()) {
-            let point_id = Uuid::try_parse(&chunk.id)
-                .unwrap_or_else(|_| Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk.id.as_bytes()));
+            let point_id = chunk.point_uuid();
 
             let headings: Option<Vec<String>> = chunk
                 .headings
@@ -290,52 +274,14 @@ async fn reindex_document(
                 })
                 .collect();
 
-            let embeddings = if embedding.supports_joint_inputs {
-                let inputs = image_paths
-                    .iter()
-                    .zip(contexts.iter())
-                    .map(|(path, text)| ImageEmbedInput {
-                        image_path: path.clone(),
-                        text: text.clone(),
-                    })
-                    .collect::<Vec<_>>();
-                embed_multimode_in_batches(embedder, inputs, batch_size).await?
-            } else {
-                let image_embeddings =
-                    embed_images_in_batches(embedder, image_paths, batch_size).await?;
-                let mut fused_embeddings = image_embeddings.clone();
-
-                let mut text_inputs = Vec::new();
-                let mut text_indices = Vec::new();
-                for (idx, context) in contexts.iter().enumerate() {
-                    if let Some(text) = context {
-                        if !text.trim().is_empty() {
-                            text_indices.push(idx);
-                            text_inputs.push(text.clone());
-                        }
-                    }
-                }
-
-                if !text_inputs.is_empty() {
-                    let text_embeddings =
-                        embed_in_batches(embedder, text_inputs, batch_size).await?;
-                    for (offset, idx) in text_indices.iter().enumerate() {
-                        let image_vec = &image_embeddings[*idx];
-                        let text_vec = &text_embeddings[offset];
-                        if image_vec.len() != text_vec.len() {
-                            return Err(Error::Embedding(format!(
-                                "Dual-encoder fusion dimension mismatch for model '{}': image {} != text {}",
-                                embedding.model_id,
-                                image_vec.len(),
-                                text_vec.len()
-                            )));
-                        }
-                        fused_embeddings[*idx] = fuse_embeddings(image_vec, text_vec);
-                    }
-                }
-
-                fused_embeddings
-            };
+            let embeddings = embed_images_with_optional_text_fusion(
+                embedder,
+                embedding,
+                image_paths,
+                contexts,
+                batch_size,
+            )
+            .await?;
 
             if embeddings.is_empty() {
                 warn!(doc_id = %doc_id, "No image embeddings returned");
@@ -348,9 +294,7 @@ async fn reindex_document(
                 )));
             } else {
                 for (chunk, embedding_vec) in image_meta.iter().zip(embeddings.into_iter()) {
-                    let point_id = Uuid::try_parse(&chunk.id).unwrap_or_else(|_| {
-                        Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk.id.as_bytes())
-                    });
+                    let point_id = chunk.point_uuid();
 
                     let mut payload = ChunkPayload::new(
                         source_id.to_string(),

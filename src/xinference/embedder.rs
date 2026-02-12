@@ -5,11 +5,13 @@
 use crate::config::ResolvedEmbeddingConfig;
 use crate::embed::{Embedder, ImageEmbedInput, MediaModality};
 use crate::error::{Error, Result};
-use crate::xinference::{hf_to_xinference_name, xinference_request_json, SharedXinferenceManager};
+use crate::xinference::{
+    build_xinference_http_client, hf_to_xinference_name, xinference_request_json,
+    SharedXinferenceManager,
+};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tracing::{debug, info};
 use url::Url;
 
@@ -108,7 +110,7 @@ impl XinferenceEmbedder {
             model_name: model.to_string(),
             dimension,
             allow_custom,
-            client: build_xinference_client()?,
+            client: build_xinference_http_client()?,
         })
     }
 
@@ -227,13 +229,6 @@ impl Embedder for XinferenceEmbedder {
         // Xinference only supports text embeddings via OpenAI-compatible API
         vec![MediaModality::Text]
     }
-}
-
-fn build_xinference_client() -> Result<Client> {
-    Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|e| Error::Embedding(format!("Failed to create HTTP client: {}", e)))
 }
 
 #[cfg(test)]

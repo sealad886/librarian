@@ -20,7 +20,7 @@ use crate::xinference::{
 };
 use async_trait::async_trait;
 use std::path::Path;
-use tracing::{debug};
+use tracing::debug;
 
 /// Supported media modalities for multimodal embedding
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,7 +261,7 @@ pub trait Embedder: Send + Sync {
 /// Create an embedder based on configuration (sync, for HTTP backend only)
 pub fn create_embedder(config: &ResolvedEmbeddingConfig) -> Result<Box<dyn Embedder>> {
     let embedder = HttpEmbedder::new(config)?;
-    Ok(Box::new(embedder))
+    Ok(Box::new(embedder) as Box<dyn Embedder>)
 }
 
 /// Create an embedder automatically based on backend kind
@@ -298,11 +298,11 @@ pub async fn create_embedder_auto(
             // Create embedder (this will launch model if needed)
             let embedder =
                 XinferenceEmbedder::from_global_manager(manager_lock.clone(), config).await?;
-            Ok(Box::new(embedder))
+            Ok(Box::new(embedder) as Box<dyn Embedder>)
         }
         EmbeddingBackendKind::Http => {
             let embedder = HttpEmbedder::new(config)?;
-            Ok(Box::new(embedder))
+            Ok(Box::new(embedder) as Box<dyn Embedder>)
         }
     }
 }
@@ -318,11 +318,11 @@ pub async fn create_embedder_with_xinference(
                 Error::Config("Xinference manager required for xinference backend".into())
             })?;
             let embedder = XinferenceEmbedder::new(manager, config).await?;
-            Ok(Box::new(embedder))
+            Ok(Box::new(embedder) as Box<dyn Embedder>)
         }
         EmbeddingBackendKind::Http => {
             let embedder = HttpEmbedder::new(config)?;
-            Ok(Box::new(embedder))
+            Ok(Box::new(embedder) as Box<dyn Embedder>)
         }
     }
 }
@@ -376,6 +376,90 @@ pub async fn embed_multimode_in_batches(
     }
 
     Ok(all_embeddings)
+}
+
+/// Embed image inputs with optional text context.
+///
+/// For joint-input models, this calls multimode embedding directly.
+/// For dual-encoder models, this fuses image vectors with optional text vectors.
+pub async fn embed_images_with_optional_text_fusion(
+    embedder: &dyn Embedder,
+    embedding: &ResolvedEmbeddingConfig,
+    image_paths: Vec<String>,
+    contexts: Vec<Option<String>>,
+    batch_size: usize,
+) -> Result<Vec<Vec<f32>>> {
+    if image_paths.len() != contexts.len() {
+        return Err(Error::Embedding(format!(
+            "Image/context count mismatch for model '{}': image_paths {}, contexts {}",
+            embedding.model_id,
+            image_paths.len(),
+            contexts.len()
+        )));
+    }
+
+    if embedding.supports_joint_inputs {
+        let inputs = image_paths
+            .iter()
+            .zip(contexts.iter())
+            .map(|(path, text)| ImageEmbedInput {
+                image_path: path.clone(),
+                text: text.clone(),
+            })
+            .collect::<Vec<_>>();
+        return embed_multimode_in_batches(embedder, inputs, batch_size).await;
+    }
+
+    let image_embeddings = embed_images_in_batches(embedder, image_paths, batch_size).await?;
+    if image_embeddings.len() != contexts.len() {
+        return Err(Error::Embedding(format!(
+            "Image embedding count mismatch for model '{}': expected {}, got {}",
+            embedding.model_id,
+            contexts.len(),
+            image_embeddings.len()
+        )));
+    }
+
+    let mut fused_embeddings = image_embeddings.clone();
+    let mut text_inputs = Vec::new();
+    let mut text_indices = Vec::new();
+
+    for (idx, context) in contexts.iter().enumerate() {
+        if let Some(text) = context {
+            if !text.trim().is_empty() {
+                text_indices.push(idx);
+                text_inputs.push(text.clone());
+            }
+        }
+    }
+
+    if !text_inputs.is_empty() {
+        let text_embeddings = embed_in_batches(embedder, text_inputs, batch_size).await?;
+        if text_embeddings.len() != text_indices.len() {
+            return Err(Error::Embedding(format!(
+                "Text context embedding count mismatch for model '{}': expected {}, got {}",
+                embedding.model_id,
+                text_indices.len(),
+                text_embeddings.len()
+            )));
+        }
+
+        for (offset, idx) in text_indices.iter().enumerate() {
+            let image_vec = &image_embeddings[*idx];
+            let text_vec = &text_embeddings[offset];
+            if image_vec.len() != text_vec.len() {
+                return Err(Error::Embedding(format!(
+                    "Dual-encoder fusion dimension mismatch for model '{}': image {} != text {}",
+                    embedding.model_id,
+                    image_vec.len(),
+                    text_vec.len()
+                )));
+            }
+            fused_embeddings[*idx] = fuse_embeddings(image_vec, text_vec);
+        }
+    }
+
+    Ok(fused_embeddings)
 }
 
 #[cfg(test)]

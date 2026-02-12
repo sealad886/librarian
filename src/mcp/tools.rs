@@ -5,8 +5,8 @@ use crate::commands::{
     cmd_ingest_dir, cmd_ingest_sitemap, cmd_ingest_url, cmd_list_sources, cmd_query, cmd_reindex,
     cmd_update, CrawlOverrides, QueryOptions, ReindexOptions, UpdateOptions,
 };
-use crate::config::Config;
-use crate::embed::create_embedder_auto;
+use crate::config::{Config, ResolvedEmbeddingConfig};
+use crate::embed::{create_embedder_auto, Embedder};
 use crate::error::Error;
 use crate::meta::{MetaDb, RunOperation, SourceType};
 use crate::store::QdrantStore;
@@ -477,6 +477,29 @@ fn parse_string_array(value: Option<&Value>) -> Option<Vec<String>> {
 
 type AppResult<T> = std::result::Result<T, Error>;
 
+struct BackgroundWriteContext {
+    db: MetaDb,
+    embedding_config: ResolvedEmbeddingConfig,
+    embedder: Box<dyn Embedder>,
+    store: QdrantStore,
+}
+
+async fn build_background_write_context(config: &Config) -> AppResult<BackgroundWriteContext> {
+    let db = MetaDb::connect(config).await?;
+    db.init_schema().await?;
+    let embedding_config = config.resolve_embedding_config().await?;
+    let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
+    // Use validated connection for write operations.
+    let store = QdrantStore::connect_validated(config, &embedding_config, &db).await?;
+
+    Ok(BackgroundWriteContext {
+        db,
+        embedding_config,
+        embedder,
+        store,
+    })
+}
+
 async fn run_ingest_background(
     config: Config,
     source_type: SourceType,
@@ -486,12 +509,11 @@ async fn run_ingest_background(
     max_depth: Option<u32>,
     path_prefix: Option<String>,
 ) -> AppResult<()> {
-    let db = MetaDb::connect(&config).await?;
-    db.init_schema().await?;
-    let embedding_config = config.resolve_embedding_config().await?;
-    let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
-    // Use validated connection for write operations
-    let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
+    let context = build_background_write_context(&config).await?;
+    let db = context.db;
+    let embedding_config = context.embedding_config;
+    let embedder = context.embedder;
+    let store = context.store;
 
     match source_type {
         SourceType::Dir => {
@@ -554,12 +576,11 @@ async fn run_update_background(
     source_ids: Option<Vec<String>>,
     prune_orphans: bool,
 ) -> AppResult<()> {
-    let db = MetaDb::connect(&config).await?;
-    db.init_schema().await?;
-    let embedding_config = config.resolve_embedding_config().await?;
-    let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
-    // Use validated connection for write operations
-    let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
+    let context = build_background_write_context(&config).await?;
+    let db = context.db;
+    let embedding_config = context.embedding_config;
+    let embedder = context.embedder;
+    let store = context.store;
 
     let options = UpdateOptions {
         source_ids,
@@ -583,12 +604,11 @@ async fn run_reindex_background(
     source_ids: Option<Vec<String>>,
     batch_size: usize,
 ) -> AppResult<()> {
-    let db = MetaDb::connect(&config).await?;
-    db.init_schema().await?;
-    let embedding_config = config.resolve_embedding_config().await?;
-    let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
-    // Use validated connection for write operations
-    let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
+    let context = build_background_write_context(&config).await?;
+    let db = context.db;
+    let embedding_config = context.embedding_config;
+    let embedder = context.embedder;
+    let store = context.store;
 
     let options = ReindexOptions {
         source_ids,

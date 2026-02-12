@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::FromRow;
 use std::str::FromStr;
-use tracing::{debug};
+use tracing::debug;
 use uuid::Uuid;
 
 /// Source types
@@ -296,6 +296,12 @@ impl Chunk {
             .and_then(|j| serde_json::from_str(j).ok())
             .unwrap_or_default()
     }
+
+    /// Return the canonical Qdrant point UUID for this chunk.
+    pub fn point_uuid(&self) -> Uuid {
+        Uuid::try_parse(&self.qdrant_point_id)
+            .unwrap_or_else(|_| Uuid::new_v5(&Uuid::NAMESPACE_OID, self.qdrant_point_id.as_bytes()))
+    }
 }
 
 /// An ingestion run record
@@ -532,7 +538,10 @@ impl MetaDb {
     /// Upsert collection configuration
     pub async fn upsert_collection_config(&self, config: &CollectionConfigRecord) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        debug!("Upserting collection config for {} at {}", config.collection_name, now);
+        debug!(
+            "Upserting collection config for {} at {}",
+            config.collection_name, now
+        );
         sqlx::query(
             "INSERT INTO collection_config 
              (collection_name, vector_dimension, embedding_model, embedding_family, distance_metric, created_at, updated_at, verified_at)
@@ -634,6 +643,25 @@ impl MetaDb {
             .fetch_all(&self.pool)
             .await?;
         Ok(sources)
+    }
+
+    /// Resolve sources by optional source ID list.
+    ///
+    /// When `source_ids` is `None`, returns all sources.
+    /// Missing IDs are ignored.
+    pub async fn resolve_sources(&self, source_ids: Option<&[String]>) -> Result<Vec<Source>> {
+        match source_ids {
+            Some(ids) => {
+                let mut sources = Vec::new();
+                for id in ids {
+                    if let Some(source) = self.get_source(id).await? {
+                        sources.push(source);
+                    }
+                }
+                Ok(sources)
+            }
+            None => self.list_sources().await,
+        }
     }
 
     /// Delete a source and all its documents/chunks
@@ -883,13 +911,12 @@ impl MetaDb {
         doc_id: &str,
         content_hash: &str,
     ) -> Result<Option<Chunk>> {
-        let chunk = sqlx::query_as::<_, Chunk>(
-            "SELECT * FROM chunks WHERE doc_id = ? AND content_hash = ?",
-        )
-        .bind(doc_id)
-        .bind(content_hash)
-        .fetch_optional(&self.pool)
-        .await?;
+        let chunk =
+            sqlx::query_as::<_, Chunk>("SELECT * FROM chunks WHERE doc_id = ? AND chunk_hash = ?")
+                .bind(doc_id)
+                .bind(content_hash)
+                .fetch_optional(&self.pool)
+                .await?;
         Ok(chunk)
     }
 
@@ -1176,6 +1203,14 @@ pub struct ChunkRecord {
     pub modality: String,
     pub media_url: Option<String>,
     pub media_hash: Option<String>,
+}
+
+impl ChunkRecord {
+    /// Return the canonical Qdrant point UUID for this chunk record.
+    pub fn point_uuid(&self) -> Uuid {
+        Uuid::try_parse(&self.id)
+            .unwrap_or_else(|_| Uuid::new_v5(&Uuid::NAMESPACE_OID, self.id.as_bytes()))
+    }
 }
 
 /// Statistics for a single source

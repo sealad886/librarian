@@ -9,7 +9,7 @@ use crate::rank::{RankedResult, Ranker};
 use crate::rerank::{create_reranker, Reranker};
 use crate::store::{QdrantStore, SearchFilter};
 use serde::Serialize;
-use tracing::{debug};
+use tracing::debug;
 
 /// Query options
 #[derive(Debug, Clone, Default)]
@@ -171,6 +171,14 @@ async fn apply_reranker(
     Ok(ordered)
 }
 
+fn chunk_preview(chunk_text: &str) -> String {
+    if chunk_text.len() > 200 {
+        format!("{}...", &chunk_text[..200].trim())
+    } else {
+        chunk_text.trim().to_string()
+    }
+}
+
 /// Print query results to console
 pub fn print_query_results(result: &QueryResult) {
     println!("\n🔍 Query: {}\n", result.query);
@@ -198,11 +206,7 @@ pub fn print_query_results(result: &QueryResult) {
                 let label = r.media_url.as_deref().unwrap_or(r.doc_uri.as_str());
                 println!("   [audio] {}", label);
                 // Show transcript preview
-                let preview = if r.chunk_text.len() > 200 {
-                    format!("{}...", &r.chunk_text[..200].trim())
-                } else {
-                    r.chunk_text.trim().to_string()
-                };
+                let preview = chunk_preview(&r.chunk_text);
                 if !preview.is_empty() {
                     println!("   Transcript: {}\n", preview.replace('\n', " "));
                 } else {
@@ -215,11 +219,7 @@ pub fn print_query_results(result: &QueryResult) {
                 if r.chunk_text.len() > 50 {
                     // Likely a transcript chunk
                     println!("   [video transcript] {}", label);
-                    let preview = if r.chunk_text.len() > 200 {
-                        format!("{}...", &r.chunk_text[..200].trim())
-                    } else {
-                        r.chunk_text.trim().to_string()
-                    };
+                    let preview = chunk_preview(&r.chunk_text);
                     println!("   {}\n", preview.replace('\n', " "));
                 } else {
                     // Likely a keyframe chunk
@@ -228,13 +228,27 @@ pub fn print_query_results(result: &QueryResult) {
             }
             _ => {
                 // Text chunks (default)
-                let preview = if r.chunk_text.len() > 200 {
-                    format!("{}...", &r.chunk_text[..200].trim())
-                } else {
-                    r.chunk_text.trim().to_string()
-                };
+                let preview = chunk_preview(&r.chunk_text);
                 println!("   {}\n", preview.replace('\n', " "));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chunk_preview;
+
+    #[test]
+    fn chunk_preview_trims_short_text() {
+        let preview = chunk_preview("  hello world  ");
+        assert_eq!(preview, "hello world");
+    }
+
+    #[test]
+    fn chunk_preview_truncates_long_text() {
+        let input = format!("{}{}", "x".repeat(200), "tail");
+        let preview = chunk_preview(&input);
+        assert_eq!(preview, format!("{}...", "x".repeat(200)));
     }
 }

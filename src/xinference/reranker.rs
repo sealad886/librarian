@@ -4,11 +4,13 @@
 
 use crate::error::{Error, Result};
 use crate::rerank::{RerankResult, Reranker};
-use crate::xinference::{hf_to_xinference_name, xinference_request_json, SharedXinferenceManager};
+use crate::xinference::{
+    build_xinference_http_client, hf_to_xinference_name, xinference_request_json,
+    SharedXinferenceManager,
+};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tracing::debug;
 
 /// Xinference rerank request
@@ -79,7 +81,7 @@ impl XinferenceReranker {
         Ok(Self {
             manager,
             model_name: model.to_string(),
-            client: build_xinference_client()?,
+            client: build_xinference_http_client()?,
         })
     }
 
@@ -172,13 +174,6 @@ impl Reranker for XinferenceReranker {
     fn model_name(&self) -> &str {
         &self.model_name
     }
-}
-
-fn build_xinference_client() -> Result<Client> {
-    Client::builder()
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|e| Error::Embedding(format!("Failed to create HTTP client: {}", e)))
 }
 
 #[cfg(test)]

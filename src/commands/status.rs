@@ -7,7 +7,7 @@ use crate::store::QdrantStore;
 use clap_complete::Shell;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
-use tracing::{debug};
+use tracing::debug;
 
 /// Status information
 #[derive(Debug, Clone, Serialize, Deserialize)]

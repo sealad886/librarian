@@ -1037,100 +1037,48 @@ fn prompt_usize<F>(label: &str, default: usize, validate: F, auto_accept: bool) 
 where
     F: Fn(usize) -> std::result::Result<(), String>,
 {
-    if auto_accept {
-        return Ok(default);
-    }
-    loop {
-        let value = prompt_string(label, &default.to_string(), |_| Ok(()), false)?;
-        match value.parse::<usize>() {
-            Ok(parsed) => {
-                if let Err(message) = validate(parsed) {
-                    println!("{}", message);
-                    continue;
-                }
-                return Ok(parsed);
-            }
-            Err(_) => println!("Enter a valid number."),
-        }
-    }
+    prompt_number(label, default, validate, auto_accept)
 }
 
 fn prompt_u32<F>(label: &str, default: u32, validate: F, auto_accept: bool) -> Result<u32>
 where
     F: Fn(u32) -> std::result::Result<(), String>,
 {
-    if auto_accept {
-        return Ok(default);
-    }
-    loop {
-        let value = prompt_string(label, &default.to_string(), |_| Ok(()), false)?;
-        match value.parse::<u32>() {
-            Ok(parsed) => {
-                if let Err(message) = validate(parsed) {
-                    println!("{}", message);
-                    continue;
-                }
-                return Ok(parsed);
-            }
-            Err(_) => println!("Enter a valid number."),
-        }
-    }
+    prompt_number(label, default, validate, auto_accept)
 }
 
 fn prompt_u64<F>(label: &str, default: u64, validate: F, auto_accept: bool) -> Result<u64>
 where
     F: Fn(u64) -> std::result::Result<(), String>,
 {
-    if auto_accept {
-        return Ok(default);
-    }
-    loop {
-        let value = prompt_string(label, &default.to_string(), |_| Ok(()), false)?;
-        match value.parse::<u64>() {
-            Ok(parsed) => {
-                if let Err(message) = validate(parsed) {
-                    println!("{}", message);
-                    continue;
-                }
-                return Ok(parsed);
-            }
-            Err(_) => println!("Enter a valid number."),
-        }
-    }
+    prompt_number(label, default, validate, auto_accept)
 }
 
 fn prompt_f32<F>(label: &str, default: f32, validate: F, auto_accept: bool) -> Result<f32>
 where
     F: Fn(f32) -> std::result::Result<(), String>,
 {
-    if auto_accept {
-        return Ok(default);
-    }
-    loop {
-        let value = prompt_string(label, &default.to_string(), |_| Ok(()), false)?;
-        match value.parse::<f32>() {
-            Ok(parsed) => {
-                if let Err(message) = validate(parsed) {
-                    println!("{}", message);
-                    continue;
-                }
-                return Ok(parsed);
-            }
-            Err(_) => println!("Enter a valid number."),
-        }
-    }
+    prompt_number(label, default, validate, auto_accept)
 }
 
 fn prompt_f64<F>(label: &str, default: f64, validate: F, auto_accept: bool) -> Result<f64>
 where
     F: Fn(f64) -> std::result::Result<(), String>,
 {
+    prompt_number(label, default, validate, auto_accept)
+}
+
+fn prompt_number<T, F>(label: &str, default: T, validate: F, auto_accept: bool) -> Result<T>
+where
+    T: std::fmt::Display + std::str::FromStr + Copy,
+    F: Fn(T) -> std::result::Result<(), String>,
+{
     if auto_accept {
         return Ok(default);
     }
     loop {
         let value = prompt_string(label, &default.to_string(), |_| Ok(()), false)?;
-        match value.parse::<f64>() {
+        match value.parse::<T>() {
             Ok(parsed) => {
                 if let Err(message) = validate(parsed) {
                     println!("{}", message);

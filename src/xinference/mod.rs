@@ -33,8 +33,17 @@ use url::Url;
 
 /// Default Xinference server port
 pub const DEFAULT_XINFERENCE_PORT: u16 = 9997;
+/// Shared timeout for Xinference HTTP calls.
+pub const XINFERENCE_HTTP_TIMEOUT_SECS: u64 = 300;
 
 pub type SharedXinferenceManager = Arc<Mutex<Option<XinferenceManager>>>;
+
+pub(crate) fn build_xinference_http_client() -> Result<Client> {
+    Client::builder()
+        .timeout(Duration::from_secs(XINFERENCE_HTTP_TIMEOUT_SECS))
+        .build()
+        .map_err(|e| Error::Embedding(format!("Failed to create HTTP client: {}", e)))
+}
 
 /// Xinference model specification for embedding models
 #[derive(Debug, Clone)]
@@ -161,10 +170,7 @@ pub struct XinferenceManager {
 impl XinferenceManager {
     /// Create a new XinferenceManager with the given base URL.
     pub fn new(base_url: Url, auth_token: Option<String>) -> Result<Self> {
-        let client = Client::builder()
-            .timeout(Duration::from_secs(300))
-            .build()
-            .map_err(|e| Error::Embedding(format!("Failed to create HTTP client: {}", e)))?;
+        let client = build_xinference_http_client()?;
 
         debug!(base_url = %base_url, "Initialized Xinference manager");
 

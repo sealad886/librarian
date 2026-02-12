@@ -43,18 +43,7 @@ pub async fn cmd_prune(
     let mut stats = PruneStats::default();
 
     // Get sources to check
-    let sources = match &options.source_ids {
-        Some(ids) => {
-            let mut sources = Vec::new();
-            for id in ids {
-                if let Some(source) = db.get_source(id).await? {
-                    sources.push(source);
-                }
-            }
-            sources
-        }
-        None => db.list_sources().await?,
-    };
+    let sources = db.resolve_sources(options.source_ids.as_deref()).await?;
 
     stats.sources_checked = sources.len();
 
@@ -124,10 +113,7 @@ async fn prune_directory_source(
             if !dry_run {
                 // Get chunks to delete from Qdrant
                 let chunks = db.list_document_chunks(&doc.id).await?;
-                let point_ids: Vec<Uuid> = chunks
-                    .iter()
-                    .filter_map(|c| Uuid::try_parse(&c.id).ok())
-                    .collect();
+                let point_ids: Vec<Uuid> = chunks.iter().map(|c| c.point_uuid()).collect();
 
                 if !point_ids.is_empty() {
                     store.delete_points(&point_ids).await?;
@@ -190,10 +176,7 @@ pub async fn cmd_remove_source(
     // Delete chunks from Qdrant
     for doc in &documents {
         let chunks = db.list_document_chunks(&doc.id).await?;
-        let point_ids: Vec<Uuid> = chunks
-            .iter()
-            .filter_map(|c| Uuid::try_parse(&c.id).ok())
-            .collect();
+        let point_ids: Vec<Uuid> = chunks.iter().map(|c| c.point_uuid()).collect();
 
         if !point_ids.is_empty() {
             store.delete_points(&point_ids).await?;

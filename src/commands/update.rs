@@ -53,18 +53,7 @@ pub async fn cmd_update(
     let mut stats = UpdateStats::default();
 
     // Get sources to update
-    let sources = match &options.source_ids {
-        Some(ids) => {
-            let mut sources = Vec::new();
-            for id in ids {
-                if let Some(source) = db.get_source(id).await? {
-                    sources.push(source);
-                }
-            }
-            sources
-        }
-        None => db.list_sources().await?,
-    };
+    let sources = db.resolve_sources(options.source_ids.as_deref()).await?;
 
     stats.sources_updated = sources.len();
 

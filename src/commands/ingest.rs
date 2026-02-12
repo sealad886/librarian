@@ -3,10 +3,7 @@
 use crate::chunk::{chunk_document, compute_content_hash, TextChunk};
 use crate::config::{Config, ResolvedEmbeddingConfig};
 use crate::crawl::{validate_url_ssrf, CrawledPage, Crawler};
-use crate::embed::{
-    embed_images_in_batches, embed_in_batches, embed_multimode_in_batches, fuse_embeddings,
-    Embedder, ImageEmbedInput,
-};
+use crate::embed::{embed_images_with_optional_text_fusion, embed_in_batches, Embedder};
 use crate::error::{Error, Result};
 use crate::meta::{Chunk, Document, MetaDb, RunOperation, RunStatus, Source, SourceType};
 use crate::parse::{is_audio_file, is_video_file, ExtractedMedia, ParsedDocument};
@@ -20,8 +17,6 @@ use image::imageops::FilterType;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-#[cfg(test)]
-use std::net::{IpAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -273,48 +268,14 @@ fn select_audio_candidates(config: &Config, doc: &ParsedDocument) -> Vec<Extract
     use crate::parse::MediaModality;
 
     let mm = &config.crawl.multimodal;
-    if !mm.enabled || !mm.include_audio {
-        return Vec::new();
-    }
-
-    let audio_config = &mm.audio;
-    let mut candidates: Vec<ExtractedMedia> = Vec::new();
-    let mut seen_urls: HashSet<String> = HashSet::new();
-
-    for m in &doc.media {
-        if m.modality != MediaModality::Audio {
-            continue;
-        }
-
-        // Check MIME type if available
-        if let Some(ref mime) = m.mime_type {
-            if !audio_config
-                .allowed_mime_types
-                .iter()
-                .any(|allowed| mime.starts_with(allowed))
-            {
-                debug!(url = %m.url, mime = %mime, "Rejected audio candidate (MIME not allowed)");
-                continue;
-            }
-        }
-
-        // Dedupe by URL
-        let key = normalize_media_url(&m.url);
-        if seen_urls.contains(&key) {
-            continue;
-        }
-        seen_urls.insert(key);
-
-        candidates.push(m.clone());
-
-        // Limit to max_assets_per_page
-        if candidates.len() >= mm.max_assets_per_page {
-            break;
-        }
-    }
-
-    debug!(count = candidates.len(), "Selected audio candidates");
-    candidates
+    select_media_candidates(
+        config,
+        doc,
+        MediaModality::Audio,
+        &mm.audio.allowed_mime_types,
+        mm.include_audio,
+        "audio",
+    )
 }
 
 /// Select video candidates from parsed document media
@@ -326,27 +287,44 @@ fn select_video_candidates(config: &Config, doc: &ParsedDocument) -> Vec<Extract
     use crate::parse::MediaModality;
 
     let mm = &config.crawl.multimodal;
-    if !mm.enabled || !mm.include_video {
+    select_media_candidates(
+        config,
+        doc,
+        MediaModality::Video,
+        &mm.video.allowed_mime_types,
+        mm.include_video,
+        "video",
+    )
+}
+
+fn select_media_candidates(
+    config: &Config,
+    doc: &ParsedDocument,
+    modality: crate::parse::MediaModality,
+    allowed_mime_types: &[String],
+    enabled_for_modality: bool,
+    label: &str,
+) -> Vec<ExtractedMedia> {
+    let mm = &config.crawl.multimodal;
+    if !mm.enabled || !enabled_for_modality {
         return Vec::new();
     }
 
-    let video_config = &mm.video;
     let mut candidates: Vec<ExtractedMedia> = Vec::new();
     let mut seen_urls: HashSet<String> = HashSet::new();
 
     for m in &doc.media {
-        if m.modality != MediaModality::Video {
+        if m.modality != modality {
             continue;
         }
 
         // Check MIME type if available
         if let Some(ref mime) = m.mime_type {
-            if !video_config
-                .allowed_mime_types
+            if !allowed_mime_types
                 .iter()
                 .any(|allowed| mime.starts_with(allowed))
             {
-                debug!(url = %m.url, mime = %mime, "Rejected video candidate (MIME not allowed)");
+                debug!(url = %m.url, mime = %mime, modality = %label, "Rejected media candidate (MIME not allowed)");
                 continue;
             }
         }
@@ -366,7 +344,7 @@ fn select_video_candidates(config: &Config, doc: &ParsedDocument) -> Vec<Extract
         }
     }
 
-    debug!(count = candidates.len(), "Selected video candidates");
+    debug!(count = candidates.len(), modality = %label, "Selected media candidates");
     candidates
 }
 
@@ -669,10 +647,7 @@ async fn process_audio_file(
     // Delete old audio chunks for this document
     let old_chunks = db.get_chunks_by_modality(&doc.id, "audio").await?;
     if !old_chunks.is_empty() {
-        let point_ids: Vec<Uuid> = old_chunks
-            .iter()
-            .filter_map(|c| Uuid::try_parse(&c.qdrant_point_id).ok())
-            .collect();
+        let point_ids: Vec<Uuid> = old_chunks.iter().map(|c| c.point_uuid()).collect();
         if !point_ids.is_empty() {
             store.delete_points(&point_ids).await?;
         }
@@ -692,8 +667,7 @@ async fn process_audio_file(
     }
 
     // Create Qdrant point
-    let point_id = Uuid::try_parse(&chunk.qdrant_point_id)
-        .unwrap_or_else(|_| Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk.qdrant_point_id.as_bytes()));
+    let point_id = chunk.point_uuid();
 
     let mut payload = ChunkPayload::new(
         source.id.clone(),
@@ -916,10 +890,7 @@ async fn process_video_file(
     // Delete old video chunks for this document before creating new ones
     let old_chunks = db.get_chunks_by_modality(&doc.id, "video").await?;
     if !old_chunks.is_empty() {
-        let point_ids: Vec<Uuid> = old_chunks
-            .iter()
-            .filter_map(|c| Uuid::try_parse(&c.qdrant_point_id).ok())
-            .collect();
+        let point_ids: Vec<Uuid> = old_chunks.iter().map(|c| c.point_uuid()).collect();
         if !point_ids.is_empty() {
             store.delete_points(&point_ids).await?;
         }
@@ -982,9 +953,7 @@ async fn process_video_file(
                         Some(content_hash.clone()),
                     );
 
-                    let point_id = Uuid::try_parse(&chunk.qdrant_point_id).unwrap_or_else(|_| {
-                        Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk.qdrant_point_id.as_bytes())
-                    });
+                    let point_id = chunk.point_uuid();
 
                     let mut payload = ChunkPayload::new(
                         source.id.clone(),
@@ -1068,13 +1037,7 @@ async fn process_video_file(
                         )
                         .await?;
                         if !embeddings.is_empty() {
-                            let point_id =
-                                Uuid::try_parse(&chunk.qdrant_point_id).unwrap_or_else(|_| {
-                                    Uuid::new_v5(
-                                        &Uuid::NAMESPACE_OID,
-                                        chunk.qdrant_point_id.as_bytes(),
-                                    )
-                                });
+                            let point_id = chunk.point_uuid();
 
                             let mut payload = ChunkPayload::new(
                                 source.id.clone(),
@@ -1167,117 +1130,6 @@ fn hamming_distance(a: u64, b: u64) -> u32 {
 fn is_perceptual_duplicate(hash: u64, seen: &[u64]) -> bool {
     seen.iter()
         .any(|seen_hash| hamming_distance(*seen_hash, hash) <= PERCEPTUAL_HASH_MAX_DISTANCE)
-}
-
-/// Check if an IP address is in a private or reserved range to prevent SSRF attacks
-#[cfg(test)]
-fn is_ip_address_safe(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ipv4) => {
-            // Reject private IP ranges (RFC 1918)
-            if ipv4.is_private() {
-                return false;
-            }
-            // Reject loopback (127.0.0.0/8)
-            if ipv4.is_loopback() {
-                return false;
-            }
-            // Reject link-local (169.254.0.0/16) - includes cloud metadata endpoints
-            if ipv4.is_link_local() {
-                return false;
-            }
-            // Reject broadcast
-            if ipv4.is_broadcast() {
-                return false;
-            }
-            // Reject unspecified (0.0.0.0)
-            if ipv4.is_unspecified() {
-                return false;
-            }
-            // Reject multicast
-            if ipv4.is_multicast() {
-                return false;
-            }
-            // Reject reserved (240.0.0.0/4) - check for class E addresses
-            let octets = ipv4.octets();
-            if octets[0] >= 240 {
-                return false;
-            }
-
-            true
-        }
-        IpAddr::V6(ipv6) => {
-            // Check for IPv4-mapped IPv6 addresses (::ffff:0:0/96)
-            if let Some(ipv4) = ipv6.to_ipv4_mapped() {
-                return is_ip_address_safe(IpAddr::V4(ipv4));
-            }
-
-            // Reject loopback (::1)
-            if ipv6.is_loopback() {
-                return false;
-            }
-            // Reject unspecified (::)
-            if ipv6.is_unspecified() {
-                return false;
-            }
-            // Reject multicast
-            if ipv6.is_multicast() {
-                return false;
-            }
-            // Reject unique local addresses (fc00::/7)
-            let segments = ipv6.segments();
-            if (segments[0] & 0xfe00) == 0xfc00 {
-                return false;
-            }
-            // Reject link-local (fe80::/10)
-            if (segments[0] & 0xffc0) == 0xfe80 {
-                return false;
-            }
-
-            true
-        }
-    }
-}
-
-/// Validate that a URL's resolved IP address is safe to request (not private/reserved)
-#[cfg(test)]
-fn validate_url_safety(url: &str) -> std::result::Result<(), String> {
-    let parsed = Url::parse(url).map_err(|e| format!("Failed to parse URL: {}", e))?;
-
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| "URL has no host".to_string())?;
-
-    // Only validate http/https URLs
-    let scheme = parsed.scheme();
-    if scheme != "http" && scheme != "https" {
-        return Err(format!("Unsupported URL scheme: {}", scheme));
-    }
-
-    // Resolve hostname to IP addresses
-    let port = parsed.port_or_known_default().unwrap_or(80);
-    let socket_addrs = format!("{}:{}", host, port)
-        .to_socket_addrs()
-        .map_err(|e| format!("Failed to resolve hostname '{}': {}", host, e))?;
-
-    // Check all resolved IPs - if any are unsafe, reject the URL
-    let mut has_valid_ip = false;
-    for socket_addr in socket_addrs {
-        let ip = socket_addr.ip();
-        if !is_ip_address_safe(ip) {
-            return Err(format!(
-                "URL resolves to unsafe IP address {}: private or reserved ranges are not allowed",
-                ip
-            ));
-        }
-        has_valid_ip = true;
-    }
-
-    if !has_valid_ip {
-        return Err("URL did not resolve to any IP addresses".to_string());
-    }
-
-    Ok(())
 }
 
 /// Fetch accepted image candidates and cache them under base_dir/assets
@@ -1448,74 +1300,19 @@ async fn embed_cached_images(
         .iter()
         .map(|asset| build_image_context(parsed, &asset.media))
         .collect();
+    let image_paths: Vec<String> = cached_images
+        .iter()
+        .map(|asset| asset.path.to_string_lossy().to_string())
+        .collect();
 
-    let embeddings = if embedding.supports_joint_inputs {
-        let inputs = cached_images
-            .iter()
-            .zip(contexts.iter())
-            .map(|(asset, text)| ImageEmbedInput {
-                image_path: asset.path.to_string_lossy().to_string(),
-                text: text.clone(),
-            })
-            .collect::<Vec<_>>();
-
-        embed_multimode_in_batches(embedder, inputs, batch_size).await?
-    } else {
-        let image_paths: Vec<String> = cached_images
-            .iter()
-            .map(|c| c.path.to_string_lossy().to_string())
-            .collect();
-
-        let image_embeddings = embed_images_in_batches(embedder, image_paths, batch_size).await?;
-        if image_embeddings.len() != cached_images.len() {
-            return Err(Error::Embedding(format!(
-                "Image embedding count mismatch for model '{}': expected {}, got {}",
-                embedding.model_id,
-                cached_images.len(),
-                image_embeddings.len()
-            )));
-        }
-
-        let mut fused_embeddings = image_embeddings.clone();
-        let mut text_inputs = Vec::new();
-        let mut text_indices = Vec::new();
-        for (idx, context) in contexts.iter().enumerate() {
-            if let Some(text) = context {
-                if !text.trim().is_empty() {
-                    text_indices.push(idx);
-                    text_inputs.push(text.clone());
-                }
-            }
-        }
-
-        if !text_inputs.is_empty() {
-            let text_embeddings = embed_in_batches(embedder, text_inputs, batch_size).await?;
-            if text_embeddings.len() != text_indices.len() {
-                return Err(Error::Embedding(format!(
-                    "Text context embedding count mismatch for model '{}': expected {}, got {}",
-                    embedding.model_id,
-                    text_indices.len(),
-                    text_embeddings.len()
-                )));
-            }
-
-            for (offset, idx) in text_indices.iter().enumerate() {
-                let image_vec = &image_embeddings[*idx];
-                let text_vec = &text_embeddings[offset];
-                if image_vec.len() != text_vec.len() {
-                    return Err(Error::Embedding(format!(
-                        "Dual-encoder fusion dimension mismatch for model '{}': image {} != text {}",
-                        embedding.model_id,
-                        image_vec.len(),
-                        text_vec.len()
-                    )));
-                }
-                fused_embeddings[*idx] = fuse_embeddings(image_vec, text_vec);
-            }
-        }
-
-        fused_embeddings
-    };
+    let embeddings = embed_images_with_optional_text_fusion(
+        embedder,
+        embedding,
+        image_paths,
+        contexts,
+        batch_size,
+    )
+    .await?;
 
     if embeddings.is_empty() {
         return Ok((0, 0));
@@ -1599,9 +1396,7 @@ async fn embed_cached_images(
         payload.media_url = Some(asset.media.url.clone());
         payload.media_hash = Some(asset.hash.clone());
 
-        let point_id = Uuid::try_parse(&meta_chunk.qdrant_point_id).unwrap_or_else(|_| {
-            Uuid::new_v5(&Uuid::NAMESPACE_OID, meta_chunk.qdrant_point_id.as_bytes())
-        });
+        let point_id = meta_chunk.point_uuid();
 
         points.push(ChunkPoint {
             id: point_id,
@@ -1965,10 +1760,7 @@ pub async fn cmd_ingest_dir(
         // Get point IDs for stale docs and delete from Qdrant
         for doc_id in &stale_ids {
             if let Ok(chunks) = db.get_chunks(doc_id).await {
-                let point_ids: Vec<Uuid> = chunks
-                    .iter()
-                    .filter_map(|c| Uuid::try_parse(&c.qdrant_point_id).ok())
-                    .collect();
+                let point_ids: Vec<Uuid> = chunks.iter().map(|c| c.point_uuid()).collect();
                 if !point_ids.is_empty() {
                     if let Err(e) = store.delete_points(&point_ids).await {
                         warn!("Failed to delete Qdrant points: {}", e);
@@ -2194,9 +1986,7 @@ async fn process_chunks(
         };
 
         // Parse qdrant_point_id string to Uuid
-        let point_id = Uuid::try_parse(&meta_chunk.qdrant_point_id).unwrap_or_else(|_| {
-            Uuid::new_v5(&Uuid::NAMESPACE_OID, meta_chunk.qdrant_point_id.as_bytes())
-        });
+        let point_id = meta_chunk.point_uuid();
 
         points.push(ChunkPoint {
             id: point_id,
@@ -2332,10 +2122,7 @@ pub async fn cmd_ingest_url(
         info!("Deleted {} stale documents", stale_ids.len());
         for doc_id in &stale_ids {
             if let Ok(chunks) = db.get_chunks(doc_id).await {
-                let point_ids: Vec<Uuid> = chunks
-                    .iter()
-                    .filter_map(|c| Uuid::try_parse(&c.qdrant_point_id).ok())
-                    .collect();
+                let point_ids: Vec<Uuid> = chunks.iter().map(|c| c.point_uuid()).collect();
                 if !point_ids.is_empty() {
                     if let Err(e) = store.delete_points(&point_ids).await {
                         warn!("Failed to delete Qdrant points: {}", e);
@@ -2493,10 +2280,7 @@ pub async fn cmd_ingest_sitemap(
         info!("Deleted {} stale documents", stale_ids.len());
         for doc_id in &stale_ids {
             if let Ok(chunks) = db.get_chunks(doc_id).await {
-                let point_ids: Vec<Uuid> = chunks
-                    .iter()
-                    .filter_map(|c| Uuid::try_parse(&c.qdrant_point_id).ok())
-                    .collect();
+                let point_ids: Vec<Uuid> = chunks.iter().map(|c| c.point_uuid()).collect();
                 if !point_ids.is_empty() {
                     if let Err(e) = store.delete_points(&point_ids).await {
                         warn!("Failed to delete Qdrant points: {}", e);
@@ -2840,7 +2624,6 @@ mod tests {
     use crate::embedding_backend::{EmbeddingBackendConfig, EmbeddingBackendKind};
     use crate::models::MultimodalStrategy;
     use crate::parse::{ContentType, ExtractedMedia, Heading, MediaModality, ParsedDocument};
-    use std::net::{Ipv4Addr, Ipv6Addr};
 
     fn multimodal_config() -> Config {
         let mut config = Config::default();
@@ -2988,133 +2771,34 @@ mod tests {
         assert!(!is_perceptual_duplicate(far, &seen));
     }
 
-    #[test]
-    fn test_is_ip_address_safe_rejects_private_ipv4() {
-        // RFC 1918 private ranges
-        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
-        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
-            172, 16, 0, 1
-        ))));
-        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
-            192, 168, 1, 1
-        ))));
+    #[tokio::test]
+    async fn test_validate_url_ssrf_rejects_non_http() {
+        assert!(validate_url_ssrf("file:///etc/passwd").await.is_err());
+        assert!(validate_url_ssrf("ftp://example.com/file").await.is_err());
     }
 
-    #[test]
-    fn test_is_ip_address_safe_rejects_loopback() {
-        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
-        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(127, 1, 1, 1))));
-    }
-
-    #[test]
-    fn test_is_ip_address_safe_rejects_link_local() {
-        // Link-local range (169.254.0.0/16)
-        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
-            169, 254, 1, 1
-        ))));
-        // AWS/GCP/Azure metadata endpoint
-        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
-            169, 254, 169, 254
-        ))));
-    }
-
-    #[test]
-    fn test_is_ip_address_safe_rejects_special_addresses() {
-        // Unspecified
-        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0))));
-        // Broadcast
-        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
-            255, 255, 255, 255
-        ))));
-        // Multicast
-        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1))));
-        // Class E (reserved)
-        assert!(!is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(240, 0, 0, 1))));
-    }
-
-    #[test]
-    fn test_is_ip_address_safe_accepts_public_ipv4() {
-        // Public IP addresses should be accepted
-        assert!(is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)))); // Google DNS
-        assert!(is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)))); // Cloudflare DNS
-        assert!(is_ip_address_safe(IpAddr::V4(Ipv4Addr::new(
-            142, 250, 185, 46
-        )))); // Example public IP
-    }
-
-    #[test]
-    fn test_validate_url_safety_rejects_non_http() {
-        assert!(validate_url_safety("file:///etc/passwd").is_err());
-        assert!(validate_url_safety("ftp://example.com/file").is_err());
-    }
-
-    #[test]
-    fn test_validate_url_safety_accepts_valid_urls() {
-        // Test with well-known public DNS servers
-        // Google DNS 8.8.8.8 - using direct IP to ensure it's public
-        let result = validate_url_safety("http://8.8.8.8/image.png");
+    #[tokio::test]
+    async fn test_validate_url_ssrf_accepts_valid_urls() {
+        let result = validate_url_ssrf("http://8.8.8.8/image.png").await;
         assert!(result.is_ok(), "Should accept public IP 8.8.8.8");
 
-        // Cloudflare DNS 1.1.1.1
-        let result = validate_url_safety("http://1.1.1.1/image.png");
+        let result = validate_url_ssrf("http://1.1.1.1/image.png").await;
         assert!(result.is_ok(), "Should accept public IP 1.1.1.1");
     }
 
-    #[test]
-    fn test_validate_url_safety_rejects_private_ips_directly() {
-        // Direct IP URLs should be rejected if they're private
-        assert!(validate_url_safety("http://127.0.0.1/image.png").is_err());
-        assert!(validate_url_safety("http://10.0.0.1/image.png").is_err());
-        assert!(validate_url_safety("http://192.168.1.1/image.png").is_err());
-        assert!(validate_url_safety("http://169.254.169.254/latest/meta-data").is_err());
-    }
-
-    #[test]
-    fn test_is_ip_address_safe_rejects_ipv6_loopback() {
-        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
-            0, 0, 0, 0, 0, 0, 0, 1
-        ))));
-    }
-
-    #[test]
-    fn test_is_ip_address_safe_rejects_ipv6_unique_local() {
-        // fc00::/7 unique local addresses
-        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
-            0xfc00, 0, 0, 0, 0, 0, 0, 1
-        ))));
-        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
-            0xfd00, 0, 0, 0, 0, 0, 0, 1
-        ))));
-    }
-
-    #[test]
-    fn test_is_ip_address_safe_rejects_ipv6_link_local() {
-        // fe80::/10 link-local addresses
-        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
-            0xfe80, 0, 0, 0, 0, 0, 0, 1
-        ))));
-    }
-
-    #[test]
-    fn test_is_ip_address_safe_rejects_ipv4_mapped_ipv6_private() {
-        // IPv4-mapped IPv6 address for 192.168.1.1
-        // ::ffff:192.168.1.1 = ::ffff:c0a8:0101
-        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
-            0, 0, 0, 0, 0, 0xffff, 0xc0a8, 0x0101
-        ))));
-
-        // IPv4-mapped IPv6 address for 127.0.0.1
-        // ::ffff:127.0.0.1 = ::ffff:7f00:0001
-        assert!(!is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
-            0, 0, 0, 0, 0, 0xffff, 0x7f00, 0x0001
-        ))));
-    }
-
-    #[test]
-    fn test_is_ip_address_safe_accepts_public_ipv6() {
-        // Google DNS 2001:4860:4860::8888
-        assert!(is_ip_address_safe(IpAddr::V6(Ipv6Addr::new(
-            0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888
-        ))));
+    #[tokio::test]
+    async fn test_validate_url_ssrf_rejects_private_ips_directly() {
+        assert!(validate_url_ssrf("http://127.0.0.1/image.png")
+            .await
+            .is_err());
+        assert!(validate_url_ssrf("http://10.0.0.1/image.png")
+            .await
+            .is_err());
+        assert!(validate_url_ssrf("http://192.168.1.1/image.png")
+            .await
+            .is_err());
+        assert!(validate_url_ssrf("http://169.254.169.254/latest/meta-data")
+            .await
+            .is_err());
     }
 }
