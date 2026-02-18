@@ -106,3 +106,30 @@ Full codebase audit focusing on correctness and safety. Scanned all modules in `
   - 3× `std::fs::read()` → `tokio::fs::read().await`
   - 1× `std::fs::create_dir_all()` → `tokio::fs::create_dir_all().await`
   - 2× `std::fs::remove_dir_all()` → `tokio::fs::remove_dir_all().await`
+
+## Round 5 — Setup, configuration, and onboarding
+
+Full audit of init wizard, configuration loading, CLI dispatch, and onboarding flows.
+
+### Findings and fixes
+
+1. **P1: `load_config` calls `process::exit(1)` instead of returning `Err`** — `load_config()` in `src/main.rs` used `eprintln!` + `std::process::exit(1)` when the config file was missing, despite having a `Result<Config>` return type. This bypasses the normal error propagation path, prevents callers from handling the error gracefully, and makes the function untestable. Fixed: replaced with `return Err(Error::Config(...))`.
+
+2. **P2: `handle_ingest` silently discards `--extensions` and `--exclude` CLI flags** — `IngestSource::Dir` destructured `extensions: _` and `exclude: _`, silently ignoring user-provided CLI arguments with no feedback. Users would believe their filters were applied when they were not. Fixed: bound the values and added `tracing::warn!` when either is `Some`.
+
+3. **P2: `build_qdrant_compose` uses deprecated `version: "3.9"` key** — Docker Compose V2 ignores the `version` key and emits a deprecation warning. The auto-generated compose file included it unnecessarily. Fixed: removed the `version` line.
+
+4. **P2: `prompt_select` clears entire terminal history on every keypress** — The init wizard's selection prompt used `terminal::Clear(ClearType::All)` + `cursor::MoveTo(0, 0)`, which erases the user's entire terminal scrollback buffer on every keypress. Fixed: save cursor position once before the loop, then `RestorePosition` + `Clear(FromCursorDown)` on each redraw to only clear the prompt area.
+
+### Accepted as-is
+
+- `qdrant_health_url` assumes gRPC port 6334 maps to REST 6333 — standard Qdrant port convention.
+- `run_init_wizard` uses blocking terminal I/O in async context — single-threaded init flow, no concurrent tasks.
+- `resolve_interactive` rejects piped input — intentional, requires `--non-interactive` flag.
+- `compute_irrelevant_paths` conditional logic — correct for all feature flag combinations.
+- `build_qdrant_compose` API key env var handling — correct (checks existence properly).
+
+### Round 5 Changes
+
+- `src/main.rs`: `load_config` returns `Err(Error::Config(...))` instead of `process::exit(1)`. `handle_ingest` warns on ignored `--extensions`/`--exclude` flags. `build_qdrant_compose` removes deprecated `version: "3.9"` key.
+- `src/commands/init.rs`: `prompt_select` uses `SavePosition`/`RestorePosition` + `Clear(FromCursorDown)` instead of clearing entire terminal.

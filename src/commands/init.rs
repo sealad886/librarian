@@ -960,11 +960,16 @@ fn prompt_select(
     let mut selected = default_index.min(options.len().saturating_sub(1));
     let _raw_mode = RawModeGuard::new()?;
 
+    // Save cursor position once before the selection loop so we can
+    // return to it on each redraw without clearing the full terminal.
+    execute!(stdout, cursor::SavePosition)?;
+
     loop {
+        // Restore to saved position and clear only the prompt area
         execute!(
             stdout,
-            terminal::Clear(terminal::ClearType::All),
-            cursor::MoveTo(0, 0)
+            cursor::RestorePosition,
+            terminal::Clear(terminal::ClearType::FromCursorDown)
         )?;
         write_prompt_line(&mut stdout, label)?;
         for (idx, option) in options.iter().enumerate() {

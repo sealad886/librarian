@@ -1234,8 +1234,7 @@ fn is_local_qdrant_url(qdrant_url: &str) -> bool {
 
 fn build_qdrant_compose(storage_dir: &Path, api_key_env: &str) -> String {
     let mut compose = format!(
-        r#"version: "3.9"
-services:
+        r#"services:
   qdrant:
     image: qdrant/qdrant
     container_name: qdrant_librarian
@@ -1354,11 +1353,10 @@ async fn load_config(path: Option<&std::path::Path>) -> Result<Config> {
         .unwrap_or_else(Config::default_config_path);
 
     if !config_path.exists() {
-        eprintln!(
-            "Config file not found: {}\nRun 'librarian init' first.",
+        return Err(Error::Config(format!(
+            "Config file not found: {}. Run 'librarian init' first.",
             config_path.display()
-        );
-        std::process::exit(1);
+        )));
     }
 
     Config::load(&config_path)
@@ -1376,9 +1374,15 @@ async fn handle_ingest(
         IngestSource::Dir {
             path,
             name,
-            extensions: _,
-            exclude: _,
+            extensions,
+            exclude,
         } => {
+            if extensions.is_some() {
+                tracing::warn!("--extensions flag is not yet implemented and will be ignored");
+            }
+            if exclude.is_some() {
+                tracing::warn!("--exclude flag is not yet implemented and will be ignored");
+            }
             let stats = cmd_ingest_dir(
                 config,
                 embedding,
