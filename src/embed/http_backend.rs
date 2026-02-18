@@ -8,7 +8,6 @@ use crate::models::{embedding_model_capabilities, EmbeddingModelCapabilities};
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use std::fs;
 
 pub struct HttpEmbedder {
     client: EmbeddingBackendClient,
@@ -56,8 +55,9 @@ impl HttpEmbedder {
         Ok(())
     }
 
-    fn encode_file_base64(path: &str) -> Result<String> {
-        let bytes = fs::read(path)
+    async fn encode_file_base64(path: &str) -> Result<String> {
+        let bytes = tokio::fs::read(path)
+            .await
             .map_err(|e| Error::Embedding(format!("Failed to read file '{}': {}", path, e)))?;
         Ok(STANDARD.encode(bytes))
     }
@@ -143,18 +143,16 @@ impl Embedder for HttpEmbedder {
             )));
         }
 
-        let inputs = images
-            .into_iter()
-            .map(|path| {
-                let mime = Self::detect_mime_type(&path);
-                let base64 = Self::encode_file_base64(&path)?;
-                Ok(ImageTextInput {
-                    image_base64: base64,
-                    image_mime: mime,
-                    text: None,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut inputs = Vec::with_capacity(images.len());
+        for path in images {
+            let mime = Self::detect_mime_type(&path);
+            let base64 = Self::encode_file_base64(&path).await?;
+            inputs.push(ImageTextInput {
+                image_base64: base64,
+                image_mime: mime,
+                text: None,
+            });
+        }
         let embeddings = self.client.embed_image(&self.model_id, inputs).await?;
         self.validate_dimensions(&embeddings)?;
         Ok(embeddings)
@@ -172,18 +170,16 @@ impl Embedder for HttpEmbedder {
             )));
         }
 
-        let request_inputs = inputs
-            .into_iter()
-            .map(|input| {
-                let mime = Self::detect_mime_type(&input.image_path);
-                let base64 = Self::encode_file_base64(&input.image_path)?;
-                Ok(ImageTextInput {
-                    image_base64: base64,
-                    image_mime: mime,
-                    text: input.text,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut request_inputs = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let mime = Self::detect_mime_type(&input.image_path);
+            let base64 = Self::encode_file_base64(&input.image_path).await?;
+            request_inputs.push(ImageTextInput {
+                image_base64: base64,
+                image_mime: mime,
+                text: input.text,
+            });
+        }
 
         let embeddings = self
             .client
@@ -205,18 +201,16 @@ impl Embedder for HttpEmbedder {
             )));
         }
 
-        let inputs = audios
-            .into_iter()
-            .map(|path| {
-                let mime = Self::detect_mime_type(&path);
-                let base64 = Self::encode_file_base64(&path)?;
-                Ok(AudioTextInput {
-                    audio_base64: base64,
-                    audio_mime: mime,
-                    text: None,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut inputs = Vec::with_capacity(audios.len());
+        for path in audios {
+            let mime = Self::detect_mime_type(&path);
+            let base64 = Self::encode_file_base64(&path).await?;
+            inputs.push(AudioTextInput {
+                audio_base64: base64,
+                audio_mime: mime,
+                text: None,
+            });
+        }
         let embeddings = self.client.embed_audio(&self.model_id, inputs).await?;
         self.validate_dimensions(&embeddings)?;
         Ok(embeddings)
@@ -234,18 +228,16 @@ impl Embedder for HttpEmbedder {
             )));
         }
 
-        let request_inputs = inputs
-            .into_iter()
-            .map(|input| {
-                let mime = Self::detect_mime_type(&input.audio_path);
-                let base64 = Self::encode_file_base64(&input.audio_path)?;
-                Ok(AudioTextInput {
-                    audio_base64: base64,
-                    audio_mime: mime,
-                    text: input.text,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut request_inputs = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let mime = Self::detect_mime_type(&input.audio_path);
+            let base64 = Self::encode_file_base64(&input.audio_path).await?;
+            request_inputs.push(AudioTextInput {
+                audio_base64: base64,
+                audio_mime: mime,
+                text: input.text,
+            });
+        }
 
         let embeddings = self
             .client
@@ -267,18 +259,16 @@ impl Embedder for HttpEmbedder {
             )));
         }
 
-        let inputs = videos
-            .into_iter()
-            .map(|path| {
-                let mime = Self::detect_mime_type(&path);
-                let base64 = Self::encode_file_base64(&path)?;
-                Ok(VideoTextInput {
-                    video_base64: base64,
-                    video_mime: mime,
-                    text: None,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut inputs = Vec::with_capacity(videos.len());
+        for path in videos {
+            let mime = Self::detect_mime_type(&path);
+            let base64 = Self::encode_file_base64(&path).await?;
+            inputs.push(VideoTextInput {
+                video_base64: base64,
+                video_mime: mime,
+                text: None,
+            });
+        }
         let embeddings = self.client.embed_video(&self.model_id, inputs).await?;
         self.validate_dimensions(&embeddings)?;
         Ok(embeddings)
@@ -296,18 +286,16 @@ impl Embedder for HttpEmbedder {
             )));
         }
 
-        let request_inputs = inputs
-            .into_iter()
-            .map(|input| {
-                let mime = Self::detect_mime_type(&input.video_path);
-                let base64 = Self::encode_file_base64(&input.video_path)?;
-                Ok(VideoTextInput {
-                    video_base64: base64,
-                    video_mime: mime,
-                    text: input.text,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut request_inputs = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let mime = Self::detect_mime_type(&input.video_path);
+            let base64 = Self::encode_file_base64(&input.video_path).await?;
+            request_inputs.push(VideoTextInput {
+                video_base64: base64,
+                video_mime: mime,
+                text: input.text,
+            });
+        }
 
         let embeddings = self
             .client

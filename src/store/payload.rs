@@ -166,20 +166,23 @@ fn int_to_qdrant(i: i64) -> QdrantValue {
 
 impl From<Map<String, Value>> for ChunkPayload {
     fn from(map: Map<String, Value>) -> Self {
-        serde_json::from_value(Value::Object(map)).unwrap_or_else(|_| ChunkPayload {
-            source_id: String::new(),
-            source_type: String::new(),
-            source_uri: String::new(),
-            doc_id: String::new(),
-            doc_uri: String::new(),
-            title: None,
-            headings: None,
-            chunk_index: 0,
-            chunk_hash: String::new(),
-            updated_at: String::new(),
-            modality: Some("text".to_string()),
-            media_url: None,
-            media_hash: None,
+        serde_json::from_value(Value::Object(map)).unwrap_or_else(|e| {
+            tracing::warn!("Failed to deserialize Qdrant payload, using defaults: {e}");
+            ChunkPayload {
+                source_id: String::new(),
+                source_type: String::new(),
+                source_uri: String::new(),
+                doc_id: String::new(),
+                doc_uri: String::new(),
+                title: None,
+                headings: None,
+                chunk_index: 0,
+                chunk_hash: String::new(),
+                updated_at: String::new(),
+                modality: Some("text".to_string()),
+                media_url: None,
+                media_hash: None,
+            }
         })
     }
 }
