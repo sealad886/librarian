@@ -1753,6 +1753,15 @@ pub async fn cmd_ingest_dir(
 
     finish_progress(file_progress, "Files processed");
 
+    // Resolve document cross-references now that all docs are ingested
+    match db.resolve_document_links(&source.id).await {
+        Ok(resolved) if resolved > 0 => {
+            info!(resolved, source_id = %source.id, "Resolved document links");
+        }
+        Err(e) => warn!("Failed to resolve document links: {}", e),
+        _ => {}
+    }
+
     // Delete stale documents
     let stale_ids = db.delete_stale_documents(&source.id, &current_uris).await?;
     if !stale_ids.is_empty() {
@@ -1855,6 +1864,13 @@ async fn process_file(
 
     // Chunk the document
     let chunks = chunk_document(&parsed, &content_hash, &config.chunk)?;
+
+    // Store document links for cross-reference resolution
+    if !parsed.links.is_empty() {
+        if let Err(e) = db.store_document_links(&doc.id, &parsed.links).await {
+            warn!(doc_id = %doc.id, "Failed to store document links: {}", e);
+        }
+    }
 
     if chunks.is_empty() {
         debug!("No chunks generated for: {}", file_uri);
@@ -2116,6 +2132,15 @@ pub async fn cmd_ingest_url(
 
     finish_progress(page_progress, "Pages processed");
 
+    // Resolve document cross-references now that all pages are ingested
+    match db.resolve_document_links(&source.id).await {
+        Ok(resolved) if resolved > 0 => {
+            info!(resolved, source_id = %source.id, "Resolved document links");
+        }
+        Err(e) => warn!("Failed to resolve document links: {}", e),
+        _ => {}
+    }
+
     // Delete stale documents
     let stale_ids = db.delete_stale_documents(&source.id, &current_uris).await?;
     if !stale_ids.is_empty() {
@@ -2274,6 +2299,15 @@ pub async fn cmd_ingest_sitemap(
 
     finish_progress(url_progress, "URLs processed");
 
+    // Resolve document cross-references now that all pages are ingested
+    match db.resolve_document_links(&source.id).await {
+        Ok(resolved) if resolved > 0 => {
+            info!(resolved, source_id = %source.id, "Resolved document links");
+        }
+        Err(e) => warn!("Failed to resolve document links: {}", e),
+        _ => {}
+    }
+
     // Delete stale documents
     let stale_ids = db.delete_stale_documents(&source.id, &current_uris).await?;
     if !stale_ids.is_empty() {
@@ -2362,6 +2396,13 @@ async fn process_page(
 
     // Chunk the document
     let chunks = chunk_document(&parsed, &content_hash, &config.chunk)?;
+
+    // Store document links for cross-reference resolution
+    if !parsed.links.is_empty() {
+        if let Err(e) = db.store_document_links(&doc.id, &parsed.links).await {
+            warn!(doc_id = %doc.id, "Failed to store document links: {}", e);
+        }
+    }
 
     // Multimodal image selection + caching (optional)
     let images = select_image_candidates(config, embedding, &parsed);

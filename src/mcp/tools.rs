@@ -151,6 +151,63 @@ pub fn get_tool_definitions() -> Vec<ToolDefinition> {
                 }
             }),
         },
+        ToolDefinition {
+            name: "rag_document_links".to_string(),
+            description: "Get incoming and outgoing document links for a document. Useful for understanding cross-references and navigating related content.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "doc_id": {
+                        "type": "string",
+                        "description": "The document ID to get links for"
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["outgoing", "incoming", "both"],
+                        "description": "Direction of links to retrieve (default: both)",
+                        "default": "both"
+                    }
+                },
+                "required": ["doc_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "rag_related".to_string(),
+            description: "Find documents related to a given document through cross-references. Returns documents that link to or are linked from the specified document.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "doc_id": {
+                        "type": "string",
+                        "description": "The document ID to find related documents for"
+                    }
+                },
+                "required": ["doc_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "rag_analytics".to_string(),
+            description: "Get query analytics including total queries, average results, top score trends, and recent query history.".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "days": {
+                        "type": "integer",
+                        "description": "Number of days to analyze (default: 30)",
+                        "default": 30,
+                        "minimum": 1,
+                        "maximum": 365
+                    },
+                    "recent_limit": {
+                        "type": "integer",
+                        "description": "Number of recent queries to include (default: 10)",
+                        "default": 10,
+                        "minimum": 1,
+                        "maximum": 100
+                    }
+                }
+            }),
+        },
     ]
 }
 
@@ -170,6 +227,9 @@ pub async fn handle_tool_call(
         "rag_ingest_source" => handle_ingest_trigger(arguments, config).await,
         "rag_update" => handle_update_trigger(arguments, config).await,
         "rag_reindex" => handle_reindex_trigger(arguments, config).await,
+        "rag_document_links" => handle_document_links(arguments, db).await,
+        "rag_related" => handle_related(arguments, db).await,
+        "rag_analytics" => handle_analytics(arguments, db).await,
         _ => ToolResult::error(format!("Unknown tool: {}", name)),
     }
 }
@@ -637,4 +697,164 @@ async fn run_reindex_background(
     )
     .await?;
     Ok(())
+}
+
+/// Handle rag_document_links tool
+async fn handle_document_links(arguments: &HashMap<String, Value>, db: &MetaDb) -> ToolResult {
+    let doc_id = match arguments.get("doc_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return ToolResult::error("Missing required parameter: doc_id"),
+    };
+
+    let direction = arguments
+        .get("direction")
+        .and_then(|v| v.as_str())
+        .unwrap_or("both");
+
+    let mut output = String::new();
+
+    if direction == "outgoing" || direction == "both" {
+        match db.get_outgoing_links(doc_id).await {
+            Ok(links) => {
+                output.push_str(&format!("## Outgoing Links ({})\n\n", links.len()));
+                for link in &links {
+                    let link_text = link.link_text.as_deref().unwrap_or("(no text)");
+                    let resolved = link
+                        .to_doc_id
+                        .as_ref()
+                        .map(|id| format!(" → doc:{}", id))
+                        .unwrap_or_default();
+                    output.push_str(&format!(
+                        "- [{}]({}) [{}]{}\n",
+                        link_text, link.to_uri, link.link_type, resolved
+                    ));
+                }
+                output.push('\n');
+            }
+            Err(e) => return ToolResult::error(format!("Failed to get outgoing links: {}", e)),
+        }
+    }
+
+    if direction == "incoming" || direction == "both" {
+        match db.get_incoming_links(doc_id).await {
+            Ok(links) => {
+                output.push_str(&format!("## Incoming Links ({})\n\n", links.len()));
+                for link in &links {
+                    let link_text = link.link_text.as_deref().unwrap_or("(no text)");
+                    output.push_str(&format!(
+                        "- From doc:{} [{}]({})\n",
+                        link.from_doc_id, link_text, link.to_uri
+                    ));
+                }
+                output.push('\n');
+            }
+            Err(e) => return ToolResult::error(format!("Failed to get incoming links: {}", e)),
+        }
+    }
+
+    if output.is_empty() {
+        ToolResult::text("No links found for this document.")
+    } else {
+        ToolResult::text(output)
+    }
+}
+
+/// Handle rag_related tool
+async fn handle_related(arguments: &HashMap<String, Value>, db: &MetaDb) -> ToolResult {
+    let doc_id = match arguments.get("doc_id").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return ToolResult::error("Missing required parameter: doc_id"),
+    };
+
+    match db.get_related_documents(doc_id).await {
+        Ok(docs) => {
+            if docs.is_empty() {
+                return ToolResult::text("No related documents found.");
+            }
+
+            let mut output = format!("## Related Documents ({})\n\n", docs.len());
+            for doc in &docs {
+                let title = doc.title.as_deref().unwrap_or("(untitled)");
+                let content_type = doc.content_type.as_deref().unwrap_or("unknown");
+                output.push_str(&format!(
+                    "- **{}** [{}]\n  - ID: {}\n  - URI: {}\n\n",
+                    title, content_type, doc.id, doc.uri
+                ));
+            }
+            ToolResult::text(output)
+        }
+        Err(e) => ToolResult::error(format!("Failed to get related documents: {}", e)),
+    }
+}
+
+/// Handle rag_analytics tool
+async fn handle_analytics(arguments: &HashMap<String, Value>, db: &MetaDb) -> ToolResult {
+    let days = arguments.get("days").and_then(|v| v.as_i64()).unwrap_or(30) as i32;
+    let recent_limit = arguments
+        .get("recent_limit")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(10);
+
+    let mut output = String::new();
+
+    // Get analytics summary
+    match db.get_query_analytics(days).await {
+        Ok(analytics) => {
+            output.push_str(&format!("## Query Analytics (last {} days)\n\n", days));
+            output.push_str(&format!(
+                "- **Total queries:** {}\n",
+                analytics.total_queries
+            ));
+            output.push_str(&format!(
+                "- **Average results per query:** {:.1}\n",
+                analytics.avg_result_count.unwrap_or(0.0)
+            ));
+            output.push_str(&format!(
+                "- **Average top score:** {:.3}\n",
+                analytics.avg_top_score.unwrap_or(0.0)
+            ));
+            output.push_str(&format!(
+                "- **Average latency:** {:.0}ms\n",
+                analytics.avg_latency_ms.unwrap_or(0.0)
+            ));
+            output.push_str(&format!(
+                "- **Zero-result queries:** {}\n\n",
+                analytics.zero_result_queries
+            ));
+        }
+        Err(e) => return ToolResult::error(format!("Failed to get analytics: {}", e)),
+    }
+
+    // Get recent queries
+    match db.get_recent_queries(recent_limit).await {
+        Ok(queries) => {
+            if !queries.is_empty() {
+                output.push_str("## Recent Queries\n\n");
+                output.push_str("| Query | Intent | Results | Top Score | Latency |\n");
+                output.push_str("|-------|--------|---------|-----------|--------|\n");
+                for q in &queries {
+                    let intent = q.intent.as_deref().unwrap_or("-");
+                    let score = q
+                        .top_score
+                        .map(|s| format!("{:.2}", s))
+                        .unwrap_or_else(|| "-".to_string());
+                    let latency = q
+                        .latency_ms
+                        .map(|l| format!("{}ms", l))
+                        .unwrap_or_else(|| "-".to_string());
+                    output.push_str(&format!(
+                        "| {} | {} | {} | {} | {} |\n",
+                        q.query_text, intent, q.result_count, score, latency
+                    ));
+                }
+            }
+        }
+        Err(e) => return ToolResult::error(format!("Failed to get recent queries: {}", e)),
+    }
+
+    if output.is_empty() {
+        ToolResult::text("No query analytics available yet.")
+    } else {
+        ToolResult::text(output)
+    }
 }

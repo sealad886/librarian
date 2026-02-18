@@ -1,5 +1,6 @@
 //! Query command implementation
 
+use crate::classify::{classify_query, QueryIntent};
 use crate::config::{Config, ResolvedEmbeddingConfig};
 use crate::embed::Embedder;
 use crate::error::Result;
@@ -9,7 +10,8 @@ use crate::rank::{RankedResult, Ranker};
 use crate::rerank::{create_reranker, Reranker};
 use crate::store::{QdrantStore, SearchFilter};
 use serde::Serialize;
-use tracing::debug;
+use std::time::Instant;
+use tracing::{debug, warn};
 
 /// Query options
 #[derive(Debug, Clone, Default)]
@@ -34,6 +36,7 @@ pub struct QueryResult {
     pub results: Vec<RankedResult>,
     pub query: String,
     pub total_chunks_searched: usize,
+    pub intent: QueryIntent,
 }
 
 /// Execute a query
@@ -47,6 +50,9 @@ pub async fn cmd_query(
     options: QueryOptions,
 ) -> Result<QueryResult> {
     debug!("Querying: {}", query);
+    let start_time = Instant::now();
+    let intent = classify_query(query);
+    debug!(intent = %intent, "Classified query intent");
 
     let k = options.k.unwrap_or(config.query.default_k);
     let min_score = options.min_score.unwrap_or(config.query.min_score);
@@ -56,6 +62,9 @@ pub async fn cmd_query(
         .into_iter()
         .next()
         .ok_or_else(|| crate::error::Error::Embedding("No embedding returned".to_string()))?;
+
+    // Capture source filter string for logging before moving
+    let source_filter_str = options.source_ids.as_ref().map(|ids| ids.join(","));
 
     // Build search filter
     let filter = if options.source_ids.is_some()
@@ -125,12 +134,30 @@ pub async fn cmd_query(
     ranked.truncate(k);
 
     let total = ranked.len();
-    debug!("Returning {} results", total);
+    let latency = start_time.elapsed();
+    debug!("Returning {} results in {:?}", total, latency);
+
+    // Log query for analytics (best-effort, don't fail the query)
+    let top_score = ranked.first().map(|r| r.score);
+    if let Err(e) = db
+        .log_query(
+            query,
+            Some(&intent.to_string()),
+            source_filter_str.as_deref(),
+            total as i32,
+            top_score,
+            Some(latency.as_millis() as i64),
+        )
+        .await
+    {
+        warn!("Failed to log query: {}", e);
+    }
 
     Ok(QueryResult {
         results: ranked,
         query: query.to_string(),
         total_chunks_searched: total,
+        intent,
     })
 }
 

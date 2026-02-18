@@ -3,15 +3,24 @@
 //! This module handles:
 //! - HTML parsing and text extraction
 //! - Markdown processing
+//! - reStructuredText (RST) parsing
+//! - AsciiDoc parsing
+//! - Jupyter Notebook parsing
 //! - Plain text normalization
 //! - Content type detection
 
+mod asciidoc;
 mod html;
+mod jupyter;
 mod markdown;
+mod rst;
 mod text;
 
+pub use asciidoc::*;
 pub use html::*;
+pub use jupyter::*;
 pub use markdown::*;
+pub use rst::*;
 pub use text::*;
 
 use crate::error::Result;
@@ -23,6 +32,12 @@ use std::path::Path;
 pub enum ContentType {
     Html,
     Markdown,
+    /// reStructuredText
+    Rst,
+    /// AsciiDoc / Asciidoctor
+    AsciiDoc,
+    /// Jupyter Notebook (`.ipynb`)
+    Jupyter,
     PlainText,
     Unknown,
 }
@@ -33,8 +48,10 @@ impl ContentType {
         match path.extension().and_then(|e| e.to_str()) {
             Some("html") | Some("htm") => ContentType::Html,
             Some("md") | Some("markdown") | Some("mdx") => ContentType::Markdown,
+            Some("rst") | Some("rest") => ContentType::Rst,
+            Some("adoc") | Some("asciidoc") | Some("asc") => ContentType::AsciiDoc,
+            Some("ipynb") => ContentType::Jupyter,
             Some("txt") | Some("text") => ContentType::PlainText,
-            Some("rst") => ContentType::PlainText, // Treat RST as plain text for now
             _ => ContentType::Unknown,
         }
     }
@@ -46,6 +63,13 @@ impl ContentType {
             ContentType::Html
         } else if mime_lower.contains("text/markdown") {
             ContentType::Markdown
+        } else if mime_lower.contains("text/x-rst") || mime_lower.contains("text/restructuredtext")
+        {
+            ContentType::Rst
+        } else if mime_lower.contains("text/asciidoc") {
+            ContentType::AsciiDoc
+        } else if mime_lower.contains("application/x-ipynb+json") {
+            ContentType::Jupyter
         } else if mime_lower.contains("text/plain") {
             ContentType::PlainText
         } else {
@@ -247,6 +271,9 @@ pub fn parse_content(
     match content_type {
         ContentType::Html => parse_html(content, base_url),
         ContentType::Markdown => parse_markdown(content),
+        ContentType::Rst => Ok(parse_rst(content)),
+        ContentType::AsciiDoc => Ok(parse_asciidoc(content)),
+        ContentType::Jupyter => parse_jupyter(content),
         ContentType::PlainText | ContentType::Unknown => Ok(parse_plain_text(content)),
     }
 }

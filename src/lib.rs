@@ -9,6 +9,7 @@
 //! - Integration with Qdrant vector database and Xinference embedding backends
 
 pub mod chunk;
+pub mod classify;
 pub mod commands;
 pub mod config;
 pub mod crawl;
