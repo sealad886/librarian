@@ -141,6 +141,12 @@ impl Ranker {
     }
 }
 
+/// Corpus-level statistics for IDF computation in BM25 scoring.
+pub struct CorpusStats {
+    pub total_docs: usize,
+    pub doc_frequencies: HashMap<String, usize>,
+}
+
 /// Simple BM25 scorer
 pub struct Bm25Scorer {
     k1: f32,
@@ -152,7 +158,10 @@ impl Bm25Scorer {
         Self { k1: 1.2, b: 0.75 }
     }
 
-    /// Score a single document against a query
+    /// Score a single document against a query (simplified, no real IDF).
+    ///
+    /// Prefer [`score_with_idf`](Self::score_with_idf) when corpus statistics
+    /// are available.
     pub fn score(&self, query_terms: &[String], doc_text: &str, avg_doc_len: f32) -> f32 {
         let doc_lower = doc_text.to_lowercase();
         let doc_len = doc_text.len() as f32;
@@ -181,6 +190,38 @@ impl Bm25Scorer {
             .map(|s| s.to_lowercase())
             .filter(|s| s.len() >= 3)
             .collect()
+    }
+
+    /// Score a document using real IDF from corpus statistics.
+    ///
+    /// IDF formula: `ln((N - n + 0.5) / (n + 0.5) + 1.0)` where N = total
+    /// docs and n = number of docs containing the term.
+    pub fn score_with_idf(
+        &self,
+        query_terms: &[String],
+        doc_text: &str,
+        avg_doc_len: f32,
+        stats: &CorpusStats,
+    ) -> f32 {
+        let doc_lower = doc_text.to_lowercase();
+        let doc_len = doc_text.len() as f32;
+        let n_total = stats.total_docs as f32;
+        let mut total_score = 0.0;
+
+        for term in query_terms {
+            let term_lower = term.to_lowercase();
+            let tf = doc_lower.matches(&term_lower).count() as f32;
+
+            if tf > 0.0 {
+                let n_docs = stats.doc_frequencies.get(&term_lower).copied().unwrap_or(0) as f32;
+                let idf = ((n_total - n_docs + 0.5) / (n_docs + 0.5) + 1.0).ln();
+                let numerator = tf * (self.k1 + 1.0);
+                let denominator = tf + self.k1 * (1.0 - self.b + self.b * (doc_len / avg_doc_len));
+                total_score += idf * (numerator / denominator);
+            }
+        }
+
+        total_score
     }
 }
 
@@ -268,5 +309,40 @@ mod tests {
         let score2 = scorer.score(&terms, "Python is great", 100.0);
 
         assert!(score1 > score2);
+    }
+
+    #[test]
+    fn test_bm25_score_with_idf_rare_term_higher() {
+        let scorer = Bm25Scorer::new();
+
+        let mut doc_frequencies = HashMap::new();
+        // "rust" appears in 2 of 100 docs (rare)
+        doc_frequencies.insert("rust".to_string(), 2);
+        // "the" appears in 90 of 100 docs (common)
+        doc_frequencies.insert("the".to_string(), 90);
+
+        let stats = CorpusStats {
+            total_docs: 100,
+            doc_frequencies,
+        };
+
+        let doc_text = "Rust is the best language for the task";
+        let rare_score = scorer.score_with_idf(&["rust".to_string()], doc_text, 100.0, &stats);
+        let common_score = scorer.score_with_idf(&["the".to_string()], doc_text, 100.0, &stats);
+
+        assert!(
+            rare_score > common_score,
+            "Rare term 'rust' ({rare_score}) should score higher than common term 'the' ({common_score})"
+        );
+    }
+
+    #[test]
+    fn test_bm25_score_with_idf_backward_compat() {
+        let scorer = Bm25Scorer::new();
+        let terms = scorer.tokenize("rust programming");
+
+        // Existing score() method still works
+        let score = scorer.score(&terms, "Rust is a systems programming language", 100.0);
+        assert!(score > 0.0);
     }
 }

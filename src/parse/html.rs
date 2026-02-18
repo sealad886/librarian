@@ -34,26 +34,34 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
     let text = html2text::from_read(root.as_bytes(), 80).unwrap_or_else(|_| root.clone());
     doc.text = normalize_whitespace(&text);
 
-    // Extract headings
-    for level in 1..=6 {
-        if let Ok(selector) = Selector::parse(&format!("h{}", level)) {
-            for elem in document.select(&selector) {
-                let heading_text = elem.text().collect::<String>().trim().to_string();
-                if !heading_text.is_empty() {
-                    // Approximate position based on text content
-                    let position = doc.text.find(&heading_text).unwrap_or(0);
-                    doc.headings.push(Heading {
-                        level,
-                        text: heading_text,
-                        position,
-                    });
-                }
+    // Extract headings in DOM order using a combined selector, then assign
+    // positions by scanning the extracted text sequentially so that repeated
+    // heading text (e.g. two "Parameters" sections) gets distinct positions.
+    if let Ok(selector) = Selector::parse("h1, h2, h3, h4, h5, h6") {
+        let mut raw_headings: Vec<(u8, String)> = Vec::new();
+        for elem in document.select(&selector) {
+            let tag = elem.value().name();
+            let level = tag.chars().nth(1).and_then(|c| c.to_digit(10)).unwrap_or(0) as u8;
+            let heading_text = elem.text().collect::<String>().trim().to_string();
+            if !heading_text.is_empty() && (1..=6).contains(&level) {
+                raw_headings.push((level, heading_text));
             }
         }
-    }
 
-    // Sort headings by position
-    doc.headings.sort_by_key(|h| h.position);
+        let mut search_offset = 0;
+        for (level, heading_text) in &raw_headings {
+            let position = doc.text[search_offset..]
+                .find(heading_text.as_str())
+                .map(|pos| pos + search_offset)
+                .unwrap_or(search_offset);
+            doc.headings.push(Heading {
+                level: *level,
+                text: heading_text.clone(),
+                position,
+            });
+            search_offset = position + heading_text.len();
+        }
+    }
 
     // Extract code blocks
     if let Ok(selector) = Selector::parse("pre code, pre") {
@@ -538,5 +546,85 @@ mod tests {
             .alt
             .as_ref()
             .is_some_and(|a| a.ends_with("/images/poster.jpg")));
+    }
+
+    #[test]
+    fn test_repeated_headings_get_distinct_positions() {
+        let html = r#"
+        <html><body>
+            <h2>Parameters</h2>
+            <p>First parameters section content.</p>
+            <h2>Parameters</h2>
+            <p>Second parameters section content.</p>
+        </body></html>
+        "#;
+        let doc = parse_html(html, None).unwrap();
+
+        let param_headings: Vec<_> = doc
+            .headings
+            .iter()
+            .filter(|h| h.text == "Parameters")
+            .collect();
+        assert_eq!(param_headings.len(), 2);
+        assert!(
+            param_headings[1].position > param_headings[0].position,
+            "Second 'Parameters' heading must have a greater position than the first"
+        );
+    }
+
+    #[test]
+    fn test_repeated_headings_interleaved_order() {
+        let html = r#"
+        <html><body>
+            <h2>Parameters</h2>
+            <p>Params A.</p>
+            <h2>Returns</h2>
+            <p>Returns info.</p>
+            <h2>Parameters</h2>
+            <p>Params B.</p>
+        </body></html>
+        "#;
+        let doc = parse_html(html, None).unwrap();
+
+        assert_eq!(doc.headings.len(), 3);
+        assert_eq!(doc.headings[0].text, "Parameters");
+        assert_eq!(doc.headings[1].text, "Returns");
+        assert_eq!(doc.headings[2].text, "Parameters");
+
+        // Positions must be strictly increasing
+        for window in doc.headings.windows(2) {
+            assert!(
+                window[1].position > window[0].position,
+                "Heading '{}' at {} should come after '{}' at {}",
+                window[1].text,
+                window[1].position,
+                window[0].text,
+                window[0].position,
+            );
+        }
+    }
+
+    #[test]
+    fn test_unique_headings_regression() {
+        let html = r#"
+        <html><body>
+            <h1>Title</h1>
+            <p>Intro text.</p>
+            <h2>Section A</h2>
+            <p>Content A.</p>
+            <h2>Section B</h2>
+            <p>Content B.</p>
+        </body></html>
+        "#;
+        let doc = parse_html(html, None).unwrap();
+
+        assert_eq!(doc.headings.len(), 3);
+        assert_eq!(doc.headings[0].text, "Title");
+        assert_eq!(doc.headings[1].text, "Section A");
+        assert_eq!(doc.headings[2].text, "Section B");
+
+        for window in doc.headings.windows(2) {
+            assert!(window[1].position > window[0].position);
+        }
     }
 }

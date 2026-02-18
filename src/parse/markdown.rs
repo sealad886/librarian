@@ -1,6 +1,8 @@
 //! Markdown parsing and text extraction
 
-use super::{CodeBlock, ContentType, ExtractedLink, Heading, ParsedDocument};
+use super::{
+    CodeBlock, ContentType, ExtractedLink, ExtractedMedia, Heading, MediaModality, ParsedDocument,
+};
 use crate::error::Result;
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
@@ -16,6 +18,8 @@ pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
     let mut code_language: Option<String> = None;
     let mut current_link_url: Option<String> = None;
     let mut current_link_text: Vec<String> = Vec::new();
+    let mut current_image_url: Option<String> = None;
+    let mut current_image_alt: Vec<String> = Vec::new();
     let mut char_position = 0;
 
     for event in parser {
@@ -93,6 +97,29 @@ pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
                     current_link_text.clear();
                 }
             }
+            Event::Start(Tag::Image { dest_url, .. }) => {
+                current_image_url = Some(dest_url.to_string());
+            }
+            Event::End(TagEnd::Image) => {
+                if let Some(url) = current_image_url.take() {
+                    let alt = current_image_alt.join("");
+                    let alt = if alt.is_empty() { None } else { Some(alt) };
+                    doc.media.push(ExtractedMedia {
+                        url,
+                        alt: alt.clone(),
+                        tag: "img".to_string(),
+                        css_background: false,
+                        modality: MediaModality::Image,
+                        mime_type: None,
+                    });
+                    // Include alt text in document text for searchability
+                    if let Some(ref alt_text) = alt {
+                        text_parts.push(alt_text.clone());
+                        char_position += alt_text.len();
+                    }
+                    current_image_alt.clear();
+                }
+            }
             Event::Text(text) => {
                 let text_str = text.to_string();
 
@@ -100,6 +127,8 @@ pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
                     parts.push(text_str.clone());
                 } else if in_code_block {
                     current_code.push(text_str);
+                } else if current_image_url.is_some() {
+                    current_image_alt.push(text_str);
                 } else if current_link_url.is_some() {
                     current_link_text.push(text_str.clone());
                     text_parts.push(text_str.clone());
@@ -218,5 +247,49 @@ fn main() {
         assert_eq!(doc.code_blocks.len(), 2);
         assert_eq!(doc.code_blocks[0].language, Some("python".to_string()));
         assert_eq!(doc.code_blocks[1].language, None);
+    }
+
+    #[test]
+    fn test_image_extraction_with_alt() {
+        let markdown = "![Alt text](image.png)";
+        let doc = parse_markdown(markdown).unwrap();
+
+        assert_eq!(doc.media.len(), 1);
+        assert_eq!(doc.media[0].url, "image.png");
+        assert_eq!(doc.media[0].alt, Some("Alt text".to_string()));
+        assert_eq!(doc.media[0].tag, "img");
+        assert!(!doc.media[0].css_background);
+    }
+
+    #[test]
+    fn test_image_extraction_multiple() {
+        let markdown = "![A](a.png)\n\n![B](b.jpg)\n\n![C](c.svg)";
+        let doc = parse_markdown(markdown).unwrap();
+
+        assert_eq!(doc.media.len(), 3);
+        assert_eq!(doc.media[0].url, "a.png");
+        assert_eq!(doc.media[1].url, "b.jpg");
+        assert_eq!(doc.media[2].url, "c.svg");
+    }
+
+    #[test]
+    fn test_image_extraction_no_alt() {
+        let markdown = "![](image.png)";
+        let doc = parse_markdown(markdown).unwrap();
+
+        assert_eq!(doc.media.len(), 1);
+        assert_eq!(doc.media[0].url, "image.png");
+        assert_eq!(doc.media[0].alt, None);
+    }
+
+    #[test]
+    fn test_links_and_images_both_extracted() {
+        let markdown = "[Link](https://example.com)\n\n![Photo](photo.jpg)";
+        let doc = parse_markdown(markdown).unwrap();
+
+        assert_eq!(doc.links.len(), 1);
+        assert_eq!(doc.links[0].url, "https://example.com");
+        assert_eq!(doc.media.len(), 1);
+        assert_eq!(doc.media[0].url, "photo.jpg");
     }
 }

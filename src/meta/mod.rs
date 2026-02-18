@@ -1190,6 +1190,34 @@ impl MetaDb {
             .await?;
         Ok(ids)
     }
+
+    /// Retrieve corpus-level statistics for BM25 IDF computation.
+    ///
+    /// Returns the total number of distinct documents that have chunks and,
+    /// for each query term, the number of distinct documents whose chunk text
+    /// contains that term (case-insensitive via LIKE).
+    pub async fn get_corpus_stats(&self, terms: &[String]) -> Result<crate::rank::CorpusStats> {
+        let total_docs: i32 = sqlx::query_scalar("SELECT COUNT(DISTINCT doc_id) FROM chunks")
+            .fetch_one(&self.pool)
+            .await?;
+
+        let mut doc_frequencies = std::collections::HashMap::new();
+        for term in terms {
+            let pattern = format!("%{}%", term);
+            let count: i32 = sqlx::query_scalar(
+                "SELECT COUNT(DISTINCT doc_id) FROM chunks WHERE chunk_text LIKE ?",
+            )
+            .bind(&pattern)
+            .fetch_one(&self.pool)
+            .await?;
+            doc_frequencies.insert(term.to_lowercase(), count as usize);
+        }
+
+        Ok(crate::rank::CorpusStats {
+            total_docs: total_docs as usize,
+            doc_frequencies,
+        })
+    }
 }
 
 /// A simplified chunk record for API use
@@ -1517,5 +1545,61 @@ mod tests {
         assert_eq!(config.vector_dimension, 768);
         assert_eq!(config.embedding_model, "model-v2");
         assert_eq!(config.embedding_family, "family-v2");
+    }
+
+    #[tokio::test]
+    async fn test_get_corpus_stats() {
+        let (db, _tmp) = setup_test_db().await;
+
+        let source = Source::new(SourceType::Dir, "/docs".to_string(), None);
+        db.insert_source(&source).await.unwrap();
+
+        // Two documents
+        let doc1 = Document::new(
+            source.id.clone(),
+            "/docs/a.md".to_string(),
+            "h1".to_string(),
+        );
+        let doc1 = db.upsert_document(&doc1).await.unwrap();
+
+        let doc2 = Document::new(
+            source.id.clone(),
+            "/docs/b.md".to_string(),
+            "h2".to_string(),
+        );
+        let doc2 = db.upsert_document(&doc2).await.unwrap();
+
+        // Chunk in doc1 contains "rust" and "programming"
+        let c1 = Chunk::new(
+            doc1.id.clone(),
+            0,
+            "ch1".to_string(),
+            "Rust is a systems programming language".to_string(),
+            0,
+            38,
+            None,
+        );
+        db.upsert_chunk(&c1).await.unwrap();
+
+        // Chunk in doc2 contains "programming" but NOT "rust"
+        let c2 = Chunk::new(
+            doc2.id.clone(),
+            0,
+            "ch2".to_string(),
+            "Programming in Python is fun".to_string(),
+            0,
+            28,
+            None,
+        );
+        db.upsert_chunk(&c2).await.unwrap();
+
+        let stats = db
+            .get_corpus_stats(&["rust".to_string(), "programming".to_string()])
+            .await
+            .unwrap();
+
+        assert_eq!(stats.total_docs, 2);
+        assert_eq!(stats.doc_frequencies["rust"], 1);
+        assert_eq!(stats.doc_frequencies["programming"], 2);
     }
 }

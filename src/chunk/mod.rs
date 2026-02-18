@@ -462,10 +462,7 @@ mod tests {
             assert!(
                 !ends_inside,
                 "chunk (start={}, end={}) has a break point inside code block (start={}, end={})",
-                chunk.char_start,
-                chunk.char_end,
-                code_start,
-                code_end
+                chunk.char_start, chunk.char_end, code_start, code_end
             );
         }
     }
