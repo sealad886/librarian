@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
 use tracing::error;
 
 /// Tool definition for MCP
@@ -160,9 +161,10 @@ pub async fn handle_tool_call(
     config: &Config,
     db: &MetaDb,
     store: &QdrantStore,
+    embedder: Option<Arc<dyn Embedder>>,
 ) -> ToolResult {
     match name {
-        "rag_search" => handle_search(arguments, config, db, store).await,
+        "rag_search" => handle_search(arguments, config, db, store, embedder).await,
         "rag_sources" => handle_sources(db).await,
         "rag_status" => handle_status(config, db, store).await,
         "rag_ingest_source" => handle_ingest_trigger(arguments, config).await,
@@ -178,6 +180,7 @@ async fn handle_search(
     config: &Config,
     db: &MetaDb,
     store: &QdrantStore,
+    embedder: Option<Arc<dyn Embedder>>,
 ) -> ToolResult {
     // Extract query parameter
     let query = match arguments.get("query") {
@@ -215,20 +218,29 @@ async fn handle_search(
         ..Default::default()
     };
 
+    // Use cached embedder if provided, otherwise create one
     let embedding_config = match config.resolve_embedding_config().await {
         Ok(cfg) => cfg,
         Err(e) => return ToolResult::error(format!("Embedding config error: {}", e)),
     };
-    let embedder = match create_embedder_auto(&embedding_config, &config.paths.base_dir).await {
-        Ok(embedder) => embedder,
-        Err(e) => return ToolResult::error(format!("Embedding backend error: {}", e)),
+
+    let owned_embedder: Option<Box<dyn Embedder>>;
+    let embedder_ref: &dyn Embedder = if let Some(ref cached) = embedder {
+        cached.as_ref()
+    } else {
+        owned_embedder = match create_embedder_auto(&embedding_config, &config.paths.base_dir).await
+        {
+            Ok(e) => Some(e),
+            Err(e) => return ToolResult::error(format!("Embedding backend error: {}", e)),
+        };
+        owned_embedder.as_ref().unwrap().as_ref()
     };
 
     // Execute query
     match cmd_query(
         config,
         &embedding_config,
-        embedder.as_ref(),
+        embedder_ref,
         db,
         store,
         &query,

@@ -3,11 +3,14 @@
 use super::tools::{get_tool_definitions, handle_tool_call};
 use super::types::{McpError, McpMessage, McpNotification, McpRequest, McpResponse};
 use crate::config::Config;
+use crate::embed::{create_embedder_auto, Embedder};
 use crate::meta::MetaDb;
 use crate::store::QdrantStore;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{debug, error, warn};
 
 /// MCP Server implementation
@@ -15,12 +18,42 @@ pub struct McpServer {
     config: Config,
     db: MetaDb,
     store: QdrantStore,
+    embedder_cache: Arc<RwLock<Option<Arc<dyn Embedder>>>>,
 }
 
 impl McpServer {
     /// Create a new MCP server
     pub fn new(config: Config, db: MetaDb, store: QdrantStore) -> Self {
-        Self { config, db, store }
+        Self {
+            config,
+            db,
+            store,
+            embedder_cache: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    /// Get or lazily initialize the cached embedder
+    async fn get_or_init_embedder(&self) -> crate::error::Result<Arc<dyn Embedder>> {
+        // Fast path: check if already cached
+        {
+            let guard = self.embedder_cache.read().await;
+            if let Some(ref embedder) = *guard {
+                return Ok(Arc::clone(embedder));
+            }
+        }
+
+        // Slow path: initialize and cache
+        let mut guard = self.embedder_cache.write().await;
+        // Double-check after acquiring write lock
+        if let Some(ref embedder) = *guard {
+            return Ok(Arc::clone(embedder));
+        }
+
+        let embedding_config = self.config.resolve_embedding_config().await?;
+        let embedder = create_embedder_auto(&embedding_config, &self.config.paths.base_dir).await?;
+        let arc_embedder: Arc<dyn Embedder> = Arc::from(embedder);
+        *guard = Some(Arc::clone(&arc_embedder));
+        Ok(arc_embedder)
     }
 
     /// Run the MCP server loop over stdio
@@ -170,7 +203,34 @@ impl McpServer {
 
         debug!("Calling tool: {} with args: {:?}", name, arguments);
 
-        let result = handle_tool_call(&name, &arguments, &self.config, &self.db, &self.store).await;
+        // For search calls, provide the cached embedder; other tools don't need it
+        let embedder = if name == "rag_search" {
+            match self.get_or_init_embedder().await {
+                Ok(e) => Some(e),
+                Err(e) => {
+                    error!(error = %e, "Failed to initialize embedder");
+                    return McpResponse::success(
+                        id,
+                        json!({
+                            "content": [{"type": "text", "text": format!("Embedder initialization error: {}", e)}],
+                            "isError": true
+                        }),
+                    );
+                }
+            }
+        } else {
+            None
+        };
+
+        let result = handle_tool_call(
+            &name,
+            &arguments,
+            &self.config,
+            &self.db,
+            &self.store,
+            embedder,
+        )
+        .await;
 
         McpResponse::success(
             id,

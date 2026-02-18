@@ -702,12 +702,24 @@ impl SearchFilter {
         if let Some(ref source_ids) = self.source_ids {
             if source_ids.len() == 1 {
                 must_conditions.push(Condition::matches("source_id", source_ids[0].clone()));
+            } else if !source_ids.is_empty() {
+                let should: Vec<Condition> = source_ids
+                    .iter()
+                    .map(|id| Condition::matches("source_id", id.clone()))
+                    .collect();
+                must_conditions.push(Condition::from(Filter::should(should)));
             }
         }
 
         if let Some(ref source_types) = self.source_types {
             if source_types.len() == 1 {
                 must_conditions.push(Condition::matches("source_type", source_types[0].clone()));
+            } else if !source_types.is_empty() {
+                let should: Vec<Condition> = source_types
+                    .iter()
+                    .map(|t| Condition::matches("source_type", t.clone()))
+                    .collect();
+                must_conditions.push(Condition::from(Filter::should(should)));
             }
         }
 
@@ -799,6 +811,98 @@ mod tests {
         let qdrant_filter = filter.to_qdrant_filter();
         assert!(qdrant_filter.is_some());
         assert_eq!(qdrant_filter.unwrap().must.len(), 2);
+    }
+
+    #[test]
+    fn test_multi_value_source_ids_filter() {
+        let filter = SearchFilter {
+            source_ids: Some(vec![
+                "source-a".to_string(),
+                "source-b".to_string(),
+                "source-c".to_string(),
+            ]),
+            source_types: None,
+            path_prefix: None,
+        };
+
+        let qdrant_filter = filter.to_qdrant_filter();
+        assert!(qdrant_filter.is_some());
+
+        let f = qdrant_filter.unwrap();
+        // Multi-value source_ids are wrapped in a nested filter with should conditions
+        assert_eq!(f.must.len(), 1);
+        // The nested filter should contain 3 should conditions (OR semantics)
+        if let Some(qdrant_client::qdrant::condition::ConditionOneOf::Filter(nested)) =
+            &f.must[0].condition_one_of
+        {
+            assert_eq!(nested.should.len(), 3);
+        } else {
+            panic!("Expected nested filter with should conditions for multi-value source_ids");
+        }
+    }
+
+    #[test]
+    fn test_multi_value_source_types_filter() {
+        let filter = SearchFilter {
+            source_ids: None,
+            source_types: Some(vec!["dir".to_string(), "url".to_string()]),
+            path_prefix: None,
+        };
+
+        let qdrant_filter = filter.to_qdrant_filter();
+        assert!(qdrant_filter.is_some());
+
+        let f = qdrant_filter.unwrap();
+        assert_eq!(f.must.len(), 1);
+        if let Some(qdrant_client::qdrant::condition::ConditionOneOf::Filter(nested)) =
+            &f.must[0].condition_one_of
+        {
+            assert_eq!(nested.should.len(), 2);
+        } else {
+            panic!("Expected nested filter with should conditions for multi-value source_types");
+        }
+    }
+
+    #[test]
+    fn test_single_source_id_with_multi_source_types() {
+        let filter = SearchFilter {
+            source_ids: Some(vec!["only-source".to_string()]),
+            source_types: Some(vec![
+                "dir".to_string(),
+                "url".to_string(),
+                "sitemap".to_string(),
+            ]),
+            path_prefix: None,
+        };
+
+        let qdrant_filter = filter.to_qdrant_filter();
+        assert!(qdrant_filter.is_some());
+
+        let f = qdrant_filter.unwrap();
+        // 1 direct match for source_id + 1 nested filter for source_types
+        assert_eq!(f.must.len(), 2);
+    }
+
+    #[test]
+    fn test_empty_filter_produces_none() {
+        let filter = SearchFilter {
+            source_ids: None,
+            source_types: None,
+            path_prefix: None,
+        };
+
+        assert!(filter.to_qdrant_filter().is_none());
+    }
+
+    #[test]
+    fn test_empty_vecs_produce_none() {
+        let filter = SearchFilter {
+            source_ids: Some(vec![]),
+            source_types: Some(vec![]),
+            path_prefix: None,
+        };
+
+        assert!(filter.to_qdrant_filter().is_none());
     }
 
     #[tokio::test]

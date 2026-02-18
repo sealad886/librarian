@@ -139,6 +139,7 @@ pub fn chunk_document(
 
 /// Find potential break points in the text
 fn find_break_points(text: &str, headings: &[Heading], config: &ChunkConfig) -> Vec<BreakPoint> {
+    let code_blocks = find_code_blocks(text);
     let mut points = Vec::new();
 
     // Add heading positions as high-priority breaks
@@ -200,6 +201,9 @@ fn find_break_points(text: &str, headings: &[Heading], config: &ChunkConfig) -> 
             priority: BreakPriority::Sentence,
         });
     }
+
+    // Filter out break points that fall inside code blocks
+    points.retain(|p| !is_in_code_block(p.position, &code_blocks));
 
     // Sort by position
     points.sort_by_key(|p| p.position);
@@ -392,6 +396,77 @@ mod tests {
         for chunk in &chunks {
             // Each chunk should have appropriate headings
             assert!(chunk.headings.len() <= doc.headings.len());
+        }
+    }
+
+    #[test]
+    fn test_break_points_avoid_code_blocks() {
+        // Text containing a fenced code block with paragraph break and sentence boundary inside
+        let text = "Some intro paragraph.\n\n\
+                     ```python\n\
+                     def hello():\n\
+                     \n\
+                     \n\
+                         print(\"Hello. World\")\n\
+                     \n\
+                     \n\
+                         return True. Done\n\
+                     ```\n\n\
+                     Some outro paragraph.";
+
+        let code_blocks = find_code_blocks(text);
+        assert!(!code_blocks.is_empty(), "should detect code block");
+
+        let config = default_chunk_config();
+        let headings = Vec::new();
+        let break_points = find_break_points(text, &headings, &config);
+
+        // No break points should fall inside the code block
+        for bp in &break_points {
+            assert!(
+                !is_in_code_block(bp.position, &code_blocks),
+                "break point at position {} should not be inside a code block",
+                bp.position
+            );
+        }
+    }
+
+    #[test]
+    fn test_chunk_document_preserves_code_blocks() {
+        // Build a document with a code block that has paragraph breaks and sentence breaks inside
+        let code_block = "```rust\nfn main() {\n\n    println!(\"Hello. World\");\n\n    let x = 42. Some comment\n}\n```";
+        let filler = "A".repeat(200);
+        let text = format!("{}\n\n{}\n\n{}", filler, code_block, filler);
+
+        let doc = make_test_doc(&text);
+        let config = ChunkConfig {
+            max_chars: 250,
+            overlap_chars: 20,
+            prefer_heading_boundaries: true,
+            min_chars: 30,
+        };
+        let doc_hash = compute_text_hash(&doc.text);
+
+        let chunks = chunk_document(&doc, &doc_hash, &config).unwrap();
+
+        // Find the code block range
+        let code_start = text.find("```rust").unwrap();
+        let code_end = text.find("}\n```").unwrap() + "}\n```".len();
+
+        // Verify no chunk *ends* strictly inside the code block (i.e., the code block
+        // is not split mid-way by a break point). Overlap may cause a chunk *start*
+        // to land inside the code block, which is fine — the full block still appears
+        // in the preceding chunk.
+        for chunk in &chunks {
+            let ends_inside = chunk.char_end > code_start && chunk.char_end < code_end;
+            assert!(
+                !ends_inside,
+                "chunk (start={}, end={}) has a break point inside code block (start={}, end={})",
+                chunk.char_start,
+                chunk.char_end,
+                code_start,
+                code_end
+            );
         }
     }
 }
