@@ -114,7 +114,7 @@ pub async fn cmd_reindex(
             RunStatus::Failed
         };
 
-        let _ = db
+        if let Err(e) = db
             .complete_ingestion_run(
                 &run.id,
                 status,
@@ -128,7 +128,10 @@ pub async fn cmd_reindex(
                     Some(run_errors.clone())
                 },
             )
-            .await;
+            .await
+        {
+            warn!(run_id = %run.id, error = %e, "Failed to record reindex run completion");
+        }
     }
 
     debug!(

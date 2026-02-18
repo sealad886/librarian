@@ -7,7 +7,79 @@
 //! - Framework-specific markers
 
 use regex::Regex;
+use std::sync::LazyLock;
 use tracing::debug;
+
+// Pre-compiled regexes used in page analysis functions (called per-page)
+static SCRIPT_STRIP_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap());
+static STYLE_STRIP_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap());
+static TAG_STRIP_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^>]+>").unwrap());
+static SCRIPT_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"<script[^>]*(?:src\s*=\s*["'][^"']+["'])?[^>]*>"#).unwrap());
+static INLINE_SCRIPT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<script[^>]*>(.+?)</script>").unwrap());
+static HASH_ROUTE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"href\s*=\s*["']#(/[^"'#]*)["']"#).unwrap());
+static HREF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"href\s*=\s*["']([^"']+)["']"#).unwrap());
+
+static SPA_ROOT_RES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    [
+        (
+            r"(?i)<app-root[^>]*>\s*</app-root>",
+            "Angular <app-root> shell",
+        ),
+        (
+            r"(?i)<app-root[^>]*>Loading",
+            "Angular <app-root> with loading state",
+        ),
+        (
+            r#"(?i)<div\s+id\s*=\s*["']root["'][^>]*>\s*</div>"#,
+            "React #root shell",
+        ),
+        (
+            r#"(?i)<div\s+id\s*=\s*["']app["'][^>]*>\s*</div>"#,
+            "React/Vue #app shell",
+        ),
+        (
+            r#"(?i)<div\s+id\s*=\s*["']__next["'][^>]*>\s*</div>"#,
+            "Next.js #__next shell",
+        ),
+        (
+            r#"(?i)<div\s+id\s*=\s*["']__nuxt["'][^>]*>"#,
+            "Nuxt #__nuxt shell",
+        ),
+        (
+            r#"(?i)<div\s+id\s*=\s*["']svelte["'][^>]*>\s*</div>"#,
+            "Svelte #svelte shell",
+        ),
+        (
+            r#"(?i)<div\s+id\s*=\s*["']main-app["'][^>]*>\s*</div>"#,
+            "SPA #main-app shell",
+        ),
+    ]
+    .into_iter()
+    .map(|(pat, desc)| (Regex::new(pat).unwrap(), desc))
+    .collect()
+});
+
+static AUTH_FORM_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)<form[^>]*action[^>]*login"#).unwrap());
+static AUTH_PASSWORD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)<input[^>]*type\s*=\s*["']password["']"#).unwrap());
+
+static JS_ROUTE_RES: LazyLock<Vec<Regex>> = LazyLock::new(|| {
+    [
+        r#"navigate\s*\(\s*\[\s*['"](/[^'"]+)['"]"#,
+        r#"\$router\.push\s*\(\s*['"]#?(/[^'"]+)['"]"#,
+        r#"path\s*:\s*['"](/[^'"]+)['"]"#,
+    ]
+    .into_iter()
+    .map(|pat| Regex::new(pat).unwrap())
+    .collect()
+});
 
 /// Detected page technology/rendering method
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,14 +318,11 @@ fn calculate_content_ratio(html: &str) -> f32 {
     }
 
     // First, strip scripts and styles (must do this BEFORE stripping tags)
-    let script_re = Regex::new(r"(?is)<script[^>]*>.*?</script>").unwrap();
-    let style_re = Regex::new(r"(?is)<style[^>]*>.*?</style>").unwrap();
-    let cleaned = script_re.replace_all(html, "");
-    let cleaned = style_re.replace_all(&cleaned, "");
+    let cleaned = SCRIPT_STRIP_RE.replace_all(html, "");
+    let cleaned = STYLE_STRIP_RE.replace_all(&cleaned, "");
 
     // Now strip remaining tags
-    let tag_re = Regex::new(r"<[^>]+>").unwrap();
-    let text_only = tag_re.replace_all(&cleaned, " ");
+    let text_only = TAG_STRIP_RE.replace_all(&cleaned, " ");
 
     // Normalize whitespace and count
     let text_content: String = text_only.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -266,48 +335,9 @@ fn calculate_content_ratio(html: &str) -> f32 {
 fn check_spa_root_elements(html: &str) -> Vec<String> {
     let mut indicators = Vec::new();
 
-    let spa_patterns = [
-        // Angular
-        (r"<app-root[^>]*>\s*</app-root>", "Angular <app-root> shell"),
-        (
-            r"<app-root[^>]*>Loading",
-            "Angular <app-root> with loading state",
-        ),
-        // React
-        (
-            r#"<div\s+id\s*=\s*["']root["'][^>]*>\s*</div>"#,
-            "React #root shell",
-        ),
-        (
-            r#"<div\s+id\s*=\s*["']app["'][^>]*>\s*</div>"#,
-            "React/Vue #app shell",
-        ),
-        (
-            r#"<div\s+id\s*=\s*["']__next["'][^>]*>\s*</div>"#,
-            "Next.js #__next shell",
-        ),
-        // Vue
-        (
-            r#"<div\s+id\s*=\s*["']__nuxt["'][^>]*>"#,
-            "Nuxt #__nuxt shell",
-        ),
-        // Svelte
-        (
-            r#"<div\s+id\s*=\s*["']svelte["'][^>]*>\s*</div>"#,
-            "Svelte #svelte shell",
-        ),
-        // Generic
-        (
-            r#"<div\s+id\s*=\s*["']main-app["'][^>]*>\s*</div>"#,
-            "SPA #main-app shell",
-        ),
-    ];
-
-    for (pattern, description) in spa_patterns {
-        if let Ok(re) = Regex::new(&format!("(?i){}", pattern)) {
-            if re.is_match(html) {
-                indicators.push(description.to_string());
-            }
+    for (re, description) in SPA_ROOT_RES.iter() {
+        if re.is_match(html) {
+            indicators.push(description.to_string());
         }
     }
 
@@ -379,13 +409,11 @@ struct ScriptAnalysis {
 
 /// Analyze script loading patterns
 fn analyze_scripts(html: &str, _html_lower: &str) -> ScriptAnalysis {
-    let script_re = Regex::new(r#"<script[^>]*(?:src\s*=\s*["'][^"']+["'])?[^>]*>"#).unwrap();
-    let scripts: Vec<_> = script_re.find_iter(html).collect();
+    let scripts: Vec<_> = SCRIPT_TAG_RE.find_iter(html).collect();
     let script_count = scripts.len();
 
     // Estimate total script size from inline scripts
-    let inline_re = Regex::new(r"(?is)<script[^>]*>(.+?)</script>").unwrap();
-    let inline_size: usize = inline_re
+    let inline_size: usize = INLINE_SCRIPT_RE
         .captures_iter(html)
         .map(|c| c.get(1).map_or(0, |m| m.as_str().len()))
         .sum();
@@ -420,28 +448,19 @@ fn check_hydration_markers(html_lower: &str) -> bool {
 
 /// Check for authentication walls
 fn check_auth_wall(html_lower: &str) -> bool {
-    // Look for login forms with minimal other content
-    let auth_indicators = [
-        r#"<form[^>]*action[^>]*login"#,
-        r#"<input[^>]*type\s*=\s*["']password["']"#,
+    let plain_indicators = [
         "sign in to continue",
         "log in to continue",
         "please log in",
         "authentication required",
     ];
 
-    let auth_count = auth_indicators
+    let auth_count = plain_indicators
         .iter()
-        .filter(|p| {
-            if p.contains('<') {
-                Regex::new(&format!("(?i){}", p))
-                    .map(|re| re.is_match(html_lower))
-                    .unwrap_or(false)
-            } else {
-                html_lower.contains(*p)
-            }
-        })
-        .count();
+        .filter(|p| html_lower.contains(*p))
+        .count()
+        + usize::from(AUTH_FORM_RE.is_match(html_lower))
+        + usize::from(AUTH_PASSWORD_RE.is_match(html_lower));
 
     // Need multiple auth indicators to avoid false positives
     auth_count >= 2
@@ -478,9 +497,7 @@ pub fn extract_hash_routes(html: &str) -> Vec<String> {
 
     // Match href="#/..." patterns (hash-based routing)
     // This captures Angular, Vue hash mode, and other hash-routed SPAs
-    let hash_route_re = Regex::new(r#"href\s*=\s*["']#(/[^"'#]*)["']"#).unwrap();
-
-    for cap in hash_route_re.captures_iter(html) {
+    for cap in HASH_ROUTE_RE.captures_iter(html) {
         if let Some(route) = cap.get(1) {
             let route_str = route.as_str().to_string();
             // Skip empty or just "/" routes
@@ -491,23 +508,12 @@ pub fn extract_hash_routes(html: &str) -> Vec<String> {
     }
 
     // Also check for programmatic routes in JavaScript (common patterns)
-    let js_route_patterns = [
-        // router.navigate(['...'])
-        r#"navigate\s*\(\s*\[\s*['"](/[^'"]+)['"]"#,
-        // this.$router.push('...')
-        r#"\$router\.push\s*\(\s*['"]#?(/[^'"]+)['"]"#,
-        // { path: '/...' }
-        r#"path\s*:\s*['"](/[^'"]+)['"]"#,
-    ];
-
-    for pattern in js_route_patterns {
-        if let Ok(re) = Regex::new(pattern) {
-            for cap in re.captures_iter(html) {
-                if let Some(route) = cap.get(1) {
-                    let route_str = route.as_str().to_string();
-                    if route_str != "/" && !route_str.is_empty() {
-                        routes.insert(route_str);
-                    }
+    for re in JS_ROUTE_RES.iter() {
+        for cap in re.captures_iter(html) {
+            if let Some(route) = cap.get(1) {
+                let route_str = route.as_str().to_string();
+                if route_str != "/" && !route_str.is_empty() {
+                    routes.insert(route_str);
                 }
             }
         }
@@ -526,9 +532,7 @@ pub fn extract_hash_routes_from_rendered(html: &str, base_url: &str) -> Vec<Stri
     let base = Url::parse(base_url).ok();
 
     // Match all href attributes
-    let href_re = Regex::new(r#"href\s*=\s*["']([^"']+)["']"#).unwrap();
-
-    for cap in href_re.captures_iter(html) {
+    for cap in HREF_RE.captures_iter(html) {
         if let Some(href) = cap.get(1) {
             let href_str = href.as_str();
 

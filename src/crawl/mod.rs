@@ -26,13 +26,17 @@ pub use ssrf::*;
 use crate::config::CrawlConfig;
 use crate::error::{Error, Result};
 use crate::parse::{parse_html, ContentType, ExtractedLink};
+use regex::Regex;
 use reqwest::Client;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use url::Url;
+
+static DATE_URL_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/\d{4}/\d{2}/\d{2}/").unwrap());
 
 /// A crawled page
 #[derive(Debug, Clone)]
@@ -653,11 +657,8 @@ pub fn should_crawl_url(url: &str) -> bool {
     }
 
     // Skip calendar-like URLs with dates
-    let date_pattern = regex::Regex::new(r"/\d{4}/\d{2}/\d{2}/").ok();
-    if let Some(re) = date_pattern {
-        if re.is_match(&lower) {
-            return false;
-        }
+    if DATE_URL_RE.is_match(&lower) {
+        return false;
     }
 
     true

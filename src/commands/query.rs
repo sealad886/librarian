@@ -36,6 +36,7 @@ pub struct QueryResult {
     pub results: Vec<RankedResult>,
     pub query: String,
     pub total_chunks_searched: usize,
+    pub result_count: usize,
     pub intent: QueryIntent,
 }
 
@@ -82,7 +83,8 @@ pub async fn cmd_query(
 
     // Search Qdrant
     let search_results = store.search(query_vector, k * 2, filter).await?;
-    debug!("Got {} raw results from Qdrant", search_results.len());
+    let total_searched = search_results.len();
+    debug!("Got {} raw results from Qdrant", total_searched);
 
     // Rank results
     let ranker = Ranker::new(config.query.bm25_weight);
@@ -156,7 +158,8 @@ pub async fn cmd_query(
     Ok(QueryResult {
         results: ranked,
         query: query.to_string(),
-        total_chunks_searched: total,
+        total_chunks_searched: total_searched,
+        result_count: total,
         intent,
     })
 }
@@ -200,7 +203,14 @@ async fn apply_reranker(
 
 fn chunk_preview(chunk_text: &str) -> String {
     if chunk_text.len() > 200 {
-        format!("{}...", &chunk_text[..200].trim())
+        // Find a safe UTF-8 character boundary: include chars starting before byte 200
+        let end = chunk_text
+            .char_indices()
+            .take_while(|&(idx, _)| idx < 200)
+            .last()
+            .map(|(idx, ch)| idx + ch.len_utf8())
+            .unwrap_or(0);
+        format!("{}...", chunk_text[..end].trim())
     } else {
         chunk_text.trim().to_string()
     }
@@ -277,5 +287,27 @@ mod tests {
         let input = format!("{}{}", "x".repeat(200), "tail");
         let preview = chunk_preview(&input);
         assert_eq!(preview, format!("{}...", "x".repeat(200)));
+    }
+
+    #[test]
+    fn chunk_preview_handles_multibyte_utf8_at_boundary() {
+        // Place a 4-byte emoji right at the 200-byte boundary
+        // 198 ASCII bytes + "🔍" (4 bytes) + more text
+        let input = format!("{}🔍rest of the text", "x".repeat(198));
+        let preview = chunk_preview(&input);
+        // Should not panic, and should include the emoji since 198+4=202 > 200
+        // but boundary search finds the char boundary at 198 or 202
+        assert!(preview.ends_with("..."));
+        assert!(!preview.is_empty());
+    }
+
+    #[test]
+    fn chunk_preview_handles_cjk_at_boundary() {
+        // CJK characters are 3 bytes each in UTF-8
+        // 66 CJK chars = 198 bytes, then add more CJK
+        let input: String = std::iter::repeat('中').take(70).collect();
+        let preview = chunk_preview(&input);
+        assert!(preview.ends_with("..."));
+        assert!(!preview.is_empty());
     }
 }

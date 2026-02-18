@@ -789,11 +789,16 @@ async fn handle_related(arguments: &HashMap<String, Value>, db: &MetaDb) -> Tool
 
 /// Handle rag_analytics tool
 async fn handle_analytics(arguments: &HashMap<String, Value>, db: &MetaDb) -> ToolResult {
-    let days = arguments.get("days").and_then(|v| v.as_i64()).unwrap_or(30) as i32;
+    let days = arguments
+        .get("days")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(30)
+        .clamp(1, 365) as i32;
     let recent_limit = arguments
         .get("recent_limit")
         .and_then(|v| v.as_i64())
-        .unwrap_or(10);
+        .unwrap_or(10)
+        .clamp(1, 100);
 
     let mut output = String::new();
 

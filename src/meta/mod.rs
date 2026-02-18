@@ -237,7 +237,7 @@ impl Chunk {
         let now = Utc::now().to_rfc3339();
         let point_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk_hash.as_bytes()).to_string();
 
-        let char_end = chunk_text.len() as i32;
+        let char_end = i32::try_from(chunk_text.len()).unwrap_or(i32::MAX);
 
         Self {
             id: Uuid::new_v4().to_string(),
@@ -270,7 +270,7 @@ impl Chunk {
         let now = Utc::now().to_rfc3339();
         let point_id = Uuid::new_v5(&Uuid::NAMESPACE_OID, chunk_hash.as_bytes()).to_string();
 
-        let char_end = chunk_text.len() as i32;
+        let char_end = i32::try_from(chunk_text.len()).unwrap_or(i32::MAX);
 
         Self {
             id: Uuid::new_v4().to_string(),
@@ -694,9 +694,11 @@ impl MetaDb {
         doc_id: &str,
         links: &[crate::parse::ExtractedLink],
     ) -> Result<usize> {
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query("DELETE FROM document_links WHERE from_doc_id = ?")
             .bind(doc_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
 
         let now = Utc::now().to_rfc3339();
@@ -719,10 +721,12 @@ impl MetaDb {
             .bind(link.text.as_deref())
             .bind(link_type)
             .bind(&now)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
             count += 1;
         }
+
+        tx.commit().await?;
         Ok(count)
     }
 

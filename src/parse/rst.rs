@@ -10,6 +10,13 @@ use super::{
 };
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+// Pre-compiled regexes for inline link extraction (called per-line)
+static RST_INLINE_REF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"`([^`]+)\s+<([^>]+)>`_").unwrap());
+static RST_BARE_URL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https?://[^\s)>\]]+").unwrap());
 
 /// RST section adornment characters in priority order.
 ///
@@ -63,9 +70,10 @@ pub fn parse_rst(content: &str) -> ParsedDocument {
                 text: heading_text.clone(),
                 position: char_pos,
             });
+            let heading_len = heading_text.len();
             text_parts.push(heading_text);
             text_parts.push("\n\n".to_string());
-            char_pos += text_parts.last().map(|s| s.len()).unwrap_or(0);
+            char_pos += heading_len + 2;
             // Skip consumed lines for overline + title + underline
             i += consumed;
             continue;
@@ -116,9 +124,10 @@ pub fn parse_rst(content: &str) -> ParsedDocument {
                     content: code_content.clone(),
                     position: char_pos,
                 });
+                let code_len = code_content.len();
                 text_parts.push(code_content);
                 text_parts.push("\n\n".to_string());
-                char_pos += text_parts.last().map(|s| s.len()).unwrap_or(0);
+                char_pos += code_len + 2;
             }
             continue;
         }
@@ -323,8 +332,7 @@ fn get_or_assign_level(levels: &mut Vec<(char, bool)>, adorn_char: char, has_ove
 /// - Bare URLs: `http://` or `https://` followed by non-whitespace
 fn extract_inline_rst_links(line: &str, links: &mut Vec<ExtractedLink>) {
     // Pattern: `text <url>`_
-    let re = Regex::new(r"`([^`]+)\s+<([^>]+)>`_").unwrap();
-    for cap in re.captures_iter(line) {
+    for cap in RST_INLINE_REF_RE.captures_iter(line) {
         links.push(ExtractedLink {
             url: cap[2].to_string(),
             text: Some(cap[1].to_string()),
@@ -333,8 +341,7 @@ fn extract_inline_rst_links(line: &str, links: &mut Vec<ExtractedLink>) {
     }
 
     // Bare URLs
-    let url_re = Regex::new(r"https?://[^\s)>\]]+").unwrap();
-    for mat in url_re.find_iter(line) {
+    for mat in RST_BARE_URL_RE.find_iter(line) {
         let url = mat.as_str().to_string();
         // Skip if already captured as an inline ref
         if !links.iter().any(|l| l.url == url) {

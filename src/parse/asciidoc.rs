@@ -9,6 +9,17 @@ use super::{
 };
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+// Pre-compiled regexes for link/image extraction (called per-line)
+static ADOC_LINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"link:([^\[]+)\[([^\]]*)\]").unwrap());
+static ADOC_XREF_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"<<([^,>]+)(?:,([^>]+))>>").unwrap());
+static ADOC_BARE_URL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https?://[^\s\[\])+>]+").unwrap());
+static ADOC_INLINE_IMG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"image:([^:\[]+)\[([^\]]*)\]").unwrap());
 
 /// Parse AsciiDoc content into a [`ParsedDocument`].
 ///
@@ -56,9 +67,10 @@ pub fn parse_asciidoc(content: &str) -> ParsedDocument {
                 text: heading_text.clone(),
                 position: char_pos,
             });
+            let heading_len = heading_text.len();
             text_parts.push(heading_text);
             text_parts.push("\n\n".to_string());
-            char_pos += text_parts.last().map(|s| s.len()).unwrap_or(0);
+            char_pos += heading_len + 2;
             i += 1;
             continue;
         }
@@ -96,9 +108,10 @@ pub fn parse_asciidoc(content: &str) -> ParsedDocument {
                     content: code_content.clone(),
                     position: char_pos,
                 });
+                let code_len = code_content.len();
                 text_parts.push(code_content);
                 text_parts.push("\n\n".to_string());
-                char_pos += text_parts.last().map(|s| s.len()).unwrap_or(0);
+                char_pos += code_len + 2;
             }
             continue;
         }
@@ -123,9 +136,10 @@ pub fn parse_asciidoc(content: &str) -> ParsedDocument {
                     content: code_content.clone(),
                     position: char_pos,
                 });
+                let code_len = code_content.len();
                 text_parts.push(code_content);
                 text_parts.push("\n\n".to_string());
-                char_pos += text_parts.last().map(|s| s.len()).unwrap_or(0);
+                char_pos += code_len + 2;
             }
             continue;
         }
@@ -228,8 +242,7 @@ fn parse_image_macro(line: &str, prefix: &str) -> Option<(String, Option<String>
 /// - `<<anchor,text>>` cross-references
 fn extract_asciidoc_links(line: &str, links: &mut Vec<ExtractedLink>) {
     // link:url[text]
-    let link_re = Regex::new(r"link:([^\[]+)\[([^\]]*)\]").unwrap();
-    for cap in link_re.captures_iter(line) {
+    for cap in ADOC_LINK_RE.captures_iter(line) {
         links.push(ExtractedLink {
             url: cap[1].to_string(),
             text: if cap[2].is_empty() {
@@ -242,8 +255,7 @@ fn extract_asciidoc_links(line: &str, links: &mut Vec<ExtractedLink>) {
     }
 
     // Cross-references: <<anchor,text>>
-    let xref_re = Regex::new(r"<<([^,>]+)(?:,([^>]+))>>").unwrap();
-    for cap in xref_re.captures_iter(line) {
+    for cap in ADOC_XREF_RE.captures_iter(line) {
         links.push(ExtractedLink {
             url: format!("#{}", &cap[1]),
             text: cap.get(2).map(|m| m.as_str().to_string()),
@@ -252,8 +264,7 @@ fn extract_asciidoc_links(line: &str, links: &mut Vec<ExtractedLink>) {
     }
 
     // Bare URLs
-    let url_re = Regex::new(r"https?://[^\s\[\])+>]+").unwrap();
-    for mat in url_re.find_iter(line) {
+    for mat in ADOC_BARE_URL_RE.find_iter(line) {
         let url = mat.as_str().to_string();
         if !links.iter().any(|l| l.url == url) {
             links.push(ExtractedLink {
@@ -267,8 +278,7 @@ fn extract_asciidoc_links(line: &str, links: &mut Vec<ExtractedLink>) {
 
 /// Extract inline image macros: `image:path[alt]` (single colon = inline).
 fn extract_inline_images(line: &str, media: &mut Vec<ExtractedMedia>) {
-    let img_re = Regex::new(r"image:([^:\[]+)\[([^\]]*)\]").unwrap();
-    for cap in img_re.captures_iter(line) {
+    for cap in ADOC_INLINE_IMG_RE.captures_iter(line) {
         let url = cap[1].to_string();
         let alt = if cap[2].is_empty() {
             None

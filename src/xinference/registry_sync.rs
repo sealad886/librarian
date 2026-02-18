@@ -12,8 +12,11 @@ use reqwest::{Client, Method, Url};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::Duration;
 use tracing::warn;
+
+static PATH_PLACEHOLDER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{[^}]+\}").unwrap());
 
 #[derive(Debug, Clone)]
 pub struct SyncOptions {
@@ -433,8 +436,9 @@ fn apply_type_to_path(path: &str, registry_type: RegistryType) -> String {
         return path.to_string();
     }
 
-    let re = Regex::new(r"\{[^}]+\}").unwrap_or_else(|_| Regex::new(r"\{\}").unwrap());
-    re.replace_all(path, registry_type.api_label()).to_string()
+    PATH_PLACEHOLDER_RE
+        .replace_all(path, registry_type.api_label())
+        .to_string()
 }
 
 async fn send_with_retry<T: serde::de::DeserializeOwned>(

@@ -8,7 +8,11 @@ use crate::error::Result;
 use regex::Regex;
 use scraper::{Html, Selector};
 use std::collections::HashSet;
+use std::sync::LazyLock;
 use url::Url;
+
+static CSS_BG_IMAGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"background-image\s*:\s*url\(([^)]+)\)"#).unwrap());
 
 /// Parse HTML content and extract text
 pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocument> {
@@ -59,7 +63,7 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
                 text: heading_text.clone(),
                 position,
             });
-            search_offset = position + heading_text.len();
+            search_offset = (position + heading_text.len()).min(doc.text.len());
         }
     }
 
@@ -201,16 +205,17 @@ pub fn parse_html(content: &str, base_url: Option<&str>) -> Result<ParsedDocumen
     // Inline CSS background-image: url(...)
     if let Ok(selector) = Selector::parse("*[style]") {
         let base = base_url.and_then(|u| Url::parse(u).ok());
-        let re = Regex::new(r#"background-image\s*:\s*url\(([^)]+)\)"#).ok();
-        if let Some(ref regex) = re {
+        {
+            let regex = &*CSS_BG_IMAGE_RE;
             for elem in document.select(&selector) {
                 if let Some(style) = elem.value().attr("style") {
                     if let Some(caps) = regex.captures(style) {
                         if let Some(m) = caps.get(1) {
                             let mut raw = m.as_str().trim().to_string();
-                            // Trim surrounding quotes if present
-                            if (raw.starts_with('"') && raw.ends_with('"'))
-                                || (raw.starts_with('\'') && raw.ends_with('\''))
+                            // Trim surrounding quotes if present (guard length >= 2)
+                            if raw.len() >= 2
+                                && ((raw.starts_with('"') && raw.ends_with('"'))
+                                    || (raw.starts_with('\'') && raw.ends_with('\'')))
                             {
                                 raw = raw[1..raw.len() - 1].to_string();
                             }

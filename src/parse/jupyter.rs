@@ -9,8 +9,16 @@ use super::{
     ParsedDocument,
 };
 use crate::error::{Error, Result};
+use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+// Pre-compiled regexes for markdown link/image extraction (called per-line)
+static MD_LINK_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap());
+static MD_IMAGE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").unwrap());
 
 /// Top-level notebook structure (nbformat 4).
 #[derive(Debug, Deserialize)]
@@ -234,8 +242,7 @@ fn extract_output_text(output: &CellOutput) -> Option<String> {
 
 /// Extract markdown-style links from a line: `[text](url)`.
 fn extract_markdown_links(line: &str, links: &mut Vec<ExtractedLink>) {
-    let re = regex::Regex::new(r"\[([^\]]*)\]\(([^)]+)\)").unwrap();
-    for cap in re.captures_iter(line) {
+    for cap in MD_LINK_RE.captures_iter(line) {
         // Skip image links (prefixed with !)
         let start = cap.get(0).unwrap().start();
         if start > 0 && line.as_bytes()[start - 1] == b'!' {
@@ -255,8 +262,7 @@ fn extract_markdown_links(line: &str, links: &mut Vec<ExtractedLink>) {
 
 /// Extract markdown-style images from a line: `![alt](url)`.
 fn extract_markdown_images(line: &str, media: &mut Vec<ExtractedMedia>) {
-    let re = regex::Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").unwrap();
-    for cap in re.captures_iter(line) {
+    for cap in MD_IMAGE_RE.captures_iter(line) {
         media.push(ExtractedMedia {
             url: cap[2].to_string(),
             alt: if cap[1].is_empty() {
