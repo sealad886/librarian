@@ -684,16 +684,31 @@ async fn run() -> Result<()> {
 
 fn handle_config_action(action: ConfigAction) -> Result<()> {
     match action {
-        ConfigAction::Print { all: _ } => {
+        ConfigAction::Print { all } => {
             use librarian::config::render_config_toml;
             use std::collections::HashSet;
 
-            let config = Config::default();
             let defaults = Config::default();
-            // Show all fields as non-default by using empty irrelevant set
             let irrelevant = HashSet::new();
-            let rendered = render_config_toml(&config, &defaults, &irrelevant);
-            println!("{}", rendered);
+
+            if all {
+                let rendered = render_config_toml(&defaults, &defaults, &irrelevant);
+                println!("{}", rendered);
+            } else {
+                let config_path = Config::default_config_path();
+                if config_path.exists() {
+                    let config = Config::load(&config_path)?;
+                    let rendered = render_config_toml(&config, &defaults, &irrelevant);
+                    println!("{}", rendered);
+                } else {
+                    eprintln!(
+                        "No config file found at {}. Use --all to print defaults.",
+                        config_path.display()
+                    );
+                    let rendered = render_config_toml(&defaults, &defaults, &irrelevant);
+                    println!("{}", rendered);
+                }
+            }
             Ok(())
         }
     }

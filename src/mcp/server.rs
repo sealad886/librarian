@@ -8,8 +8,8 @@ use crate::meta::MetaDb;
 use crate::store::QdrantStore;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::{self, BufRead, Write};
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::RwLock;
 use tracing::{debug, error, warn};
 
@@ -63,12 +63,13 @@ impl McpServer {
 
     /// Run the MCP server loop over stdio
     pub async fn run(&self) -> Result<(), McpError> {
-        let stdin = io::stdin();
-        let mut stdout = io::stdout();
+        let stdin = BufReader::new(tokio::io::stdin());
+        let mut stdout = tokio::io::stdout();
+        let mut lines = stdin.lines();
 
         debug!("MCP server starting on stdio");
 
-        for line in stdin.lock().lines() {
+        while let Some(line) = lines.next_line().await.transpose() {
             let line = match line {
                 Ok(l) => l,
                 Err(e) => {
@@ -96,8 +97,10 @@ impl McpServer {
                             "message": format!("Parse error: {}", e)
                         }
                     });
-                    writeln!(stdout, "{}", error_response)?;
-                    stdout.flush()?;
+                    let mut buf = error_response.to_string();
+                    buf.push('\n');
+                    stdout.write_all(buf.as_bytes()).await?;
+                    stdout.flush().await?;
                     continue;
                 }
             };
@@ -108,8 +111,10 @@ impl McpServer {
                     let response = self.handle_request(req).await;
                     let response_str = serde_json::to_string(&response)?;
                     debug!("Sending: {}", response_str);
-                    writeln!(stdout, "{}", response_str)?;
-                    stdout.flush()?;
+                    let mut buf = response_str;
+                    buf.push('\n');
+                    stdout.write_all(buf.as_bytes()).await?;
+                    stdout.flush().await?;
                 }
                 McpMessage::Notification(notif) => {
                     self.handle_notification(notif).await;

@@ -730,6 +730,10 @@ impl SearchFilter {
             }
         }
 
+        if let Some(ref prefix) = self.path_prefix {
+            must_conditions.push(Condition::matches_text("doc_uri", prefix.as_str()));
+        }
+
         if must_conditions.is_empty() {
             return None;
         }
@@ -899,6 +903,33 @@ mod tests {
         };
 
         assert!(filter.to_qdrant_filter().is_none());
+    }
+
+    #[test]
+    fn test_path_prefix_generates_condition() {
+        let filter = SearchFilter {
+            source_ids: None,
+            source_types: None,
+            path_prefix: Some("/docs/api".to_string()),
+        };
+
+        let qdrant_filter = filter.to_qdrant_filter();
+        assert!(qdrant_filter.is_some());
+        assert_eq!(qdrant_filter.unwrap().must.len(), 1);
+    }
+
+    #[test]
+    fn test_path_prefix_combined_with_source_ids() {
+        let filter = SearchFilter {
+            source_ids: Some(vec!["src-1".to_string()]),
+            source_types: None,
+            path_prefix: Some("/docs".to_string()),
+        };
+
+        let qdrant_filter = filter.to_qdrant_filter();
+        assert!(qdrant_filter.is_some());
+        // source_id match + path_prefix match
+        assert_eq!(qdrant_filter.unwrap().must.len(), 2);
     }
 
     #[test]

@@ -62,3 +62,17 @@ All quality gates passed after both rounds:
 - `cargo fmt` — clean
 - `cargo clippy -- -D warnings` — zero warnings
 - `cargo test` — 187 unit + 2 integration tests passing
+
+## Round 3 — Correctness and async safety
+
+1. **P1: MCP server blocking IO on Tokio runtime** — `src/mcp/server.rs` used `stdin.lock().lines()` (synchronous `std::io`) inside `async fn run()`, blocking the Tokio runtime thread and preventing background `tokio::spawn` tasks from progressing. Fixed: replaced with `tokio::io::BufReader::new(tokio::io::stdin()).lines()` via `AsyncBufReadExt`, and async stdout writes via `AsyncWriteExt`.
+2. **P2: `SearchFilter.path_prefix` silently ignored** — `to_qdrant_filter()` in `src/store/mod.rs` never generated a Qdrant condition for the `path_prefix` field. If set, results would silently include unfiltered documents. Fixed: added `Condition::matches_text("doc_uri", prefix)` clause. Added 2 unit tests.
+3. **P2: `config print --all` flag ignored** — `handle_config_action` in `src/main.rs` destructured `ConfigAction::Print { all: _ }` discarding the flag. Both `config print` and `config print --all` produced identical output. Fixed: when `all=false`, loads user config file and renders it; when `all=true`, renders full defaults.
+4. **P2: MCP `notifications/cancelled` no-op** — ACCEPTED. Handler only logs at debug level. Low risk since most MCP operations are short-lived.
+5. **P2: `ProgressStyle::with_template().unwrap()`** — ACCEPTED (repeat from Round 1). Static template string, always valid.
+
+### Round 3 Changes
+
+- `src/mcp/server.rs`: Replaced `std::io::{BufRead, Write}` with `tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader}`. Async stdin line reading and stdout writing.
+- `src/store/mod.rs`: `to_qdrant_filter()` now generates `matches_text("doc_uri", ...)` condition for `path_prefix`. Added `test_path_prefix_generates_condition` and `test_path_prefix_combined_with_source_ids` tests.
+- `src/main.rs`: `handle_config_action` now differentiates `all=true` (full defaults) from `all=false` (loaded user config).
