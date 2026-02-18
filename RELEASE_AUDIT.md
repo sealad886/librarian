@@ -133,3 +133,49 @@ Full audit of init wizard, configuration loading, CLI dispatch, and onboarding f
 
 - `src/main.rs`: `load_config` returns `Err(Error::Config(...))` instead of `process::exit(1)`. `handle_ingest` warns on ignored `--extensions`/`--exclude` flags. `build_qdrant_compose` removes deprecated `version: "3.9"` key.
 - `src/commands/init.rs`: `prompt_select` uses `SavePosition`/`RestorePosition` + `Clear(FromCursorDown)` instead of clearing entire terminal.
+
+## Round 6 — Remaining modules sweep
+
+Full audit of all remaining unaudited modules: classify, embed/http_backend, embed/mod, embedding_backend, store/mod, store/payload, rank, rerank, commands/{prune,sources,status,update,xinference}, chunk, crawl/ssrf, error, progress, lib.
+
+### Findings and fixes
+
+1. **P2: Blocking `std::fs::read` in async embedding backend** — `encode_file_base64()` in `src/embed/http_backend.rs` used synchronous `std::fs::read()` inside an `async fn` context (called from 6 async trait methods). This blocks the Tokio runtime thread while reading potentially large media files (images, audio, video). Fixed: replaced with `tokio::fs::read(path).await` and restructured all 6 callers from sync `.map().collect()` iterator chains to async for-loops (iterators cannot contain `.await`).
+
+2. **P2: Silent deserialization failure in Qdrant payload** — `From<Map<String, Value>> for ChunkPayload` in `src/store/payload.rs` used `.unwrap_or_else(|_| ...)` which silently swallowed `serde_json` deserialization errors. If Qdrant returns an unexpected payload shape (e.g., after schema migration), the error would be invisible. Fixed: added `tracing::warn!("Failed to deserialize Qdrant payload, using defaults: {e}")` to log the error before returning the fallback.
+
+### Accepted as-is
+
+- `embed/mod.rs` `fuse_embeddings` zip truncation — caller validates dimensions match before calling; zip semantics are intentional.
+- `embedding_backend.rs` linear retry without jitter — minor (local/LAN backend); jitter is a nice-to-have.
+- `commands/prune.rs` path existence check — `dry_run` safeguards are already in place.
+- `embed/mod.rs` `embed_unified` returning empty vec for zero inputs — correct short-circuit.
+
+### Round 6 Changes
+
+- `src/embed/http_backend.rs`: `encode_file_base64()` converted from `std::fs::read` to `tokio::fs::read().await`. All 6 async callers (`embed_images`, `embed_multimode`, `embed_audio`, `embed_audio_multimode`, `embed_video`, `embed_video_multimode`) restructured from sync iterator chains to async for-loops.
+- `src/store/payload.rs`: `ChunkPayload` deserialization fallback now logs a `tracing::warn!` with the error message.
+
+---
+
+## Round 7 — Duplication Audit
+
+**Scope:** Full codebase scan for non-trivial duplicated logic that risks divergence.
+
+### Findings and fixes
+
+1. **DUP-P1-001: Dimension mismatch check duplicated 4× (fixed)** — The pattern `if embedder.dimension() != store.dimension() { return Err(...) }` was copy-pasted in `cmd_ingest_dir`, `cmd_ingest_url`, `cmd_ingest_sitemap` (all in `src/commands/ingest.rs`) and `cmd_reindex` (in `src/commands/reindex.rs`). The ingest copies used a verbose error message (model, family, dimension source), while reindex used a shorter one. **Fix:** Extracted `pub(crate) fn validate_dimensions(embedder, store, embedding) -> Result<()>` in `ingest.rs` with the verbose error format. All 4 call sites now use the shared helper. Reindex now benefits from the richer diagnostics.
+
+2. **DUP-P1-002: Stale doc cleanup + run completion duplicated 3× (fixed)** — Identical blocks of ~35 lines appeared at the end of `cmd_ingest_dir`, `cmd_ingest_url`, and `cmd_ingest_sitemap`: delete stale documents → loop to remove Qdrant points → build errors Option → `complete_ingestion_run` → info log. **Fix:** Extracted `async fn cleanup_and_complete_run(db, store, source_id, run_id, current_uris, stats, label) -> Result<()>` in `ingest.rs`.  All 3 call sites replaced with a single function call. The `label` parameter preserves the per-command log prefix ("Ingestion" vs "Sitemap ingestion").
+
+### Accepted as-is (justified)
+
+- **`embed_*_in_batches` (3 functions in `src/embed/mod.rs`)** — `embed_in_batches`, `embed_images_in_batches`, `embed_multimode_in_batches` share the same loop-chunk-embed structure but operate on different input types (`&[String]` / text vs `&[ExtractedMedia]` / images vs multimode). Extracting a generic would require complex trait bounds for minimal gain. The functions are simple wrappers (~15 lines each) and the type divergence is the point.
+- **Xinference bootstrap in `create_embedder_auto` vs `create_reranker_auto`** — Both call `ensure_xinference_ready` then create an HTTP client, but for different resource kinds (embedding vs reranking). The shared pattern is trivial (~8 lines) and extracting it would over-abstract fundamentally different paths.
+- **`HttpEmbedder` 6 embed methods** — Each handles a different modality (text, images, audio, video, multimode variants) with different request types and capability checks. The structural similarity is inherent to the per-modality dispatch pattern.
+- **`EmbeddingBackendClient` embed methods** — Same justification as HttpEmbedder; each targets a different API endpoint with different payload shapes.
+
+### Round 7 Changes
+
+- `src/commands/ingest.rs`: Added `validate_dimensions()` and `cleanup_and_complete_run()` helper functions. Replaced 3 inline dimension checks and 3 inline cleanup blocks with calls to these helpers. Net reduction: ~100 lines of duplicated logic.
+- `src/commands/reindex.rs`: Replaced inline dimension check with `validate_dimensions()` call. Now uses the same rich error message as ingest paths.

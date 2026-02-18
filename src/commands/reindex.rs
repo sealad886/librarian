@@ -1,5 +1,6 @@
 //! Reindex command - re-embed all documents
 
+use crate::commands::ingest::validate_dimensions;
 use crate::config::{Config, ResolvedEmbeddingConfig};
 use crate::embed::{embed_images_with_optional_text_fusion, Embedder};
 use crate::error::{Error, Result};
@@ -48,13 +49,7 @@ pub async fn cmd_reindex(
 
     store.ensure_collection().await?;
 
-    if embedder.dimension() != store.dimension() {
-        return Err(Error::Embedding(format!(
-            "Embedding dimension {} does not match Qdrant collection dimension {}",
-            embedder.dimension(),
-            store.dimension()
-        )));
-    }
+    validate_dimensions(embedder, store, embedding)?;
 
     let mut stats = ReindexStats::default();
 

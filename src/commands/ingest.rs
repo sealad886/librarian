@@ -1601,16 +1601,7 @@ pub async fn cmd_ingest_dir(
     // Start ingestion run
     let run = db.start_ingestion_run(&source.id, operation).await?;
 
-    if embedder.dimension() != store.dimension() {
-        return Err(Error::Embedding(format!(
-            "Embedding dimension mismatch for model '{}' (family '{}', source {}): embedder {} != collection {}",
-            embedding.model_id,
-            embedding.family,
-            embedding.dimension_source,
-            embedder.dimension(),
-            store.dimension()
-        )));
-    }
+    validate_dimensions(embedder, store, embedding)?;
 
     // Collect all files
     let mut files: Vec<std::path::PathBuf> = Vec::new();
@@ -1765,49 +1756,16 @@ pub async fn cmd_ingest_dir(
         _ => {}
     }
 
-    // Delete stale documents
-    let stale_ids = db.delete_stale_documents(&source.id, &current_uris).await?;
-    if !stale_ids.is_empty() {
-        info!("Deleted {} stale documents", stale_ids.len());
-        // Get point IDs for stale docs and delete from Qdrant
-        for doc_id in &stale_ids {
-            if let Ok(chunks) = db.get_chunks(doc_id).await {
-                let point_ids: Vec<Uuid> = chunks.iter().map(|c| c.point_uuid()).collect();
-                if !point_ids.is_empty() {
-                    if let Err(e) = store.delete_points(&point_ids).await {
-                        warn!("Failed to delete Qdrant points: {}", e);
-                    }
-                }
-            }
-        }
-    }
-
-    // Complete ingestion run
-    let errors = if stats.errors.is_empty() {
-        None
-    } else {
-        Some(stats.errors.clone())
-    };
-
-    db.complete_ingestion_run(
+    cleanup_and_complete_run(
+        db,
+        store,
+        &source.id,
         &run.id,
-        if stats.errors.is_empty() {
-            RunStatus::Completed
-        } else {
-            RunStatus::Failed
-        },
-        stats.docs_processed,
-        stats.chunks_created,
-        stats.chunks_updated,
-        stats.chunks_deleted,
-        errors,
+        &current_uris,
+        &stats,
+        "Ingestion",
     )
     .await?;
-
-    info!(
-        "Ingestion complete: {} docs, {} chunks created, {} chunks updated",
-        stats.docs_processed, stats.chunks_created, stats.chunks_updated
-    );
 
     Ok(stats)
 }
@@ -2075,16 +2033,7 @@ pub async fn cmd_ingest_url(
     // Start ingestion run
     let run = db.start_ingestion_run(&source.id, operation).await?;
 
-    if embedder.dimension() != store.dimension() {
-        return Err(Error::Embedding(format!(
-            "Embedding dimension mismatch for model '{}' (family '{}', source {}): embedder {} != collection {}",
-            embedding.model_id,
-            embedding.family,
-            embedding.dimension_source,
-            embedder.dimension(),
-            store.dimension()
-        )));
-    }
+    validate_dimensions(embedder, store, embedding)?;
 
     // Build crawl config with CLI overrides
     let mut crawl_config = config.crawl.clone();
@@ -2144,48 +2093,16 @@ pub async fn cmd_ingest_url(
         _ => {}
     }
 
-    // Delete stale documents
-    let stale_ids = db.delete_stale_documents(&source.id, &current_uris).await?;
-    if !stale_ids.is_empty() {
-        info!("Deleted {} stale documents", stale_ids.len());
-        for doc_id in &stale_ids {
-            if let Ok(chunks) = db.get_chunks(doc_id).await {
-                let point_ids: Vec<Uuid> = chunks.iter().map(|c| c.point_uuid()).collect();
-                if !point_ids.is_empty() {
-                    if let Err(e) = store.delete_points(&point_ids).await {
-                        warn!("Failed to delete Qdrant points: {}", e);
-                    }
-                }
-            }
-        }
-    }
-
-    // Complete ingestion run
-    let errors = if stats.errors.is_empty() {
-        None
-    } else {
-        Some(stats.errors.clone())
-    };
-
-    db.complete_ingestion_run(
+    cleanup_and_complete_run(
+        db,
+        store,
+        &source.id,
         &run.id,
-        if stats.errors.is_empty() {
-            RunStatus::Completed
-        } else {
-            RunStatus::Failed
-        },
-        stats.docs_processed,
-        stats.chunks_created,
-        stats.chunks_updated,
-        stats.chunks_deleted,
-        errors,
+        &current_uris,
+        &stats,
+        "Ingestion",
     )
     .await?;
-
-    info!(
-        "Ingestion complete: {} docs, {} chunks created, {} chunks updated",
-        stats.docs_processed, stats.chunks_created, stats.chunks_updated
-    );
 
     Ok(stats)
 }
@@ -2253,16 +2170,7 @@ pub async fn cmd_ingest_sitemap(
     // Start ingestion run
     let run = db.start_ingestion_run(&source.id, operation).await?;
 
-    if embedder.dimension() != store.dimension() {
-        return Err(Error::Embedding(format!(
-            "Embedding dimension mismatch for model '{}' (family '{}', source {}): embedder {} != collection {}",
-            embedding.model_id,
-            embedding.family,
-            embedding.dimension_source,
-            embedder.dimension(),
-            store.dimension()
-        )));
-    }
+    validate_dimensions(embedder, store, embedding)?;
     let crawler = Crawler::new(config.crawl.clone())?;
 
     let mut current_uris: Vec<String> = Vec::new();
@@ -2311,48 +2219,16 @@ pub async fn cmd_ingest_sitemap(
         _ => {}
     }
 
-    // Delete stale documents
-    let stale_ids = db.delete_stale_documents(&source.id, &current_uris).await?;
-    if !stale_ids.is_empty() {
-        info!("Deleted {} stale documents", stale_ids.len());
-        for doc_id in &stale_ids {
-            if let Ok(chunks) = db.get_chunks(doc_id).await {
-                let point_ids: Vec<Uuid> = chunks.iter().map(|c| c.point_uuid()).collect();
-                if !point_ids.is_empty() {
-                    if let Err(e) = store.delete_points(&point_ids).await {
-                        warn!("Failed to delete Qdrant points: {}", e);
-                    }
-                }
-            }
-        }
-    }
-
-    // Complete ingestion run
-    let errors = if stats.errors.is_empty() {
-        None
-    } else {
-        Some(stats.errors.clone())
-    };
-
-    db.complete_ingestion_run(
+    cleanup_and_complete_run(
+        db,
+        store,
+        &source.id,
         &run.id,
-        if stats.errors.is_empty() {
-            RunStatus::Completed
-        } else {
-            RunStatus::Failed
-        },
-        stats.docs_processed,
-        stats.chunks_created,
-        stats.chunks_updated,
-        stats.chunks_deleted,
-        errors,
+        &current_uris,
+        &stats,
+        "Sitemap ingestion",
     )
     .await?;
-
-    info!(
-        "Sitemap ingestion complete: {} docs, {} chunks created, {} chunks updated",
-        stats.docs_processed, stats.chunks_created, stats.chunks_updated
-    );
 
     Ok(stats)
 }
@@ -2482,6 +2358,87 @@ async fn process_page(
     };
 
     Ok((created + image_created, updated + image_updated))
+}
+
+/// Validate that the embedder and store share the same vector dimension.
+///
+/// # Errors
+/// Returns `Error::Embedding` when the dimensions differ, including the
+/// model id, family, and dimension source for diagnostics.
+pub(crate) fn validate_dimensions(
+    embedder: &dyn Embedder,
+    store: &QdrantStore,
+    embedding: &ResolvedEmbeddingConfig,
+) -> Result<()> {
+    if embedder.dimension() != store.dimension() {
+        return Err(Error::Embedding(format!(
+            "Embedding dimension mismatch for model '{}' (family '{}', source {}): embedder {} != collection {}",
+            embedding.model_id,
+            embedding.family,
+            embedding.dimension_source,
+            embedder.dimension(),
+            store.dimension()
+        )));
+    }
+    Ok(())
+}
+
+/// Remove documents that no longer exist in the source and delete their Qdrant
+/// points, then finalise the ingestion run with the given stats.
+///
+/// # Errors
+/// Propagates database or store errors.
+async fn cleanup_and_complete_run(
+    db: &MetaDb,
+    store: &QdrantStore,
+    source_id: &str,
+    run_id: &str,
+    current_uris: &[String],
+    stats: &IngestStats,
+    completion_label: &str,
+) -> Result<()> {
+    let stale_ids = db.delete_stale_documents(source_id, current_uris).await?;
+    if !stale_ids.is_empty() {
+        info!("Deleted {} stale documents", stale_ids.len());
+        for doc_id in &stale_ids {
+            if let Ok(chunks) = db.get_chunks(doc_id).await {
+                let point_ids: Vec<Uuid> = chunks.iter().map(|c| c.point_uuid()).collect();
+                if !point_ids.is_empty() {
+                    if let Err(e) = store.delete_points(&point_ids).await {
+                        warn!("Failed to delete Qdrant points: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    let errors = if stats.errors.is_empty() {
+        None
+    } else {
+        Some(stats.errors.clone())
+    };
+
+    db.complete_ingestion_run(
+        run_id,
+        if stats.errors.is_empty() {
+            RunStatus::Completed
+        } else {
+            RunStatus::Failed
+        },
+        stats.docs_processed,
+        stats.chunks_created,
+        stats.chunks_updated,
+        stats.chunks_deleted,
+        errors,
+    )
+    .await?;
+
+    info!(
+        "{} complete: {} docs, {} chunks created, {} chunks updated",
+        completion_label, stats.docs_processed, stats.chunks_created, stats.chunks_updated
+    );
+
+    Ok(())
 }
 
 fn start_progress_bar(len: usize, message: &str) -> Option<ProgressBar> {
