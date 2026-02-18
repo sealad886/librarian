@@ -76,3 +76,33 @@ All quality gates passed after both rounds:
 - `src/mcp/server.rs`: Replaced `std::io::{BufRead, Write}` with `tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader}`. Async stdin line reading and stdout writing.
 - `src/store/mod.rs`: `to_qdrant_filter()` now generates `matches_text("doc_uri", ...)` condition for `path_prefix`. Added `test_path_prefix_generates_condition` and `test_path_prefix_combined_with_source_ids` tests.
 - `src/main.rs`: `handle_config_action` now differentiates `all=true` (full defaults) from `all=false` (loaded user config).
+
+## Round 4 — Blocking I/O in async context
+
+Full codebase audit focusing on correctness and safety. Scanned all modules in `src/`.
+
+### Findings and fixes
+
+1. **P2: Blocking `std::process::Command` in async functions** — `extract_media_metadata()`, `extract_keyframes()`, and `extract_audio_track()` in `src/commands/ingest.rs` used synchronous `std::process::Command` to run ffprobe/ffmpeg inside `async fn`. This blocks the Tokio runtime thread, starving concurrent tasks. Fixed: replaced with `tokio::process::Command` and `.output().await`.
+
+2. **P2: Blocking `std::fs::read` in async functions** — `process_file()`, `process_audio_file()`, and `process_video_file()` used `std::fs::read(path)?` to read file contents inside async functions. Fixed: replaced with `tokio::fs::read(path).await?`.
+
+3. **P2: Blocking `std::fs::create_dir_all` in async functions** — `extract_keyframes()` and `process_video_file()` used `std::fs::create_dir_all()` synchronously. Fixed: replaced with `tokio::fs::create_dir_all(...).await?`.
+
+4. **P2: Blocking `std::fs::remove_dir_all` in async functions** — Two cleanup calls in `process_video_file()` and `cmd_ingest_dir()` used synchronous directory removal. Fixed: replaced with `tokio::fs::remove_dir_all(...).await`.
+
+### Accepted as-is
+
+- `src/xinference/deps.rs`: `std::process::Command` in synchronous functions — correct, not in async context.
+- `src/config/mod.rs`: `std::process::Command` in `check_ffmpeg_available()` / `check_ffprobe_available()` — synchronous utility functions, correct as-is.
+- `src/embedding_backend.rs`: Linear retry without jitter — minor, not causing issues in practice.
+- `src/embed/mod.rs`: Sequential modality processing — known TODO, optimization opportunity not a bug.
+- `src/rank/mod.rs`: BM25 tokenizer filters tokens < 3 chars — by design for noise reduction.
+
+### Round 4 Changes
+
+- `src/commands/ingest.rs`: 9 blocking I/O calls converted to async equivalents:
+  - 3× `std::process::Command` → `tokio::process::Command` with `.output().await`
+  - 3× `std::fs::read()` → `tokio::fs::read().await`
+  - 1× `std::fs::create_dir_all()` → `tokio::fs::create_dir_all().await`
+  - 2× `std::fs::remove_dir_all()` → `tokio::fs::remove_dir_all().await`

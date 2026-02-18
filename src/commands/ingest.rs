@@ -373,7 +373,7 @@ pub struct MediaMetadata {
 
 /// Run ffprobe to extract metadata from a media file
 async fn extract_media_metadata(path: &Path) -> Result<MediaMetadata> {
-    use std::process::Command;
+    use tokio::process::Command;
 
     let output = Command::new("ffprobe")
         .args([
@@ -391,6 +391,7 @@ async fn extract_media_metadata(path: &Path) -> Result<MediaMetadata> {
             })?,
         ])
         .output()
+        .await
         .map_err(|e| {
             Error::Io(std::io::Error::other(format!(
                 "Failed to run ffprobe: {}. Is ffmpeg installed?",
@@ -570,7 +571,7 @@ async fn process_audio_file(
     }
 
     // Compute content hash from file
-    let file_bytes = std::fs::read(path)?;
+    let file_bytes = tokio::fs::read(path).await?;
     let content_hash = compute_content_hash(&file_bytes);
 
     // Check if content changed
@@ -708,10 +709,10 @@ async fn extract_keyframes(
     output_dir: &Path,
     max_keyframes: usize,
 ) -> Result<Vec<PathBuf>> {
-    use std::process::Command;
+    use tokio::process::Command;
 
     // Create output directory if it doesn't exist
-    std::fs::create_dir_all(output_dir)?;
+    tokio::fs::create_dir_all(output_dir).await?;
 
     // Extract keyframes using ffmpeg's select filter for I-frames
     // Output pattern: output_dir/keyframe_%03d.jpg
@@ -743,6 +744,7 @@ async fn extract_keyframes(
             "-y", // Overwrite existing files
         ])
         .output()
+        .await
         .map_err(|e| {
             Error::Io(std::io::Error::other(format!(
                 "Failed to run ffmpeg for keyframe extraction: {}. Is ffmpeg installed?",
@@ -774,7 +776,7 @@ async fn extract_keyframes(
 
 /// Extract audio track from video file to a temporary file for transcription
 async fn extract_audio_track(video_path: &Path, output_path: &Path) -> Result<bool> {
-    use std::process::Command;
+    use tokio::process::Command;
 
     let output = Command::new("ffmpeg")
         .args([
@@ -799,6 +801,7 @@ async fn extract_audio_track(video_path: &Path, output_path: &Path) -> Result<bo
             "-y", // Overwrite existing files
         ])
         .output()
+        .await
         .map_err(|e| {
             Error::Io(std::io::Error::other(format!(
                 "Failed to run ffmpeg for audio extraction: {}. Is ffmpeg installed?",
@@ -864,7 +867,7 @@ async fn process_video_file(
     }
 
     // Compute content hash from file
-    let file_bytes = std::fs::read(path)?;
+    let file_bytes = tokio::fs::read(path).await?;
     let content_hash = compute_content_hash(&file_bytes);
 
     // Check if content changed
@@ -899,7 +902,7 @@ async fn process_video_file(
 
     let mut chunks_created = 0;
     let video_temp_dir = temp_dir.join(format!("video_{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&video_temp_dir)?;
+    tokio::fs::create_dir_all(&video_temp_dir).await?;
 
     // Extract keyframes if video has video streams
     if metadata.video_streams > 0 && video_config.max_keyframes > 0 {
@@ -913,7 +916,7 @@ async fn process_video_file(
 
                 // Embed each keyframe
                 for (frame_idx, frame_path) in keyframe_paths.iter().enumerate() {
-                    let frame_bytes = match std::fs::read(frame_path) {
+                    let frame_bytes = match tokio::fs::read(frame_path).await {
                         Ok(b) => b,
                         Err(e) => {
                             warn!(path = %frame_path.display(), error = %e, "Failed to read keyframe");
@@ -1083,7 +1086,7 @@ async fn process_video_file(
     }
 
     // Clean up temp directory
-    if let Err(e) = std::fs::remove_dir_all(&video_temp_dir) {
+    if let Err(e) = tokio::fs::remove_dir_all(&video_temp_dir).await {
         debug!(path = %video_temp_dir.display(), error = %e, "Failed to clean up video temp directory");
     }
 
@@ -1748,7 +1751,7 @@ pub async fn cmd_ingest_dir(
 
     // Clean up video temp directory
     if video_temp_dir.exists() {
-        let _ = std::fs::remove_dir_all(&video_temp_dir);
+        let _ = tokio::fs::remove_dir_all(&video_temp_dir).await;
     }
 
     finish_progress(file_progress, "Files processed");
@@ -1823,7 +1826,7 @@ async fn process_file(
     debug!("Processing file: {}", file_uri);
 
     // Read file content
-    let content = std::fs::read(path)?;
+    let content = tokio::fs::read(path).await?;
 
     // Skip binary files
     if is_binary_content(&content) {
