@@ -1,7 +1,7 @@
 //! SQLite schema definition
 
 /// Current schema version - increment when adding migrations
-pub const CURRENT_SCHEMA_VERSION: i32 = 1;
+pub const CURRENT_SCHEMA_VERSION: i32 = 2;
 
 /// SQL schema for the metadata database
 pub const SCHEMA_SQL: &str = r#"
@@ -81,6 +81,29 @@ CREATE TABLE IF NOT EXISTS collection_config (
     verified_at TEXT
 );
 
+-- Document links: cross-references between documents
+CREATE TABLE IF NOT EXISTS document_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    to_uri TEXT NOT NULL,
+    to_doc_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+    link_text TEXT,
+    link_type TEXT NOT NULL DEFAULT 'href',
+    created_at TEXT NOT NULL
+);
+
+-- Query log: analytics for search queries
+CREATE TABLE IF NOT EXISTS query_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_text TEXT NOT NULL,
+    intent TEXT,
+    source_filter TEXT,
+    result_count INTEGER NOT NULL DEFAULT 0,
+    top_score REAL,
+    latency_ms INTEGER,
+    created_at TEXT NOT NULL
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source_id);
 CREATE INDEX IF NOT EXISTS idx_documents_hash ON documents(content_hash);
@@ -88,4 +111,8 @@ CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(chunk_hash);
 CREATE INDEX IF NOT EXISTS idx_chunks_point ON chunks(qdrant_point_id);
 CREATE INDEX IF NOT EXISTS idx_runs_source ON ingestion_runs(source_id);
+CREATE INDEX IF NOT EXISTS idx_links_from ON document_links(from_doc_id);
+CREATE INDEX IF NOT EXISTS idx_links_to_doc ON document_links(to_doc_id);
+CREATE INDEX IF NOT EXISTS idx_links_to_uri ON document_links(to_uri);
+CREATE INDEX IF NOT EXISTS idx_query_log_created ON query_log(created_at);
 "#;

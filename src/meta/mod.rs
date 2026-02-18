@@ -351,6 +351,42 @@ pub struct CollectionConfigRecord {
     pub verified_at: Option<String>,
 }
 
+/// A cross-reference link between documents discovered during parsing.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct DocumentLink {
+    pub id: i64,
+    pub from_doc_id: String,
+    pub to_uri: String,
+    pub to_doc_id: Option<String>,
+    pub link_text: Option<String>,
+    pub link_type: String,
+    pub created_at: String,
+}
+
+/// A query log entry for analytics.
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct QueryLogEntry {
+    pub id: i64,
+    pub query_text: String,
+    pub intent: Option<String>,
+    pub source_filter: Option<String>,
+    pub result_count: i32,
+    pub top_score: Option<f64>,
+    pub latency_ms: Option<i64>,
+    pub created_at: String,
+}
+
+/// Aggregate query analytics for a time period.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryAnalytics {
+    pub total_queries: i64,
+    pub avg_top_score: Option<f64>,
+    pub avg_result_count: Option<f64>,
+    pub avg_latency_ms: Option<f64>,
+    pub zero_result_queries: i64,
+    pub period_days: i32,
+}
+
 /// Metadata database handle
 #[derive(Clone)]
 pub struct MetaDb {
@@ -473,7 +509,9 @@ impl MetaDb {
             self.apply_migration_v1().await?;
         }
 
-        // Future migrations: if current < 2 { self.apply_migration_v2().await?; }
+        if current < 2 {
+            self.apply_migration_v2().await?;
+        }
 
         Ok(())
     }
@@ -516,6 +554,63 @@ impl MetaDb {
             .await?;
 
         debug!("Migration v1 applied successfully");
+        Ok(())
+    }
+
+    /// Migration v2: Add document_links and query_log tables
+    async fn apply_migration_v2(&self) -> Result<()> {
+        debug!("Applying migration v2: document links and query analytics");
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS document_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                from_doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+                to_uri TEXT NOT NULL,
+                to_doc_id TEXT REFERENCES documents(id) ON DELETE SET NULL,
+                link_text TEXT,
+                link_type TEXT NOT NULL DEFAULT 'href',
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_links_from ON document_links(from_doc_id)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_links_to_doc ON document_links(to_doc_id)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_links_to_uri ON document_links(to_uri)")
+            .execute(&self.pool)
+            .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS query_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query_text TEXT NOT NULL,
+                intent TEXT,
+                source_filter TEXT,
+                result_count INTEGER NOT NULL DEFAULT 0,
+                top_score REAL,
+                latency_ms INTEGER,
+                created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_query_log_created ON query_log(created_at)")
+            .execute(&self.pool)
+            .await?;
+
+        let now = Utc::now().to_rfc3339();
+        sqlx::query("INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (2, ?)")
+            .bind(&now)
+            .execute(&self.pool)
+            .await?;
+
+        debug!("Migration v2 applied successfully");
         Ok(())
     }
 
@@ -577,6 +672,266 @@ impl MetaDb {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    // ===== Document Link Operations =====
+
+    /// Store document links extracted during parsing.
+    ///
+    /// Replaces all existing links for the given document (delete + insert).
+    ///
+    /// # Arguments
+    /// * `doc_id` - The source document ID
+    /// * `links` - Extracted links from parsing
+    ///
+    /// # Returns
+    /// Number of links stored (excludes empty URLs)
+    ///
+    /// # Errors
+    /// Returns error if database operations fail
+    pub async fn store_document_links(
+        &self,
+        doc_id: &str,
+        links: &[crate::parse::ExtractedLink],
+    ) -> Result<usize> {
+        sqlx::query("DELETE FROM document_links WHERE from_doc_id = ?")
+            .bind(doc_id)
+            .execute(&self.pool)
+            .await?;
+
+        let now = Utc::now().to_rfc3339();
+        let mut count = 0;
+        for link in links {
+            if link.url.is_empty() {
+                continue;
+            }
+            let link_type = if link.is_internal {
+                "internal"
+            } else {
+                "external"
+            };
+            sqlx::query(
+                "INSERT INTO document_links (from_doc_id, to_uri, link_text, link_type, created_at)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(doc_id)
+            .bind(&link.url)
+            .bind(link.text.as_deref())
+            .bind(link_type)
+            .bind(&now)
+            .execute(&self.pool)
+            .await?;
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// Resolve document links by matching `to_uri` against known document URIs.
+    ///
+    /// Called after ingestion to populate the `to_doc_id` column for links
+    /// whose target URI matches an existing document.
+    ///
+    /// # Arguments
+    /// * `source_id` - Restrict resolution to documents within this source
+    ///
+    /// # Returns
+    /// Number of links resolved
+    ///
+    /// # Errors
+    /// Returns error if the update query fails
+    pub async fn resolve_document_links(&self, source_id: &str) -> Result<u64> {
+        let result = sqlx::query(
+            "UPDATE document_links SET to_doc_id = d.id
+             FROM documents d
+             WHERE document_links.to_uri = d.uri
+             AND document_links.to_doc_id IS NULL
+             AND d.source_id = ?",
+        )
+        .bind(source_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Get outgoing links from a document.
+    ///
+    /// # Arguments
+    /// * `doc_id` - The document to get links from
+    ///
+    /// # Returns
+    /// All links originating from this document
+    ///
+    /// # Errors
+    /// Returns error if the query fails
+    pub async fn get_outgoing_links(&self, doc_id: &str) -> Result<Vec<DocumentLink>> {
+        let links = sqlx::query_as::<_, DocumentLink>(
+            "SELECT * FROM document_links WHERE from_doc_id = ? ORDER BY id",
+        )
+        .bind(doc_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(links)
+    }
+
+    /// Get incoming links to a document (documents that link to this one).
+    ///
+    /// # Arguments
+    /// * `doc_id` - The target document
+    ///
+    /// # Returns
+    /// All links pointing to this document
+    ///
+    /// # Errors
+    /// Returns error if the query fails
+    pub async fn get_incoming_links(&self, doc_id: &str) -> Result<Vec<DocumentLink>> {
+        let links = sqlx::query_as::<_, DocumentLink>(
+            "SELECT * FROM document_links WHERE to_doc_id = ? ORDER BY id",
+        )
+        .bind(doc_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(links)
+    }
+
+    /// Get related documents (linked from or to this document).
+    ///
+    /// # Arguments
+    /// * `doc_id` - The document to find relations for
+    ///
+    /// # Returns
+    /// Distinct documents linked to or from this document
+    ///
+    /// # Errors
+    /// Returns error if the query fails
+    pub async fn get_related_documents(&self, doc_id: &str) -> Result<Vec<Document>> {
+        let docs = sqlx::query_as::<_, Document>(
+            "SELECT DISTINCT d.* FROM documents d
+             WHERE d.id IN (
+                 SELECT to_doc_id FROM document_links WHERE from_doc_id = ? AND to_doc_id IS NOT NULL
+                 UNION
+                 SELECT from_doc_id FROM document_links WHERE to_doc_id = ?
+             )",
+        )
+        .bind(doc_id)
+        .bind(doc_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(docs)
+    }
+
+    // ===== Query Log Operations =====
+
+    /// Log a search query for analytics.
+    ///
+    /// # Arguments
+    /// * `query_text` - The search query string
+    /// * `intent` - Optional detected intent (e.g. "factual", "comparative")
+    /// * `source_filter` - Optional source filter applied
+    /// * `result_count` - Number of results returned
+    /// * `top_score` - Score of the top result, if any
+    /// * `latency_ms` - Query latency in milliseconds
+    ///
+    /// # Errors
+    /// Returns error if the insert fails
+    pub async fn log_query(
+        &self,
+        query_text: &str,
+        intent: Option<&str>,
+        source_filter: Option<&str>,
+        result_count: i32,
+        top_score: Option<f32>,
+        latency_ms: Option<i64>,
+    ) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        sqlx::query(
+            "INSERT INTO query_log (query_text, intent, source_filter, result_count, top_score, latency_ms, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(query_text)
+        .bind(intent)
+        .bind(source_filter)
+        .bind(result_count)
+        .bind(top_score.map(|s| s as f64))
+        .bind(latency_ms)
+        .bind(&now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get recent query log entries.
+    ///
+    /// # Arguments
+    /// * `limit` - Maximum number of entries to return
+    ///
+    /// # Returns
+    /// Most recent query log entries, ordered by creation time descending
+    ///
+    /// # Errors
+    /// Returns error if the query fails
+    pub async fn get_recent_queries(&self, limit: i64) -> Result<Vec<QueryLogEntry>> {
+        let entries = sqlx::query_as::<_, QueryLogEntry>(
+            "SELECT * FROM query_log ORDER BY created_at DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(entries)
+    }
+
+    /// Get query analytics summary for a time period.
+    ///
+    /// # Arguments
+    /// * `days` - Number of days to look back
+    ///
+    /// # Returns
+    /// Aggregate statistics including total queries, averages, and zero-result count
+    ///
+    /// # Errors
+    /// Returns error if any aggregate query fails
+    pub async fn get_query_analytics(&self, days: i32) -> Result<QueryAnalytics> {
+        let since = (Utc::now() - chrono::Duration::days(days as i64)).to_rfc3339();
+
+        let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM query_log WHERE created_at >= ?")
+            .bind(&since)
+            .fetch_one(&self.pool)
+            .await?;
+
+        let avg_score: (Option<f64>,) = sqlx::query_as(
+            "SELECT AVG(top_score) FROM query_log WHERE created_at >= ? AND top_score IS NOT NULL",
+        )
+        .bind(&since)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let avg_results: (Option<f64>,) =
+            sqlx::query_as("SELECT AVG(result_count) FROM query_log WHERE created_at >= ?")
+                .bind(&since)
+                .fetch_one(&self.pool)
+                .await?;
+
+        let avg_latency: (Option<f64>,) = sqlx::query_as(
+            "SELECT AVG(latency_ms) FROM query_log WHERE created_at >= ? AND latency_ms IS NOT NULL",
+        )
+        .bind(&since)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let zero_result: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM query_log WHERE created_at >= ? AND result_count = 0",
+        )
+        .bind(&since)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(QueryAnalytics {
+            total_queries: total.0,
+            avg_top_score: avg_score.0,
+            avg_result_count: avg_results.0,
+            avg_latency_ms: avg_latency.0,
+            zero_result_queries: zero_result.0,
+            period_days: days,
+        })
     }
 
     /// Check if database is initialized
@@ -1450,8 +1805,8 @@ mod tests {
     async fn test_schema_version_fresh_db() {
         let (db, _tmp) = setup_test_db().await;
         let version = db.get_schema_version().await.unwrap();
-        // After init_schema, we should be at version 1
-        assert_eq!(version, 1);
+        // After init_schema, we should be at version 2
+        assert_eq!(version, 2);
     }
 
     #[tokio::test]
@@ -1461,7 +1816,7 @@ mod tests {
         db.run_migrations().await.unwrap();
         db.run_migrations().await.unwrap();
         let version = db.get_schema_version().await.unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 
     #[tokio::test]
@@ -1545,6 +1900,156 @@ mod tests {
         assert_eq!(config.vector_dimension, 768);
         assert_eq!(config.embedding_model, "model-v2");
         assert_eq!(config.embedding_family, "family-v2");
+    }
+
+    #[tokio::test]
+    async fn test_document_links_crud() {
+        let (db, _tmp) = setup_test_db().await;
+
+        let source = Source::new(SourceType::Dir, "/docs".to_string(), None);
+        db.insert_source(&source).await.unwrap();
+
+        let doc1 = Document::new(
+            source.id.clone(),
+            "/docs/a.md".to_string(),
+            "h1".to_string(),
+        );
+        let doc1 = db.upsert_document(&doc1).await.unwrap();
+
+        let doc2 = Document::new(
+            source.id.clone(),
+            "/docs/b.md".to_string(),
+            "h2".to_string(),
+        );
+        let doc2 = db.upsert_document(&doc2).await.unwrap();
+
+        // Store links from doc1 → doc2
+        use crate::parse::ExtractedLink;
+        let links = vec![
+            ExtractedLink {
+                url: "/docs/b.md".to_string(),
+                text: Some("See B".to_string()),
+                is_internal: true,
+            },
+            ExtractedLink {
+                url: "https://external.com".to_string(),
+                text: Some("External".to_string()),
+                is_internal: false,
+            },
+        ];
+
+        let count = db.store_document_links(&doc1.id, &links).await.unwrap();
+        assert_eq!(count, 2);
+
+        // Check outgoing
+        let outgoing = db.get_outgoing_links(&doc1.id).await.unwrap();
+        assert_eq!(outgoing.len(), 2);
+        assert_eq!(outgoing[0].link_type, "internal");
+        assert_eq!(outgoing[1].link_type, "external");
+
+        // Resolve references
+        let resolved = db.resolve_document_links(&source.id).await.unwrap();
+        assert_eq!(resolved, 1); // doc1 → doc2
+
+        // Check incoming
+        let incoming = db.get_incoming_links(&doc2.id).await.unwrap();
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(incoming[0].from_doc_id, doc1.id);
+
+        // Check related
+        let related = db.get_related_documents(&doc1.id).await.unwrap();
+        assert_eq!(related.len(), 1);
+        assert_eq!(related[0].id, doc2.id);
+    }
+
+    #[tokio::test]
+    async fn test_store_document_links_replaces_existing() {
+        let (db, _tmp) = setup_test_db().await;
+
+        let source = Source::new(SourceType::Dir, "/docs".to_string(), None);
+        db.insert_source(&source).await.unwrap();
+
+        let doc = Document::new(
+            source.id.clone(),
+            "/docs/a.md".to_string(),
+            "h1".to_string(),
+        );
+        let doc = db.upsert_document(&doc).await.unwrap();
+
+        use crate::parse::ExtractedLink;
+        let links1 = vec![ExtractedLink {
+            url: "/b".to_string(),
+            text: None,
+            is_internal: true,
+        }];
+        db.store_document_links(&doc.id, &links1).await.unwrap();
+        assert_eq!(db.get_outgoing_links(&doc.id).await.unwrap().len(), 1);
+
+        // Re-store with different links replaces
+        let links2 = vec![
+            ExtractedLink {
+                url: "/c".to_string(),
+                text: None,
+                is_internal: true,
+            },
+            ExtractedLink {
+                url: "/d".to_string(),
+                text: None,
+                is_internal: true,
+            },
+        ];
+        db.store_document_links(&doc.id, &links2).await.unwrap();
+        let outgoing = db.get_outgoing_links(&doc.id).await.unwrap();
+        assert_eq!(outgoing.len(), 2);
+        assert_eq!(outgoing[0].to_uri, "/c");
+    }
+
+    #[tokio::test]
+    async fn test_query_log() {
+        let (db, _tmp) = setup_test_db().await;
+
+        db.log_query(
+            "how to use rust",
+            Some("factual"),
+            None,
+            5,
+            Some(0.85),
+            Some(120),
+        )
+        .await
+        .unwrap();
+        db.log_query(
+            "compare python java",
+            Some("comparative"),
+            None,
+            3,
+            Some(0.72),
+            Some(95),
+        )
+        .await
+        .unwrap();
+        db.log_query("no results query", None, None, 0, None, Some(50))
+            .await
+            .unwrap();
+
+        let recent = db.get_recent_queries(10).await.unwrap();
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].query_text, "no results query"); // Most recent first
+
+        let analytics = db.get_query_analytics(30).await.unwrap();
+        assert_eq!(analytics.total_queries, 3);
+        assert_eq!(analytics.zero_result_queries, 1);
+        assert!(analytics.avg_top_score.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_migration_v2_idempotent() {
+        let (db, _tmp) = setup_test_db().await;
+        // Run migrations twice - should not fail
+        db.run_migrations().await.unwrap();
+        db.run_migrations().await.unwrap();
+        let version = db.get_schema_version().await.unwrap();
+        assert_eq!(version, 2);
     }
 
     #[tokio::test]
