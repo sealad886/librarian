@@ -3,6 +3,7 @@
 use crate::config::{check_ffmpeg_deps_available, render_config_toml, Config};
 use crate::error::{Error, Result};
 use crate::meta::MetaDb;
+use crate::models::is_multimodal_embedding_model;
 use crate::store::QdrantStore;
 use crate::xinference::prepare_xinference_env;
 use crossterm::cursor;
@@ -250,6 +251,9 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
         &embedding_models,
         &config.embedding.model,
     )?;
+
+    // Auto-derive embedding.multimodal from model capabilities
+    config.embedding.multimodal = is_multimodal_embedding_model(&config.embedding.model);
 
     // Dimension: only prompt if using HTTP backend (xinference auto-detects)
     if config.embedding.backend == "http" {
@@ -552,11 +556,15 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
         }
     }
 
-    config.crawl.multimodal.enabled = prompt_confirm(
-        "Enable multimodal image discovery?",
-        config.crawl.multimodal.enabled,
-        false,
-    )?;
+    if config.embedding.multimodal {
+        config.crawl.multimodal.enabled = prompt_confirm(
+            "Enable multimodal image discovery?",
+            config.crawl.multimodal.enabled,
+            false,
+        )?;
+    } else {
+        config.crawl.multimodal.enabled = false;
+    }
     if config.crawl.multimodal.enabled {
         config.crawl.multimodal.include_images = prompt_confirm(
             "Include images?",
