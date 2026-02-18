@@ -24,6 +24,7 @@ pub fn parse_plain_text(content: &str) -> ParsedDocument {
         code_blocks: Vec::new(),
         links: Vec::new(),
         media: Vec::new(),
+        metadata: std::collections::HashMap::new(),
     }
 }
 

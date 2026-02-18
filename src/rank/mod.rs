@@ -51,7 +51,10 @@ impl From<SearchResult> for RankedResult {
     }
 }
 
-/// Rank and merge search results
+/// Rank and merge search results using vector + optional BM25 hybrid scoring.
+///
+/// The ranker normalises and combines vector similarity scores with BM25
+/// keyword scores according to configurable weights.
 pub struct Ranker {
     bm25_weight: f32,
     vector_weight: f32,
@@ -142,12 +145,19 @@ impl Ranker {
 }
 
 /// Corpus-level statistics for IDF computation in BM25 scoring.
+///
+/// Collect these once from the metadata database and pass to
+/// [`Bm25Scorer::score_with_idf`] so rare terms receive higher weight.
 pub struct CorpusStats {
     pub total_docs: usize,
     pub doc_frequencies: HashMap<String, usize>,
 }
 
-/// Simple BM25 scorer
+/// BM25 (Okapi) scorer with configurable k1 and b parameters.
+///
+/// Supports both a simplified single-document mode ([`score`](Self::score))
+/// and a corpus-aware mode ([`score_with_idf`](Self::score_with_idf)) that
+/// uses real inverse document frequency from [`CorpusStats`].
 pub struct Bm25Scorer {
     k1: f32,
     b: f32,

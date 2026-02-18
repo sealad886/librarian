@@ -1,9 +1,12 @@
-//! librarian - A CLI tool for local RAG (Retrieval-Augmented Generation)
+//! librarian — high-performance local RAG for documentation comprehension
 //!
 //! This crate provides:
-//! - CLI commands for ingesting documentation (local directories + web URLs)
-//! - An MCP server over stdio for VS Code integration
-//! - Integration with Qdrant vector database for semantic search
+//! - CLI commands for ingesting documentation (local directories + web URLs + sitemaps)
+//! - An MCP server over stdio for VS Code / editor integration
+//! - Hybrid BM25 + vector similarity search with optional cross-encoder reranking
+//! - Multimodal indexing (text, images, audio, video) with capability-gated configuration
+//! - Incremental updates via content hashing and canonical document IDs
+//! - Integration with Qdrant vector database and Xinference embedding backends
 
 pub mod chunk;
 pub mod commands;

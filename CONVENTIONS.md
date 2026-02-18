@@ -206,6 +206,40 @@
 - `src/bin/xtask.rs`  
 - `resources/xinference/*.json`
 
+### MCP embedder uses lazy-init caching
+
+**Status:** REQUIRED  
+**Scope:** MCP server embedding operations (`src/mcp/server.rs`)  
+**Rule:** The MCP server must cache its `Embedder` instance behind a `RwLock<Option<Arc<dyn Embedder>>>` and lazily initialise on first use. Subsequent tool calls reuse the cached embedder without re-resolving the embedding config or reconnecting to the backend.  
+**Rationale (Why this exists):**  
+
+- Embedding config resolution involves probing the backend (`/probe`), which adds latency on every tool call.  
+- A single cached instance ensures consistent model/dimension state across an MCP session.  
+- The `Arc<RwLock<…>>` pattern is `Send + Sync`, compatible with `tokio::spawn`.  
+**Examples:**  
+- Good: `self.get_or_init_embedder().await?` inside each tool handler.  
+- Bad: Calling `create_embedder_auto()` on every `rag_search` invocation.  
+**Related Files / Modules:**  
+- `src/mcp/server.rs`  
+- `src/embed/mod.rs`
+
+### Markdown frontmatter is parsed into metadata
+
+**Status:** REQUIRED  
+**Scope:** Markdown parsing and `ParsedDocument` consumers  
+**Rule:** `parse_markdown()` must strip YAML frontmatter (`---` delimiters) before feeding content to pulldown-cmark. Parsed key-value pairs are stored in `ParsedDocument.metadata`. If no h1 heading is found, the `title` frontmatter key is used as the document title. Frontmatter text must not appear in `ParsedDocument.text`.  
+**Rationale (Why this exists):**  
+
+- Frontmatter metadata (title, description, author, tags) is useful for search enrichment and filtering.  
+- Feeding raw frontmatter to pulldown-cmark produces spurious horizontal rules (`---` becomes `<hr>`).  
+- Using frontmatter title as a fallback prevents untitled documents when the author omits h1 headings.  
+**Examples:**  
+- Good: `let (body, metadata) = strip_frontmatter(content); parser = Parser::new(body); doc.metadata = metadata;`  
+- Bad: Parsing full content including frontmatter delimiters through pulldown-cmark (creates `<hr>` artifacts).  
+**Related Files / Modules:**  
+- `src/parse/markdown.rs`  
+- `src/parse/mod.rs`
+
 ## 3. Rationale and Examples
 
 - See examples embedded within each convention above for concrete good/bad patterns that align status reporting and background execution with run tracking.
@@ -223,3 +257,4 @@
 - 2026-01-30: Added convention for validated Qdrant connections on write operations.
 - 2026-01-30: Added conventions for audio/video ffmpeg dependency, derived modalities, and named vectors storage.
 - 2026-02-02: Added Xinference registry snapshot rule for deterministic allowlists and version-bump sync.
+- 2026-02-18: Added MCP embedder lazy-init caching convention. Added markdown frontmatter parsing and metadata handling convention. Added doc comments to key public items across chunk, store, rank, parse, and mcp modules.

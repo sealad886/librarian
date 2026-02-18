@@ -15,7 +15,10 @@ use crate::error::Result;
 use crate::parse::{Heading, ParsedDocument};
 use blake3::Hasher;
 
-/// A text chunk with metadata
+/// A text chunk with metadata produced by splitting a parsed document.
+///
+/// Each chunk carries its character range in the original document, a heading
+/// breadcrumb for context, and a Blake3 content hash for incremental updates.
 #[derive(Debug, Clone)]
 pub struct TextChunk {
     /// The actual text content
@@ -47,7 +50,25 @@ impl TextChunk {
     }
 }
 
-/// Chunk a parsed document
+/// Split a parsed document into overlapping chunks that respect structure.
+///
+/// Break points prefer heading boundaries and paragraph breaks so that chunks
+/// align with logical document sections whenever the configured size limits
+/// allow it.
+///
+/// # Arguments
+///
+/// * `doc` - The parsed document to chunk
+/// * `doc_hash` - Document-level hash used as a salt for per-chunk hashes
+/// * `config` - Chunking parameters (max/min chars, overlap, heading preference)
+///
+/// # Returns
+///
+/// A vector of [`TextChunk`]s covering the document text.
+///
+/// # Errors
+///
+/// Returns an error if chunk boundary detection fails.
 pub fn chunk_document(
     doc: &ParsedDocument,
     doc_hash: &str,
@@ -303,6 +324,7 @@ mod tests {
             code_blocks: Vec::new(),
             links: Vec::new(),
             media: Vec::new(),
+            metadata: std::collections::HashMap::new(),
         }
     }
 

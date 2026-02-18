@@ -15,6 +15,7 @@ pub use markdown::*;
 pub use text::*;
 
 use crate::error::Result;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Content types we can parse
@@ -74,7 +75,11 @@ impl ContentType {
     }
 }
 
-/// Parsed document with extracted content
+/// Parsed document with extracted structural elements.
+///
+/// Produced by [`parse_content`] (dispatches to HTML / Markdown / plain-text
+/// parsers). Contains the full extracted text, headings, code blocks, links,
+/// media candidates, and optional YAML frontmatter metadata.
 #[derive(Debug, Clone)]
 pub struct ParsedDocument {
     /// Extracted title (if found)
@@ -97,6 +102,9 @@ pub struct ParsedDocument {
 
     /// Media candidates found in the document (e.g., images)
     pub media: Vec<ExtractedMedia>,
+
+    /// Metadata extracted from YAML frontmatter (markdown only)
+    pub metadata: HashMap<String, String>,
 }
 
 /// A heading in the document
@@ -159,7 +167,9 @@ impl std::fmt::Display for MediaModality {
     }
 }
 
-/// An extracted media candidate (images, audio, video)
+/// An extracted media candidate (images, audio, video) discovered during
+/// parsing. Used by the multimodal ingestion pipeline to download and embed
+/// assets.
 #[derive(Debug, Clone)]
 pub struct ExtractedMedia {
     /// Media URL (resolved against base URL when possible)
@@ -191,6 +201,7 @@ impl ParsedDocument {
             code_blocks: Vec::new(),
             links: Vec::new(),
             media: Vec::new(),
+            metadata: HashMap::new(),
         }
     }
 
@@ -212,7 +223,22 @@ impl ParsedDocument {
     }
 }
 
-/// Parse content based on detected type
+/// Parse content based on its detected type.
+///
+/// # Arguments
+///
+/// * `content` - Raw text content to parse
+/// * `content_type` - The detected [`ContentType`] (HTML, Markdown, etc.)
+/// * `base_url` - Optional base URL for resolving relative links (HTML only)
+///
+/// # Returns
+///
+/// A [`ParsedDocument`] with extracted text, headings, code blocks, links,
+/// media candidates, and metadata.
+///
+/// # Errors
+///
+/// Returns an error if the underlying parser fails.
 pub fn parse_content(
     content: &str,
     content_type: ContentType,

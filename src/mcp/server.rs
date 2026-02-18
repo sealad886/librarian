@@ -13,7 +13,12 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, warn};
 
-/// MCP Server implementation
+/// MCP (Model Context Protocol) JSON-RPC server over stdio.
+///
+/// Exposes RAG tools (`rag_search`, `rag_sources`, `rag_status`,
+/// `rag_ingest_source`, `rag_update`, `rag_reindex`) to editors such as
+/// VS Code. Background operations spawn tasks with fresh DB/store
+/// connections per the project conventions.
 pub struct McpServer {
     config: Config,
     db: MetaDb,

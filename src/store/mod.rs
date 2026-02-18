@@ -28,7 +28,11 @@ pub struct CollectionInfo {
     pub status: String,
 }
 
-/// Qdrant store handle
+/// Qdrant vector database client wrapper.
+///
+/// Manages a single Qdrant collection and exposes point upsert, delete, and
+/// search operations. Use [`connect_validated`](Self::connect_validated) for
+/// write paths to ensure dimension consistency across sessions.
 pub struct QdrantStore {
     client: Qdrant,
     collection: String,
@@ -677,7 +681,7 @@ impl QdrantStore {
     }
 }
 
-/// Search result
+/// A single vector search hit returned from Qdrant.
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     pub id: String,
@@ -685,7 +689,10 @@ pub struct SearchResult {
     pub payload: ChunkPayload,
 }
 
-/// Search filter options
+/// Filter criteria for narrowing Qdrant searches.
+///
+/// All non-`None` fields are combined with AND semantics. Multiple values
+/// within a single field (e.g. `source_ids`) are combined with OR.
 #[derive(Debug, Clone, Default)]
 pub struct SearchFilter {
     pub source_ids: Option<Vec<String>>,

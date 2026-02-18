@@ -5,10 +5,85 @@ use super::{
 };
 use crate::error::Result;
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use std::collections::HashMap;
+
+/// Strip YAML frontmatter from markdown content.
+///
+/// Detects `---` delimiters at the start of the content, parses simple
+/// `key: value` pairs between them, and returns the remaining body with the
+/// extracted metadata map. Returns the original content and an empty map when
+/// no valid frontmatter is found.
+fn strip_frontmatter(content: &str) -> (&str, HashMap<String, String>) {
+    let fence = if content.starts_with("---\n") {
+        "---\n"
+    } else if content.starts_with("---\r\n") {
+        "---\r\n"
+    } else {
+        return (content, HashMap::new());
+    };
+
+    let after_open = &content[fence.len()..];
+
+    let close_pos = if let Some(pos) = after_open.find("\n---\n") {
+        pos + 1 // include the leading \n so the closing --- starts at the right spot
+    } else if let Some(pos) = after_open.find("\n---\r\n") {
+        pos + 1
+    } else if after_open.ends_with("\n---") || after_open.ends_with("\n---\n") {
+        // Frontmatter at very end of content
+        if let Some(pos) = after_open.rfind("\n---") {
+            pos + 1
+        } else {
+            return (content, HashMap::new());
+        }
+    } else {
+        return (content, HashMap::new());
+    };
+
+    let yaml_block = &after_open[..close_pos - 1]; // exclude the \n before ---
+    let mut metadata = HashMap::new();
+
+    for line in yaml_block.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once(": ") {
+            let key = key.trim().to_string();
+            let value = value
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+            if !key.is_empty() {
+                metadata.insert(key, value);
+            }
+        }
+    }
+
+    // Body starts after closing fence
+    let body_start = fence.len() + close_pos + "---".len();
+    let body = if body_start < content.len() {
+        let rest = &content[body_start..];
+        // Skip the newline immediately after closing ---
+        if let Some(stripped) = rest.strip_prefix("\r\n") {
+            stripped
+        } else if let Some(stripped) = rest.strip_prefix('\n') {
+            stripped
+        } else {
+            rest
+        }
+    } else {
+        ""
+    };
+
+    (body, metadata)
+}
 
 /// Parse Markdown content and extract text
 pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
-    let parser = Parser::new(content);
+    let (body, metadata) = strip_frontmatter(content);
+
+    let parser = Parser::new(body);
     let mut doc = ParsedDocument::new(String::new(), ContentType::Markdown);
 
     let mut text_parts: Vec<String> = Vec::new();
@@ -174,6 +249,15 @@ pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
     }
 
     doc.text = text_parts.join("").trim().to_string();
+    doc.metadata = metadata;
+
+    // Fall back to frontmatter title when no h1 heading was found
+    if doc.title.is_none() {
+        if let Some(fm_title) = doc.metadata.get("title") {
+            doc.title = Some(fm_title.clone());
+        }
+    }
+
     Ok(doc)
 }
 
@@ -291,5 +375,46 @@ fn main() {
         assert_eq!(doc.links[0].url, "https://example.com");
         assert_eq!(doc.media.len(), 1);
         assert_eq!(doc.media[0].url, "photo.jpg");
+    }
+
+    #[test]
+    fn test_frontmatter_with_h1_heading() {
+        let markdown = "---\ntitle: Test\ndescription: A test doc\n---\n# Heading\nContent";
+        let doc = parse_markdown(markdown).unwrap();
+
+        // Title comes from h1, not frontmatter
+        assert_eq!(doc.title, Some("Heading".to_string()));
+        assert_eq!(doc.metadata.get("title").unwrap(), "Test");
+        assert_eq!(doc.metadata.get("description").unwrap(), "A test doc");
+    }
+
+    #[test]
+    fn test_no_frontmatter() {
+        let markdown = "# Normal Doc\n\nJust some content.";
+        let doc = parse_markdown(markdown).unwrap();
+
+        assert!(doc.metadata.is_empty());
+        assert_eq!(doc.title, Some("Normal Doc".to_string()));
+        assert!(doc.text.contains("Just some content"));
+    }
+
+    #[test]
+    fn test_frontmatter_title_fallback() {
+        let markdown = "---\ntitle: My Title\n---\nJust content";
+        let doc = parse_markdown(markdown).unwrap();
+
+        // No h1, so title falls back to frontmatter
+        assert_eq!(doc.title, Some("My Title".to_string()));
+    }
+
+    #[test]
+    fn test_frontmatter_not_in_text() {
+        let markdown = "---\ntitle: Hidden\nauthor: Someone\n---\n# Visible\nBody text";
+        let doc = parse_markdown(markdown).unwrap();
+
+        assert!(!doc.text.contains("Hidden"));
+        assert!(!doc.text.contains("Someone"));
+        assert!(doc.text.contains("Visible"));
+        assert!(doc.text.contains("Body text"));
     }
 }
