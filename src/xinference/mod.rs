@@ -33,8 +33,11 @@ use url::Url;
 
 /// Default Xinference server port
 pub const DEFAULT_XINFERENCE_PORT: u16 = 9997;
-/// Shared timeout for Xinference HTTP calls.
+/// Shared timeout for regular Xinference HTTP calls (embedding, listing, etc.).
 pub const XINFERENCE_HTTP_TIMEOUT_SECS: u64 = 300;
+/// Extended timeout for model launch/download operations which may pull
+/// large model files on first use.
+pub const XINFERENCE_MODEL_LAUNCH_TIMEOUT_SECS: u64 = 1800;
 
 pub type SharedXinferenceManager = Arc<Mutex<Option<XinferenceManager>>>;
 
@@ -482,8 +485,17 @@ impl XinferenceManager {
     }
 
     /// Launch a model in Xinference
+    ///
+    /// If the model is not already cached locally, Xinference will download
+    /// it first. This can take several minutes for large models, so the
+    /// method uses [`XINFERENCE_MODEL_LAUNCH_TIMEOUT_SECS`] (30 min) and
+    /// logs user-visible progress messages.
     pub async fn launch_model(&mut self, model_name: &str, model_type: &str) -> Result<String> {
-        debug!("Launching {} model: {}", model_type, model_name);
+        info!(
+            model = %model_name,
+            model_type = %model_type,
+            "Launching model (this may download weights on first use — could take several minutes)…"
+        );
 
         let mut url = self
             .base_url
@@ -503,8 +515,15 @@ impl XinferenceManager {
         let body = serde_json::to_value(request)
             .map_err(|e| Error::Embedding(format!("Failed to serialize launch request: {}", e)))?;
 
+        // Use a longer timeout for model launch: first launch may pull
+        // multi-GB model weights from HuggingFace.
+        let launch_client = Client::builder()
+            .timeout(Duration::from_secs(XINFERENCE_MODEL_LAUNCH_TIMEOUT_SECS))
+            .build()
+            .map_err(|e| Error::Embedding(format!("Failed to create launch HTTP client: {}", e)))?;
+
         let launch_response: ModelLaunchResponse = xinference_request_json(
-            &self.client,
+            &launch_client,
             Method::POST,
             url,
             self.auth_token.as_deref(),
@@ -560,16 +579,18 @@ impl XinferenceManager {
 
         // Check our local tracking
         if let Some(uid) = self.launched_models.get(&xinf_name) {
+            debug!(model = %xinf_name, uid = %uid, "Model already tracked locally");
             return Ok(uid.clone());
         }
 
         // Check if already running in Xinference
         if let Some(uid) = self.query_running_model(&xinf_name).await? {
+            info!(model = %xinf_name, "Model already running in Xinference");
             self.launched_models.insert(xinf_name.clone(), uid.clone());
             return Ok(uid);
         }
 
-        // Launch the model
+        // Launch the model (may trigger download)
         self.launch_model(&xinf_name, model_type).await
     }
 }

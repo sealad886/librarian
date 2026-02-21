@@ -446,6 +446,36 @@ async fn run() -> Result<()> {
         return Ok(());
     }
 
+    // Validate Qdrant connection BEFORE initializing the embedder.
+    // This fails fast on misconfigured/unreachable Qdrant rather than
+    // blocking for minutes on a model download only to fail afterwards.
+    let needs_validation = matches!(
+        cli.command,
+        Commands::Ingest { .. }
+            | Commands::Reindex { .. }
+            | Commands::Update { .. }
+            | Commands::Remove { .. }
+    ) || matches!(&cli.command, Commands::Prune { remove_orphans, .. } if *remove_orphans);
+
+    let api_key = config.qdrant_api_key();
+    let store = if needs_validation {
+        debug!(
+            "Validating collection '{}' for write operation...",
+            config.collection_name
+        );
+        QdrantStore::connect_validated(&config, &embedding_config, &db).await?
+    } else {
+        QdrantStore::new(
+            &config.qdrant_url,
+            &config.collection_name,
+            embedding_config.dimension,
+            Some(&embedding_config),
+            api_key.as_deref(),
+        )
+        .await?
+    };
+
+    // Create the embedder only after Qdrant is confirmed reachable
     let needs_embedder = matches!(
         cli.command,
         Commands::Ingest { .. }
@@ -457,35 +487,6 @@ async fn run() -> Result<()> {
         Some(create_embedder_auto(&embedding_config, &config.paths.base_dir).await?)
     } else {
         None
-    };
-
-    // Determine if this command needs validated connection (write operations)
-    let needs_validation = matches!(
-        cli.command,
-        Commands::Ingest { .. }
-            | Commands::Reindex { .. }
-            | Commands::Update { .. }
-            | Commands::Remove { .. }
-    ) || matches!(&cli.command, Commands::Prune { remove_orphans, .. } if *remove_orphans);
-
-    let api_key = config.qdrant_api_key();
-    let store = if needs_validation {
-        // Write operations use validated connection
-        debug!(
-            "Validating collection '{}' for write operation...",
-            config.collection_name
-        );
-        QdrantStore::connect_validated(&config, &embedding_config, &db).await?
-    } else {
-        // Read-only operations use regular connection
-        QdrantStore::new(
-            &config.qdrant_url,
-            &config.collection_name,
-            embedding_config.dimension,
-            Some(&embedding_config),
-            api_key.as_deref(),
-        )
-        .await?
     };
 
     // Handle commands

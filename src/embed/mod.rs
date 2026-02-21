@@ -20,7 +20,7 @@ use crate::xinference::{
 };
 use async_trait::async_trait;
 use std::path::Path;
-use tracing::debug;
+use tracing::info;
 
 /// Supported media modalities for multimodal embedding
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,7 +276,11 @@ pub async fn create_embedder_auto(
 ) -> Result<Box<dyn Embedder>> {
     match config.backend.kind {
         EmbeddingBackendKind::Xinference => {
-            debug!("Using Xinference backend, ensuring dependencies...");
+            info!(
+                model = %config.model_id,
+                url = %config.backend.url,
+                "Initializing Xinference embedding backend…"
+            );
 
             // Ensure xinference is installed and ready (sync check)
             ensure_xinference_ready(base_dir)?;
@@ -295,9 +299,10 @@ pub async fn create_embedder_auto(
                 }
             }
 
-            // Create embedder (this will launch model if needed)
+            // Create embedder (this will launch model if needed — may download weights)
             let embedder =
                 XinferenceEmbedder::from_global_manager(manager_lock.clone(), config).await?;
+            info!(model = %config.model_id, "Embedding backend ready");
             Ok(Box::new(embedder) as Box<dyn Embedder>)
         }
         EmbeddingBackendKind::Http => {
