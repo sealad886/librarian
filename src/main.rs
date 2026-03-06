@@ -10,18 +10,20 @@ use librarian::{
         print_source_completions, print_sources, print_status, print_update_stats, PruneOptions,
         QueryOptions, ReindexOptions, UpdateOptions, XinferenceSyncOptions,
     },
-    config::Config,
+    config::{Config, EmbeddingDimensionSource, ResolvedEmbeddingConfig},
     embed::create_embedder_auto,
+    embedding_backend::{EmbeddingBackendConfig, EmbeddingBackendKind},
     error::{Error, Result},
     mcp::McpServer,
     meta::{MetaDb, RunOperation},
-    models::embedding_model_spec,
+    models::{allowlisted_embedding_models, embedding_model_spec, MultimodalStrategy},
     progress::LogWriterFactory,
     store::QdrantStore,
 };
 use std::fs;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tokio::process::Command;
 use tokio::time::sleep;
 use tracing::{debug, error};
@@ -33,7 +35,7 @@ use url::Url;
 #[command(name = "librarian")]
 #[command(version, about = "Local RAG CLI tool with MCP server support", long_about = None)]
 struct Cli {
-    /// Path to config file
+    /// Path to config file or containing directory
     #[arg(short, long, global = true)]
     config: Option<PathBuf>,
 
@@ -78,8 +80,8 @@ enum Commands {
         query: String,
 
         /// Maximum number of results
-        #[arg(short, long, default_value = "5")]
-        limit: usize,
+        #[arg(short, long)]
+        limit: Option<usize>,
 
         /// Minimum similarity score (0-1)
         #[arg(short, long)]
@@ -98,6 +100,7 @@ enum Commands {
     Status,
 
     /// List registered sources
+    #[command(alias = "list")]
     Sources {
         /// Output only source IDs (one per line, for scripting)
         #[arg(long)]
@@ -115,7 +118,7 @@ enum Commands {
         dry_run: bool,
 
         /// Also remove orphan Qdrant points
-        #[arg(long)]
+        #[arg(long, alias = "orphans")]
         remove_orphans: bool,
 
         /// Only prune specific source IDs
@@ -268,11 +271,11 @@ enum IngestSource {
         name: Option<String>,
 
         /// File extensions to include (e.g., md,txt,html)
-        #[arg(long)]
+        #[arg(long, hide = true)]
         extensions: Option<String>,
 
         /// Exclude patterns (glob)
-        #[arg(long)]
+        #[arg(long, hide = true)]
         exclude: Option<Vec<String>>,
     },
 
@@ -297,6 +300,10 @@ enum IngestSource {
         /// If not specified, defaults to the seed URL's directory path
         #[arg(long)]
         path_prefix: Option<String>,
+
+        /// Deprecated no-op compatibility flag; crawling is same-domain by default.
+        #[arg(long, hide = true)]
+        same_domain: bool,
     },
 
     /// Ingest URLs from a sitemap
@@ -407,10 +414,10 @@ async fn run() -> Result<()> {
             "Resolved embedding configuration for MCP startup"
         );
 
-        let dimension = resolve_mcp_store_dimension(&config, &db).await?;
+        let dimension = resolve_store_dimension_lightweight(&config, &db).await?;
         debug!(
             dimension = dimension.dimension,
-            source = dimension.source,
+            source = %dimension.source,
             "Resolved embedding dimension for MCP store"
         );
 
@@ -432,80 +439,29 @@ async fn run() -> Result<()> {
         return Ok(());
     }
 
-    // Resolve embedding config and only create embedder when needed
-    let embedding_config = config.resolve_embedding_config().await?;
-
-    // Commands that don't need a store connection
     if let Commands::Xinference { action } = cli.command {
         handle_xinference_action(&config, action, cli.json).await?;
         return Ok(());
     }
 
     if let Commands::Db { action } = cli.command {
-        handle_db_action(&config, action, cli.json).await?;
+        handle_db_action(&config, &db, action, cli.json).await?;
         return Ok(());
     }
 
-    // Validate Qdrant connection BEFORE initializing the embedder.
-    // This fails fast on misconfigured/unreachable Qdrant rather than
-    // blocking for minutes on a model download only to fail afterwards.
-    let needs_validation = matches!(
-        cli.command,
-        Commands::Ingest { .. }
-            | Commands::Reindex { .. }
-            | Commands::Update { .. }
-            | Commands::Remove { .. }
-    ) || matches!(&cli.command, Commands::Prune { remove_orphans, .. } if *remove_orphans);
-
-    let api_key = config.qdrant_api_key();
-    let store = if needs_validation {
-        debug!(
-            "Validating collection '{}' for write operation...",
-            config.collection_name
-        );
-        QdrantStore::connect_validated(&config, &embedding_config, &db).await?
-    } else {
-        QdrantStore::new(
-            &config.qdrant_url,
-            &config.collection_name,
-            embedding_config.dimension,
-            Some(&embedding_config),
-            api_key.as_deref(),
-        )
-        .await?
-    };
-
-    // Create the embedder only after Qdrant is confirmed reachable
-    let needs_embedder = matches!(
-        cli.command,
-        Commands::Ingest { .. }
-            | Commands::Query { .. }
-            | Commands::Reindex { .. }
-            | Commands::Update { .. }
-    );
-    let embedder = if needs_embedder {
-        Some(create_embedder_auto(&embedding_config, &config.paths.base_dir).await?)
-    } else {
-        None
-    };
-
-    // Handle commands
     match cli.command {
         Commands::Init { .. } => unreachable!(),
 
         Commands::Ingest { source } => {
-            let embedder = embedder
-                .as_ref()
-                .expect("embedder must be initialized for ingest");
-            handle_ingest(
-                &config,
-                &embedding_config,
-                embedder.as_ref(),
-                &db,
-                &store,
-                source,
-            )
-            .await?;
+            let embedding_config = config.resolve_embedding_config().await?;
+            debug!(
+                collection = %config.collection_name,
+                "Validating collection for ingest"
+            );
+            let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
+            let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
+            let embedder = embedder.as_ref();
+            handle_ingest(&config, &embedding_config, embedder, &db, &store, source).await?;
         }
 
         Commands::Query {
@@ -515,11 +471,11 @@ async fn run() -> Result<()> {
             source,
             dedupe,
         } => {
-            let embedder = embedder
-                .as_ref()
-                .expect("embedder must be initialized for query");
+            let embedding_config = config.resolve_embedding_config().await?;
+            let store = QdrantStore::connect(&config, &embedding_config).await?;
+            let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
             let options = QueryOptions {
-                k: Some(limit),
+                k: limit,
                 min_score,
                 source_ids: source,
                 dedupe_docs: dedupe,
@@ -545,6 +501,8 @@ async fn run() -> Result<()> {
         }
 
         Commands::Status => {
+            let embedding_config = resolve_lightweight_embedding_config(&config, &db).await?;
+            let store = QdrantStore::connect(&config, &embedding_config).await?;
             let status = cmd_status(&config, &db, &store).await?;
 
             if cli.json {
@@ -579,6 +537,12 @@ async fn run() -> Result<()> {
             remove_orphans,
             source,
         } => {
+            let embedding_config = resolve_lightweight_embedding_config(&config, &db).await?;
+            debug!(
+                collection = %config.collection_name,
+                "Validating collection for prune"
+            );
+            let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
             let options = PruneOptions {
                 source_ids: source,
                 dry_run,
@@ -595,9 +559,13 @@ async fn run() -> Result<()> {
         }
 
         Commands::Reindex { source, batch_size } => {
-            let embedder = embedder
-                .as_ref()
-                .expect("embedder must be initialized for reindex");
+            let embedding_config = config.resolve_embedding_config().await?;
+            debug!(
+                collection = %config.collection_name,
+                "Validating collection for reindex"
+            );
+            let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
+            let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
             let options = ReindexOptions {
                 source_ids: source,
                 batch_size,
@@ -621,9 +589,13 @@ async fn run() -> Result<()> {
         }
 
         Commands::Update { source, skip_prune } => {
-            let embedder = embedder
-                .as_ref()
-                .expect("embedder must be initialized for update");
+            let embedding_config = config.resolve_embedding_config().await?;
+            debug!(
+                collection = %config.collection_name,
+                "Validating collection for update"
+            );
+            let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
+            let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
             let options = UpdateOptions {
                 source_ids: source,
                 prune_orphans: !skip_prune,
@@ -647,6 +619,12 @@ async fn run() -> Result<()> {
         }
 
         Commands::Remove { source_id } => {
+            let embedding_config = resolve_lightweight_embedding_config(&config, &db).await?;
+            debug!(
+                collection = %config.collection_name,
+                "Validating collection for remove"
+            );
+            let store = QdrantStore::connect_validated(&config, &embedding_config, &db).await?;
             let stats = cmd_remove_source(&db, &store, &source_id).await?;
 
             if cli.json {
@@ -820,28 +798,39 @@ fn log_error_chain(err: &dyn std::error::Error) {
 
 struct StoreDimension {
     dimension: usize,
-    source: &'static str,
+    source: EmbeddingDimensionSource,
 }
 
-async fn resolve_mcp_store_dimension(config: &Config, db: &MetaDb) -> Result<StoreDimension> {
+fn normalize_config_path(path: &Path) -> PathBuf {
+    if path.extension().is_some_and(|ext| ext == "toml") || path.is_file() {
+        path.to_path_buf()
+    } else {
+        path.join("config.toml")
+    }
+}
+
+async fn resolve_store_dimension_lightweight(
+    config: &Config,
+    db: &MetaDb,
+) -> Result<StoreDimension> {
     if let Some(dimension) = config.embedding.dimension {
         return Ok(StoreDimension {
             dimension,
-            source: "config.embedding.dimension",
+            source: EmbeddingDimensionSource::Config,
         });
     }
 
     if let Some(dimension) = config.embedding.custom.dimension {
         return Ok(StoreDimension {
             dimension,
-            source: "config.embedding.custom.dimension",
+            source: EmbeddingDimensionSource::Custom,
         });
     }
 
     if let Some(record) = db.get_collection_config(&config.collection_name).await? {
         return Ok(StoreDimension {
             dimension: record.vector_dimension as usize,
-            source: "metadata.collection_config",
+            source: EmbeddingDimensionSource::Metadata,
         });
     }
 
@@ -849,15 +838,177 @@ async fn resolve_mcp_store_dimension(config: &Config, db: &MetaDb) -> Result<Sto
         if let Some(dimension) = spec.default_dimension {
             return Ok(StoreDimension {
                 dimension,
-                source: "model_registry",
+                source: EmbeddingDimensionSource::Registry,
             });
         }
     }
 
     Err(librarian::error::Error::Config(
-        "Embedding dimension could not be resolved for MCP startup. Set embedding.dimension in config.toml or ensure collection metadata exists."
+        "Embedding dimension could not be resolved. Set embedding.dimension in config.toml or ensure collection metadata exists."
             .to_string(),
     ))
+}
+
+async fn resolve_lightweight_embedding_config(
+    config: &Config,
+    db: &MetaDb,
+) -> Result<ResolvedEmbeddingConfig> {
+    let raw_model = config.embedding.model.trim();
+    if raw_model.is_empty() {
+        return Err(Error::Config(
+            "embedding.model must not be empty".to_string(),
+        ));
+    }
+
+    let allowlisted = embedding_model_spec(raw_model);
+    let is_custom_model = raw_model == "custom" || allowlisted.is_none();
+
+    if is_custom_model && !config.embedding.allow_custom {
+        let allowed = allowlisted_embedding_models().join(", ");
+        return Err(Error::Config(format!(
+            "Embedding model '{}' is not allowlisted. Set embedding.allow_custom = true to use custom models. Allowed: {}",
+            raw_model, allowed
+        )));
+    }
+
+    let model_id = if raw_model == "custom" {
+        let custom_id = config.embedding.custom.id.trim();
+        if custom_id.is_empty() {
+            return Err(Error::Config(
+                "embedding.custom.id must be set when embedding.model = 'custom'".to_string(),
+            ));
+        }
+        custom_id.to_string()
+    } else {
+        raw_model.to_string()
+    };
+
+    if is_custom_model && config.embedding.custom.id.trim().is_empty() {
+        return Err(Error::Config(
+            "embedding.custom.id must be set when using a custom model".to_string(),
+        ));
+    }
+
+    if is_custom_model && config.embedding.custom.id.trim() != model_id {
+        return Err(Error::Config(format!(
+            "embedding.custom.id '{}' must match resolved model id '{}'",
+            config.embedding.custom.id, model_id
+        )));
+    }
+
+    let (backend_kind, backend_url) = if is_custom_model {
+        (
+            EmbeddingBackendKind::from_str(&config.embedding.custom.backend)?,
+            config.embedding.custom.url.trim().to_string(),
+        )
+    } else {
+        (
+            EmbeddingBackendKind::from_str(&config.embedding.backend)?,
+            config.embedding.url.trim().to_string(),
+        )
+    };
+
+    if backend_url.is_empty() {
+        return Err(Error::Config(
+            "embedding backend url must be set".to_string(),
+        ));
+    }
+
+    let dimension = resolve_store_dimension_lightweight(config, db).await?;
+    let backend = EmbeddingBackendConfig {
+        kind: backend_kind,
+        url: backend_url,
+    };
+
+    let (
+        family,
+        modalities,
+        strategy,
+        supports_text,
+        supports_image,
+        supports_audio,
+        supports_video,
+        supports_joint_inputs,
+        supports_multi_vector,
+        supports_mrl,
+        max_batch,
+    ) = if let Some(spec) = allowlisted {
+        (
+            spec.family.to_string(),
+            spec.modalities.iter().map(|m| (*m).to_string()).collect(),
+            spec.capabilities.strategy,
+            spec.capabilities.supports_text,
+            spec.capabilities.supports_image,
+            spec.capabilities.supports_audio,
+            spec.capabilities.supports_video,
+            spec.capabilities.supports_joint_inputs,
+            spec.capabilities.supports_multi_vector,
+            spec.supports_mrl,
+            spec.max_batch,
+        )
+    } else {
+        let modalities = if config.embedding.custom.modalities.is_empty() {
+            vec!["text".to_string()]
+        } else {
+            config.embedding.custom.modalities.clone()
+        };
+        let supports_joint_inputs = modalities.iter().any(|m| m == "multimode");
+        let supports_image = supports_joint_inputs || modalities.iter().any(|m| m == "image");
+        let supports_text = supports_joint_inputs || modalities.iter().any(|m| m == "text");
+        let supports_audio = supports_joint_inputs || modalities.iter().any(|m| m == "audio");
+        let supports_video = supports_joint_inputs || modalities.iter().any(|m| m == "video");
+        let strategy = if supports_video {
+            MultimodalStrategy::VideoLanguage
+        } else if supports_audio {
+            MultimodalStrategy::AudioLanguage
+        } else if supports_joint_inputs {
+            MultimodalStrategy::OmniModal
+        } else {
+            MultimodalStrategy::DualEncoder
+        };
+
+        (
+            config
+                .embedding
+                .custom
+                .family
+                .clone()
+                .unwrap_or_else(|| "custom".to_string()),
+            modalities,
+            strategy,
+            supports_text,
+            supports_image,
+            supports_audio,
+            supports_video,
+            supports_joint_inputs,
+            config.embedding.custom.multivector.unwrap_or(false),
+            config.embedding.custom.supports_mrl.unwrap_or(false),
+            config
+                .embedding
+                .custom
+                .max_batch
+                .unwrap_or_else(|| config.embedding.batch_size.max(1)),
+        )
+    };
+
+    Ok(ResolvedEmbeddingConfig {
+        model_id,
+        family,
+        modalities,
+        dimension: dimension.dimension,
+        dimension_source: dimension.source,
+        backend,
+        allow_custom: config.embedding.allow_custom,
+        strategy,
+        supports_text,
+        supports_image,
+        supports_audio,
+        supports_video,
+        supports_joint_inputs,
+        supports_multi_vector,
+        supports_mrl,
+        max_batch,
+    })
 }
 #[allow(clippy::print_literal)]
 fn print_completion_extras(shell: Shell) {
@@ -932,23 +1083,16 @@ async fn handle_init(cli: Cli) -> Result<()> {
         unreachable!()
     };
 
-    // Get the base directory: if user specifies config file, use its parent dir
-    // Otherwise use default base dir
-    let (base_dir, config_path) = if let Some(path) = cli.config {
-        let base = path
-            .parent()
-            .map(PathBuf::from)
-            .unwrap_or_else(Config::default_base_dir);
-        let config = if path.extension().is_some_and(|e| e == "toml") {
-            path // User specified a .toml file
-        } else {
-            path.join("config.toml") // User specified a directory
-        };
-        (base, config)
-    } else {
-        let base = Config::default_base_dir();
-        (base.clone(), base.join("config.toml"))
-    };
+    // Accept either a config.toml path or a containing directory.
+    let config_path = cli
+        .config
+        .as_deref()
+        .map(normalize_config_path)
+        .unwrap_or_else(Config::default_config_path);
+    let base_dir = config_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(Config::default_base_dir);
 
     cmd_init(librarian::commands::InitOptions {
         base_dir,
@@ -962,9 +1106,13 @@ async fn handle_init(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Result<()> {
-    let embedding_config = config.resolve_embedding_config().await?;
-    let db = MetaDb::new(&config.paths.db_file).await?;
+async fn handle_db_action(
+    config: &Config,
+    db: &MetaDb,
+    action: DbAction,
+    json: bool,
+) -> Result<()> {
+    let embedding_config = resolve_lightweight_embedding_config(config, db).await?;
 
     match action {
         DbAction::Init => {
@@ -982,7 +1130,7 @@ async fn handle_db_action(config: &Config, action: DbAction, json: bool) -> Resu
             let expected =
                 CollectionConfig::from_embedding_config(&config.collection_name, &embedding_config);
 
-            let validation = store.validate_collection_state(&db, &expected).await?;
+            let validation = store.validate_collection_state(db, &expected).await?;
             let stored_config = db.get_collection_config(&config.collection_name).await?;
 
             if json {
@@ -1350,7 +1498,7 @@ fn qdrant_health_url(qdrant_url: &str) -> Option<String> {
 
 async fn load_config(path: Option<&std::path::Path>) -> Result<Config> {
     let config_path = path
-        .map(PathBuf::from)
+        .map(normalize_config_path)
         .unwrap_or_else(Config::default_config_path);
 
     if !config_path.exists() {
@@ -1415,6 +1563,7 @@ async fn handle_ingest(
             max_pages,
             max_depth,
             path_prefix,
+            same_domain: _,
         } => {
             use librarian::commands::CrawlOverrides;
             let overrides = CrawlOverrides {

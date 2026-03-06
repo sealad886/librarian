@@ -305,7 +305,7 @@ mod tests {
     fn chunk_preview_handles_cjk_at_boundary() {
         // CJK characters are 3 bytes each in UTF-8
         // 66 CJK chars = 198 bytes, then add more CJK
-        let input: String = std::iter::repeat('中').take(70).collect();
+        let input = "中".repeat(70);
         let preview = chunk_preview(&input);
         assert!(preview.ends_with("..."));
         assert!(!preview.is_empty());

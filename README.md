@@ -22,7 +22,7 @@ A high-performance local RAG (Retrieval Augmented Generation) CLI tool and MCP s
 ┌──────────────────────────────────────────────────────────────┐
 │                      librarian CLI                           │
 ├──────────────────────────────────────────────────────────────┤
-│  Commands: init | ingest | list | status | query | mcp | ... │
+│ Commands: init | ingest | sources | status | query | mcp | ... │
 └───────────────────────────────┬──────────────────────────────┘
                                 │
                 ┌───────────────┼───────────────┐
@@ -56,8 +56,8 @@ Verify downloads against the `SHA256SUMS` file included in each release.
 
 ```bash
 # Example: macOS arm64
-tar xzf librarian-v1.0.1-macos-arm64-full.tar.gz
-cp librarian-v1.0.1-macos-arm64-full/librarian /usr/local/bin/
+tar xzf librarian-v1.0.2-macos-arm64-full.tar.gz
+cp librarian-v1.0.2-macos-arm64-full/librarian /usr/local/bin/
 ```
 
 ### Prerequisites (Build from Source)
@@ -138,7 +138,7 @@ librarian ingest sitemap https://example.com/sitemap.xml --name "Example Site"
 librarian query "how to use async/await"
 
 # View indexed sources
-librarian list
+librarian sources
 
 # Check system status
 librarian status
@@ -269,7 +269,7 @@ Initialize librarian configuration and database.
 librarian init [OPTIONS]
 
 Options:
-  -c, --config <PATH>  Custom config directory (default: ~/.librarian)
+  -c, --config <PATH>  Config file path or containing directory (default: ~/.librarian/config.toml)
   -f, --force          Overwrite existing configuration
   --non-interactive    Write defaults without prompts (for CI/scripting)
   -y, --yes            Accept defaults and skip confirmation
@@ -293,8 +293,6 @@ librarian ingest dir <PATH> [OPTIONS]
 
 Options:
   -n, --name <NAME>     Human-readable source name
-  -e, --extensions      File extensions to include (default: all supported)
-  --exclude <PATTERN>   Glob patterns to exclude
 ```
 
 Supports: Markdown, HTML, plain text, code files. Respects `.gitignore`.
@@ -308,7 +306,7 @@ Options:
   -n, --name <NAME>       Human-readable source name
   --max-pages <N>         Maximum pages to crawl (default: 100)
   --max-depth <N>         Maximum link depth (default: 3)
-  --same-domain           Only crawl same domain (default: true)
+  --path-prefix <PATH>    Restrict crawling to a path prefix (defaults to the seed URL path)
 ```
 
 Features: robots.txt respect, rate limiting, automatic link following.
@@ -337,22 +335,24 @@ Search the RAG index.
 librarian query <QUERY> [OPTIONS]
 
 Options:
-  -k, --limit <N>        Number of results (default: 5)
+  -k, --limit <N>        Number of results (default: `query.default_k` from config)
   -s, --source <ID>      Filter by source ID
-  --min-score <SCORE>    Minimum similarity (0-1, default: 0.5)
+  --min-score <SCORE>    Minimum similarity (0-1, default: `query.min_score` from config)
   --json                 Output as JSON
 ```
 
-### `list`
+### `sources`
 
 List all indexed sources.
 
 ```bash
-librarian list [OPTIONS]
+librarian sources [OPTIONS]
 
 Options:
   --json                 Output as JSON
 ```
+
+`librarian list` remains available as a compatibility alias.
 
 ### `status`
 
@@ -375,7 +375,7 @@ librarian prune [OPTIONS]
 Options:
   -s, --source <ID>      Only prune specific source
   --dry-run              Preview changes without deleting
-  --orphans              Also remove orphaned Qdrant points
+  --remove-orphans       Also remove orphaned Qdrant points
 ```
 
 ### `reindex`
@@ -619,7 +619,7 @@ librarian reindex --batch-size 16
 
 ```bash
 # Rebuild from scratch
-librarian prune --orphans
+librarian prune --remove-orphans
 librarian reindex
 ```
 

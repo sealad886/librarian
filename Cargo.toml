@@ -1,6 +1,7 @@
 [package]
 name = "librarian"
-version = "1.0.1"
+version = "1.0.2"
+default-run = "librarian"
 edition = "2021"
 authors = ["Dr Andrew Cox"]
 description = "A CLI tool for local RAG (Retrieval-Augmented Generation) with MCP server support"

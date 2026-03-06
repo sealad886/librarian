@@ -94,6 +94,37 @@ test_output_contains() {
     fi
 }
 
+test_read_only_config_dir_commands() {
+    local tmpdir
+    tmpdir="$(mktemp -d)"
+    cat >"$tmpdir/config.toml" <<'EOF'
+qdrant_url = "http://127.0.0.1:65534"
+collection_name = "librarian_smoke"
+
+[embedding]
+model = "BAAI/bge-small-en-v1.5"
+dimension = 384
+EOF
+
+    local sources_output
+    if sources_output="$(timeout 10 "$BINARY" --config "$tmpdir" sources --json 2>&1)" \
+        && [[ "$sources_output" == *"[]"* ]]; then
+        pass "sources accepts config directory path"
+    else
+        fail "sources accepts config directory path"
+    fi
+
+    local status_output
+    if status_output="$(timeout 10 "$BINARY" --config "$tmpdir" status --json 2>&1)" \
+        && [[ "$status_output" == *'"qdrant_connected": false'* ]]; then
+        pass "status stays read-only without bootstrapping embedding backend"
+    else
+        fail "status stays read-only without bootstrapping embedding backend"
+    fi
+
+    rm -rf "$tmpdir"
+}
+
 main() {
     echo "====================================="
     echo "librarian CLI Verification Suite"
@@ -117,6 +148,7 @@ main() {
     test_help "query"
     test_help "status"
     test_help "sources"
+    test_help "list" "list alias --help"
     test_help "prune"
     test_help "reindex"
     test_help "update"
@@ -143,6 +175,12 @@ main() {
     echo ""
     echo "--- Config print (stateless) ---"
     test_output_contains "config print" "qdrant" "config print shows qdrant section"
+    test_output_contains "prune --orphans --help" "Usage:" "legacy prune flag alias parses"
+    test_output_contains "ingest url --same-domain --help" "Usage:" "legacy same-domain flag parses"
+
+    echo ""
+    echo "--- Read-only runtime smoke ---"
+    test_read_only_config_dir_commands
 
     echo ""
     echo "====================================="
