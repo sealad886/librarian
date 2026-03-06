@@ -1,7 +1,7 @@
 //! Ingest command implementation
 
 use crate::chunk::{chunk_document, compute_content_hash, TextChunk};
-use crate::config::{Config, ResolvedEmbeddingConfig};
+use crate::config::{AudioConfig, AudioTranscriptionBackend, Config, ResolvedEmbeddingConfig};
 use crate::crawl::{validate_url_ssrf, CrawledPage, Crawler};
 use crate::embed::{embed_images_with_optional_text_fusion, embed_in_batches, Embedder};
 use crate::error::{Error, Result};
@@ -10,6 +10,10 @@ use crate::parse::{is_audio_file, is_video_file, ExtractedMedia, ParsedDocument}
 use crate::parse::{is_binary_content, parse_content, should_skip_file, ContentType};
 use crate::progress::add_progress_bar;
 use crate::store::{ChunkPayload, ChunkPoint, QdrantStore};
+use crate::xinference::{
+    ensure_xinference_ready, get_or_init_xinference_manager, xinference_auth_token,
+    DEFAULT_XINFERENCE_PORT,
+};
 use base64::Engine;
 use chrono::Utc;
 use ignore::WalkBuilder;
@@ -491,47 +495,214 @@ struct TranscriptionResponse {
     text: String,
 }
 
-/// Call the transcription API to transcribe an audio file
-async fn transcribe_audio(
-    path: &Path,
-    transcription_url: &str,
-    http_client: &reqwest::Client,
-) -> Result<String> {
-    // Read the audio file
-    let file_bytes = tokio::fs::read(path).await?;
-    let filename = path
-        .file_name()
-        .and_then(|f| f.to_str())
-        .unwrap_or("audio.mp3")
-        .to_string();
+#[derive(Debug, Clone)]
+struct AudioTranscriber {
+    backend: AudioTranscriptionBackend,
+    transcription_url: Url,
+    model: String,
+    auth_token: Option<String>,
+}
 
-    // Create multipart form with file
-    let part = reqwest::multipart::Part::bytes(file_bytes)
-        .file_name(filename)
-        .mime_str("audio/mpeg")?;
+impl AudioTranscriber {
+    async fn from_config(config: &Config) -> Result<Option<Self>> {
+        let audio_config = &config.crawl.multimodal.audio;
+        if !audio_config.transcription_enabled {
+            return Ok(None);
+        }
 
-    let form = reqwest::multipart::Form::new()
-        .part("file", part)
-        .text("model", "whisper-1"); // Standard OpenAI-compatible param
+        let backend = resolve_transcription_backend(audio_config);
+        let configured_model = resolve_transcription_model(audio_config, backend).to_string();
 
-    let response = http_client
-        .post(transcription_url)
-        .multipart(form)
-        .timeout(Duration::from_secs(300)) // 5 min timeout for long audio
-        .send()
-        .await?;
+        match backend {
+            AudioTranscriptionBackend::Http => Ok(Some(Self {
+                backend,
+                transcription_url: normalize_http_transcription_url(
+                    &audio_config.transcription_url,
+                )?,
+                model: configured_model,
+                auth_token: None,
+            })),
+            AudioTranscriptionBackend::Xinference => {
+                let base_url =
+                    normalize_xinference_transcription_base_url(&audio_config.transcription_url)?;
+                let auth_token = xinference_auth_token();
+                let manager_lock =
+                    get_or_init_xinference_manager(&base_url, auth_token.clone()).await?;
 
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(Error::Io(std::io::Error::other(format!(
-            "Transcription API error {}: {}",
-            status, body
-        ))));
+                let needs_prepare = {
+                    let mut guard = manager_lock.lock().await;
+                    let mgr = guard.as_mut().ok_or_else(|| {
+                        Error::Config("Xinference manager not initialized".to_string())
+                    })?;
+                    !mgr.health_check().await? && is_localhost_url(&base_url)
+                };
+                if needs_prepare {
+                    ensure_xinference_ready(&config.paths.base_dir)?;
+                }
+
+                let model_uid = {
+                    let mut guard = manager_lock.lock().await;
+                    let mgr = guard.as_mut().ok_or_else(|| {
+                        Error::Config("Xinference manager not initialized".to_string())
+                    })?;
+                    mgr.ensure_running().await?;
+                    mgr.ensure_model_launched(&configured_model, "audio", false)
+                        .await?
+                };
+
+                Ok(Some(Self {
+                    backend,
+                    transcription_url: base_url.join("/v1/audio/transcriptions").map_err(|e| {
+                        Error::Config(format!("Invalid Xinference transcription URL: {}", e))
+                    })?,
+                    model: model_uid,
+                    auth_token,
+                }))
+            }
+            AudioTranscriptionBackend::Auto => unreachable!("auto backend is resolved earlier"),
+        }
     }
 
-    let result: TranscriptionResponse = response.json().await?;
-    Ok(result.text)
+    async fn transcribe(&self, path: &Path, http_client: &reqwest::Client) -> Result<String> {
+        let file_bytes = tokio::fs::read(path).await?;
+        let filename = path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("audio.bin")
+            .to_string();
+        let mime_type = mime_guess::from_path(path).first_or_octet_stream();
+
+        let part = reqwest::multipart::Part::bytes(file_bytes)
+            .file_name(filename)
+            .mime_str(mime_type.essence_str())?;
+
+        let form = reqwest::multipart::Form::new()
+            .part("file", part)
+            .text("model", self.model.clone());
+
+        debug!(
+            backend = %self.backend,
+            model = %self.model,
+            url = %self.transcription_url,
+            path = %path.display(),
+            "Submitting audio transcription request"
+        );
+
+        let mut request = http_client
+            .post(self.transcription_url.clone())
+            .multipart(form)
+            .timeout(Duration::from_secs(300));
+        if let Some(token) = &self.auth_token {
+            request = request.bearer_auth(token);
+        }
+
+        let response = request.send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(Error::Io(std::io::Error::other(format!(
+                "Transcription API error {}: {}",
+                status, body
+            ))));
+        }
+
+        let result: TranscriptionResponse = response.json().await?;
+        Ok(result.text)
+    }
+}
+
+fn resolve_transcription_backend(audio_config: &AudioConfig) -> AudioTranscriptionBackend {
+    match audio_config.transcription_backend {
+        AudioTranscriptionBackend::Auto => {
+            if transcription_url_looks_like_xinference(&audio_config.transcription_url) {
+                AudioTranscriptionBackend::Xinference
+            } else {
+                AudioTranscriptionBackend::Http
+            }
+        }
+        backend => backend,
+    }
+}
+
+fn transcription_url_looks_like_xinference(raw: &str) -> bool {
+    Url::parse(raw)
+        .ok()
+        .map(|url| {
+            matches!(
+                url.host_str(),
+                Some("127.0.0.1") | Some("localhost") | Some("0.0.0.0") | Some("::1")
+            ) && url.port_or_known_default() == Some(DEFAULT_XINFERENCE_PORT)
+        })
+        .unwrap_or(false)
+}
+
+fn normalize_http_transcription_url(raw: &str) -> Result<Url> {
+    Url::parse(raw)
+        .map_err(|e| Error::Config(format!("Invalid transcription URL '{}': {}", raw, e)))
+}
+
+fn normalize_xinference_transcription_base_url(raw: &str) -> Result<Url> {
+    let mut url = Url::parse(raw)
+        .map_err(|e| Error::Config(format!("Invalid Xinference URL '{}': {}", raw, e)))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        scheme => {
+            return Err(Error::Config(format!(
+                "Unsupported Xinference URL scheme '{}'; use http or https",
+                scheme
+            )));
+        }
+    }
+
+    if url.port().is_none() {
+        url.set_port(Some(DEFAULT_XINFERENCE_PORT))
+            .map_err(|_| Error::Config("Failed to apply default Xinference port".to_string()))?;
+    }
+
+    let path = url.path().trim_end_matches('/');
+    match path {
+        "" | "/" | "/v1" | "/v1/audio/transcriptions" => url.set_path("/"),
+        other => {
+            return Err(Error::Config(format!(
+                "Xinference transcription URL must be a base URL or /v1/audio/transcriptions endpoint (got '{}')",
+                other
+            )));
+        }
+    }
+
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url)
+}
+
+fn resolve_transcription_model(
+    audio_config: &AudioConfig,
+    backend: AudioTranscriptionBackend,
+) -> &str {
+    let configured = audio_config.transcription_model.trim();
+    if !configured.eq_ignore_ascii_case("auto") {
+        return configured;
+    }
+
+    match backend {
+        AudioTranscriptionBackend::Http => "whisper-1",
+        AudioTranscriptionBackend::Xinference => {
+            if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                "whisper-large-v3-turbo-mlx"
+            } else {
+                "whisper-large-v3-turbo"
+            }
+        }
+        AudioTranscriptionBackend::Auto => "auto",
+    }
+}
+
+fn is_localhost_url(url: &Url) -> bool {
+    matches!(
+        url.host_str(),
+        Some("127.0.0.1") | Some("localhost") | Some("0.0.0.0") | Some("::1")
+    )
 }
 
 /// Process an audio file: extract metadata, transcribe, and create chunks
@@ -543,6 +714,7 @@ async fn process_audio_file(
     embedder: &dyn Embedder,
     source: &Source,
     path: &Path,
+    transcriber: Option<&AudioTranscriber>,
     http_client: &reqwest::Client,
 ) -> Result<(i32, i32)> {
     let file_uri = path.display().to_string();
@@ -595,8 +767,8 @@ async fn process_audio_file(
     let doc = db.upsert_document(&doc).await?;
 
     // Transcribe if enabled
-    let transcript = if audio_config.transcription_enabled {
-        match transcribe_audio(path, &audio_config.transcription_url, http_client).await {
+    let transcript = if let Some(transcriber) = transcriber {
+        match transcriber.transcribe(path, http_client).await {
             Ok(text) => {
                 debug!(
                     path = %file_uri,
@@ -835,12 +1007,12 @@ async fn process_video_file(
     embedder: &dyn Embedder,
     source: &Source,
     path: &Path,
+    transcriber: Option<&AudioTranscriber>,
     http_client: &reqwest::Client,
     temp_dir: &Path,
 ) -> Result<(i32, i32)> {
     let file_uri = path.display().to_string();
     let video_config = &config.crawl.multimodal.video;
-    let audio_config = &config.crawl.multimodal.audio;
 
     debug!(path = %file_uri, "Processing video file");
 
@@ -999,80 +1171,85 @@ async fn process_video_file(
     }
 
     // Extract and transcribe audio track if enabled and video has audio
-    if metadata.audio_streams > 0
-        && video_config.extract_audio
-        && audio_config.transcription_enabled
-    {
+    if metadata.audio_streams > 0 && video_config.extract_audio {
         let audio_path = video_temp_dir.join("audio_track.mp3");
 
         match extract_audio_track(path, &audio_path).await {
             Ok(true) => {
                 // Transcribe the extracted audio
-                match transcribe_audio(&audio_path, &audio_config.transcription_url, http_client)
-                    .await
-                {
-                    Ok(transcript) if !transcript.is_empty() => {
-                        debug!(
-                            path = %file_uri,
-                            chars = transcript.len(),
-                            "Transcribed video audio track"
-                        );
+                match transcriber {
+                    Some(transcriber) => {
+                        match transcriber.transcribe(&audio_path, http_client).await {
+                            Ok(transcript) if !transcript.is_empty() => {
+                                debug!(
+                                    path = %file_uri,
+                                    chars = transcript.len(),
+                                    "Transcribed video audio track"
+                                );
 
-                        // Create a text chunk for the transcript
-                        let transcript_hash = compute_content_hash(transcript.as_bytes());
-                        let chunk_index = chunks_created; // After keyframe chunks
+                                // Create a text chunk for the transcript
+                                let transcript_hash = compute_content_hash(transcript.as_bytes());
+                                let chunk_index = chunks_created; // After keyframe chunks
 
-                        let chunk = Chunk::new_with_modality(
-                            doc.id.clone(),
-                            chunk_index,
-                            transcript_hash.clone(),
-                            transcript.clone(),
-                            "video", // Still video modality since it's from video
-                            Some(file_uri.clone()),
-                            Some(content_hash.clone()),
-                        );
+                                let chunk = Chunk::new_with_modality(
+                                    doc.id.clone(),
+                                    chunk_index,
+                                    transcript_hash.clone(),
+                                    transcript.clone(),
+                                    "video", // Still video modality since it's from video
+                                    Some(file_uri.clone()),
+                                    Some(content_hash.clone()),
+                                );
 
-                        // Embed as text
-                        let embeddings = embed_in_batches(
-                            embedder,
-                            vec![transcript.clone()],
-                            config.embedding.batch_size,
-                        )
-                        .await?;
-                        if !embeddings.is_empty() {
-                            let point_id = chunk.point_uuid();
+                                // Embed as text
+                                let embeddings = embed_in_batches(
+                                    embedder,
+                                    vec![transcript.clone()],
+                                    config.embedding.batch_size,
+                                )
+                                .await?;
+                                if !embeddings.is_empty() {
+                                    let point_id = chunk.point_uuid();
 
-                            let mut payload = ChunkPayload::new(
-                                source.id.clone(),
-                                source.source_type.clone(),
-                                source.uri.clone(),
-                                doc.id.clone(),
-                                file_uri.clone(),
-                                chunk_index,
-                                transcript_hash.clone(),
-                                Utc::now().to_rfc3339(),
-                            );
-                            payload.title = doc.title.clone();
-                            payload.modality = Some("video".to_string());
-                            payload.media_url = Some(file_uri.clone());
-                            payload.media_hash = Some(content_hash.clone());
+                                    let mut payload = ChunkPayload::new(
+                                        source.id.clone(),
+                                        source.source_type.clone(),
+                                        source.uri.clone(),
+                                        doc.id.clone(),
+                                        file_uri.clone(),
+                                        chunk_index,
+                                        transcript_hash.clone(),
+                                        Utc::now().to_rfc3339(),
+                                    );
+                                    payload.title = doc.title.clone();
+                                    payload.modality = Some("video".to_string());
+                                    payload.media_url = Some(file_uri.clone());
+                                    payload.media_hash = Some(content_hash.clone());
 
-                            let points = vec![ChunkPoint {
-                                id: point_id,
-                                vector: embeddings[0].clone(),
-                                payload,
-                            }];
+                                    let points = vec![ChunkPoint {
+                                        id: point_id,
+                                        vector: embeddings[0].clone(),
+                                        payload,
+                                    }];
 
-                            store.upsert_points(points).await?;
-                            db.upsert_chunk(&chunk).await?;
-                            chunks_created += 1;
+                                    store.upsert_points(points).await?;
+                                    db.upsert_chunk(&chunk).await?;
+                                    chunks_created += 1;
+                                }
+                            }
+                            Ok(_) => {
+                                debug!(path = %file_uri, "Video audio track transcription returned empty");
+                            }
+                            Err(e) => {
+                                warn!(path = %file_uri, error = %e, "Failed to transcribe video audio track");
+                            }
                         }
                     }
-                    Ok(_) => {
-                        debug!(path = %file_uri, "Video audio track transcription returned empty");
-                    }
-                    Err(e) => {
-                        warn!(path = %file_uri, error = %e, "Failed to transcribe video audio track");
+                    None => {
+                        debug!(
+                            path = %file_uri,
+                            "Video audio track extraction succeeded, but transcription is disabled"
+                        );
                     }
                 }
             }
@@ -1669,6 +1846,23 @@ pub async fn cmd_ingest_dir(
 
     // Process audio files with ffprobe metadata and transcription
     let http_client = reqwest::Client::new();
+    let needs_audio_transcriber = (!audio_files.is_empty()
+        || (!video_files.is_empty() && config.crawl.multimodal.video.extract_audio))
+        && config.crawl.multimodal.audio.transcription_enabled;
+    let audio_transcriber = if needs_audio_transcriber {
+        match AudioTranscriber::from_config(config).await {
+            Ok(transcriber) => transcriber,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    "Failed to initialize audio transcriber; audio and video transcription will be skipped"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
     for audio_path in audio_files {
         let file_uri = audio_path.display().to_string();
         current_uris.push(file_uri.clone());
@@ -1680,6 +1874,7 @@ pub async fn cmd_ingest_dir(
             embedder,
             &source,
             &audio_path,
+            audio_transcriber.as_ref(),
             &http_client,
         )
         .await
@@ -1717,6 +1912,7 @@ pub async fn cmd_ingest_dir(
             embedder,
             &source,
             &video_path,
+            audio_transcriber.as_ref(),
             &http_client,
             &video_temp_dir,
         )
@@ -2621,10 +2817,17 @@ fn prompt_string(prompt: &str, default: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EmbeddingDimensionSource, ResolvedEmbeddingConfig};
+    use crate::config::{
+        AudioTranscriptionBackend, EmbeddingDimensionSource, ResolvedEmbeddingConfig,
+    };
     use crate::embedding_backend::{EmbeddingBackendConfig, EmbeddingBackendKind};
     use crate::models::MultimodalStrategy;
     use crate::parse::{ContentType, ExtractedMedia, Heading, MediaModality, ParsedDocument};
+    use serde_json::json;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    use wiremock::matchers::{body_string_contains, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn multimodal_config() -> Config {
         let mut config = Config::default();
@@ -2801,5 +3004,137 @@ mod tests {
         assert!(validate_url_ssrf("http://169.254.169.254/latest/meta-data")
             .await
             .is_err());
+    }
+
+    #[test]
+    fn test_auto_transcription_backend_detects_local_xinference() {
+        let mut config = Config::default();
+        config.crawl.multimodal.audio.transcription_backend = AudioTranscriptionBackend::Auto;
+        config.crawl.multimodal.audio.transcription_url =
+            "http://127.0.0.1:9997/v1/audio/transcriptions".to_string();
+        assert_eq!(
+            resolve_transcription_backend(&config.crawl.multimodal.audio),
+            AudioTranscriptionBackend::Xinference
+        );
+
+        config.crawl.multimodal.audio.transcription_url =
+            "http://127.0.0.1:8000/v1/audio/transcriptions".to_string();
+        assert_eq!(
+            resolve_transcription_backend(&config.crawl.multimodal.audio),
+            AudioTranscriptionBackend::Http
+        );
+    }
+
+    #[test]
+    fn test_auto_transcription_model_resolves_per_backend() {
+        let mut audio_config = Config::default().crawl.multimodal.audio;
+        audio_config.transcription_model = "auto".to_string();
+        assert_eq!(
+            resolve_transcription_model(&audio_config, AudioTranscriptionBackend::Http),
+            "whisper-1"
+        );
+        let xinference_model =
+            resolve_transcription_model(&audio_config, AudioTranscriptionBackend::Xinference);
+        if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            assert_eq!(xinference_model, "whisper-large-v3-turbo-mlx");
+        } else {
+            assert_eq!(xinference_model, "whisper-large-v3-turbo");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_audio_transcriber_http_auto_uses_whisper_1() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .and(body_string_contains("whisper-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "text": "hello over http"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let mut config = Config::default();
+        config.crawl.multimodal.audio.transcription_enabled = true;
+        config.crawl.multimodal.audio.transcription_backend = AudioTranscriptionBackend::Auto;
+        config.crawl.multimodal.audio.transcription_url =
+            format!("{}/v1/audio/transcriptions", mock_server.uri());
+        config.crawl.multimodal.audio.transcription_model = "auto".to_string();
+
+        let transcriber = AudioTranscriber::from_config(&config)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(transcriber.backend, AudioTranscriptionBackend::Http);
+        assert_eq!(transcriber.model, "whisper-1");
+
+        let mut audio_file = NamedTempFile::new().unwrap();
+        audio_file.write_all(b"fake mp3 bytes").unwrap();
+
+        let transcript = transcriber
+            .transcribe(audio_file.path(), &reqwest::Client::new())
+            .await
+            .unwrap();
+        assert_eq!(transcript, "hello over http");
+    }
+
+    #[tokio::test]
+    async fn test_audio_transcriber_launches_xinference_audio_model() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/cluster/version"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "version": "test"
+            })))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v1/models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/models"))
+            .and(body_string_contains("whisper-large-v3-turbo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "model_uid": "audio-model-uid"
+            })))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/audio/transcriptions"))
+            .and(body_string_contains("audio-model-uid"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "text": "hello from xinference"
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let mut config = Config::default();
+        config.crawl.multimodal.audio.transcription_enabled = true;
+        config.crawl.multimodal.audio.transcription_backend = AudioTranscriptionBackend::Xinference;
+        config.crawl.multimodal.audio.transcription_url =
+            format!("{}/v1/audio/transcriptions", mock_server.uri());
+        config.crawl.multimodal.audio.transcription_model = "whisper-large-v3-turbo".to_string();
+
+        let transcriber = AudioTranscriber::from_config(&config)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(transcriber.backend, AudioTranscriptionBackend::Xinference);
+        assert_eq!(transcriber.model, "audio-model-uid");
+        assert_eq!(
+            transcriber.transcription_url.as_str(),
+            format!("{}/v1/audio/transcriptions", mock_server.uri())
+        );
+
+        let mut audio_file = NamedTempFile::new().unwrap();
+        audio_file.write_all(b"fake mp3 bytes").unwrap();
+
+        let transcript = transcriber
+            .transcribe(audio_file.path(), &reqwest::Client::new())
+            .await
+            .unwrap();
+        assert_eq!(transcript, "hello from xinference");
     }
 }

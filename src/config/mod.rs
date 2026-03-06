@@ -31,6 +31,42 @@ const PROBE_TEXT: &str = "ping";
 const PROBE_IMAGE_PNG_BASE64: &str =
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AudioTranscriptionBackend {
+    #[default]
+    Auto,
+    Http,
+    Xinference,
+}
+
+impl fmt::Display for AudioTranscriptionBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Auto => "auto",
+            Self::Http => "http",
+            Self::Xinference => "xinference",
+        };
+        f.write_str(value)
+    }
+}
+
+impl FromStr for AudioTranscriptionBackend {
+    type Err = Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "http" => Ok(Self::Http),
+            "xinference" | "xinf" => Ok(Self::Xinference),
+            other => Err(Error::Config(format!(
+                "Unsupported audio transcription backend '{}'; supported: 'auto', 'http', 'xinference'",
+                other
+            ))),
+        }
+    }
+}
+
 /// Check if ffmpeg is available in PATH
 pub fn check_ffmpeg_available() -> bool {
     Command::new("ffmpeg")
@@ -421,9 +457,17 @@ pub struct AudioConfig {
     #[serde(default = "default_audio_transcription_enabled")]
     pub transcription_enabled: bool,
 
+    /// Transcription backend kind (auto, http, xinference)
+    #[serde(default = "default_audio_transcription_backend")]
+    pub transcription_backend: AudioTranscriptionBackend,
+
     /// Transcription service URL (e.g., Whisper API endpoint)
     #[serde(default = "default_audio_transcription_url")]
     pub transcription_url: String,
+
+    /// Transcription model identifier ("auto" resolves based on backend)
+    #[serde(default = "default_audio_transcription_model")]
+    pub transcription_model: String,
 }
 
 /// Video processing configuration
@@ -456,7 +500,9 @@ impl Default for AudioConfig {
             max_duration_secs: default_audio_max_duration_secs(),
             allowed_mime_types: default_audio_allowed_mime_types(),
             transcription_enabled: default_audio_transcription_enabled(),
+            transcription_backend: default_audio_transcription_backend(),
             transcription_url: default_audio_transcription_url(),
+            transcription_model: default_audio_transcription_model(),
         }
     }
 }
@@ -854,6 +900,37 @@ impl Config {
                     return Err(Error::Config(
                         "crawl.multimodal.audio.max_duration_secs must be > 0".to_string(),
                     ));
+                }
+
+                if self.crawl.multimodal.include_audio
+                    && self.crawl.multimodal.audio.transcription_enabled
+                {
+                    if self
+                        .crawl
+                        .multimodal
+                        .audio
+                        .transcription_url
+                        .trim()
+                        .is_empty()
+                    {
+                        return Err(Error::Config(
+                            "crawl.multimodal.audio.transcription_url must not be empty when transcription is enabled"
+                                .to_string(),
+                        ));
+                    }
+                    if self
+                        .crawl
+                        .multimodal
+                        .audio
+                        .transcription_model
+                        .trim()
+                        .is_empty()
+                    {
+                        return Err(Error::Config(
+                            "crawl.multimodal.audio.transcription_model must not be empty when transcription is enabled"
+                                .to_string(),
+                        ));
+                    }
                 }
 
                 // Validate video config
@@ -1936,11 +2013,34 @@ pub fn render_config_toml(
     );
     push_kv(
         &mut lines,
+        "transcription_backend",
+        toml_string(
+            &config
+                .crawl
+                .multimodal
+                .audio
+                .transcription_backend
+                .to_string(),
+        ),
+        config.crawl.multimodal.audio.transcription_backend
+            == defaults.crawl.multimodal.audio.transcription_backend,
+        irrelevant.contains("crawl.multimodal.audio.transcription_backend"),
+    );
+    push_kv(
+        &mut lines,
         "transcription_url",
         toml_string(&config.crawl.multimodal.audio.transcription_url),
         config.crawl.multimodal.audio.transcription_url
             == defaults.crawl.multimodal.audio.transcription_url,
         irrelevant.contains("crawl.multimodal.audio.transcription_url"),
+    );
+    push_kv(
+        &mut lines,
+        "transcription_model",
+        toml_string(&config.crawl.multimodal.audio.transcription_model),
+        config.crawl.multimodal.audio.transcription_model
+            == defaults.crawl.multimodal.audio.transcription_model,
+        irrelevant.contains("crawl.multimodal.audio.transcription_model"),
     );
 
     // Video configuration
@@ -2329,7 +2429,33 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.crawl.multimodal.audio.max_duration_secs, 600);
         assert!(config.crawl.multimodal.audio.transcription_enabled);
+        assert_eq!(
+            config.crawl.multimodal.audio.transcription_backend,
+            AudioTranscriptionBackend::Auto
+        );
+        assert_eq!(
+            config.crawl.multimodal.audio.transcription_url,
+            "http://127.0.0.1:9997/v1/audio/transcriptions"
+        );
+        assert_eq!(config.crawl.multimodal.audio.transcription_model, "auto");
         assert!(!config.crawl.multimodal.audio.allowed_mime_types.is_empty());
+    }
+
+    #[test]
+    fn test_audio_transcription_backend_parse() {
+        assert_eq!(
+            AudioTranscriptionBackend::from_str("auto").unwrap(),
+            AudioTranscriptionBackend::Auto
+        );
+        assert_eq!(
+            AudioTranscriptionBackend::from_str("http").unwrap(),
+            AudioTranscriptionBackend::Http
+        );
+        assert_eq!(
+            AudioTranscriptionBackend::from_str("xinference").unwrap(),
+            AudioTranscriptionBackend::Xinference
+        );
+        assert!(AudioTranscriptionBackend::from_str("invalid").is_err());
     }
 
     #[test]

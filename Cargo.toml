@@ -1,6 +1,6 @@
 [package]
 name = "librarian"
-version = "1.0.2"
+version = "1.0.3"
 default-run = "librarian"
 edition = "2021"
 authors = ["Dr Andrew Cox"]

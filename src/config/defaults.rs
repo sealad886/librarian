@@ -1,5 +1,7 @@
 //! Default values for configuration
 
+use super::AudioTranscriptionBackend;
+
 /// Default Qdrant gRPC URL for local development (port 6334, not 6333 REST)
 pub fn default_qdrant_url() -> String {
     std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://127.0.0.1:6334".to_string())
@@ -249,9 +251,19 @@ pub fn default_audio_transcription_enabled() -> bool {
     true
 }
 
-/// Default: transcription URL (local Whisper endpoint)
+/// Default: transcription backend selection
+pub fn default_audio_transcription_backend() -> AudioTranscriptionBackend {
+    AudioTranscriptionBackend::Auto
+}
+
+/// Default: transcription URL (Xinference OpenAI-compatible endpoint)
 pub fn default_audio_transcription_url() -> String {
-    "http://127.0.0.1:8000/v1/audio/transcriptions".to_string()
+    "http://127.0.0.1:9997/v1/audio/transcriptions".to_string()
+}
+
+/// Default: transcription model ("auto" resolves to backend-appropriate default)
+pub fn default_audio_transcription_model() -> String {
+    "auto".to_string()
 }
 
 // =============================================================================

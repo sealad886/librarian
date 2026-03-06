@@ -56,8 +56,8 @@ Verify downloads against the `SHA256SUMS` file included in each release.
 
 ```bash
 # Example: macOS arm64
-tar xzf librarian-v1.0.2-macos-arm64-full.tar.gz
-cp librarian-v1.0.2-macos-arm64-full/librarian /usr/local/bin/
+tar xzf librarian-v1.0.3-macos-arm64-full.tar.gz
+cp librarian-v1.0.3-macos-arm64-full/librarian /usr/local/bin/
 ```
 
 ### Prerequisites (Build from Source)
@@ -102,6 +102,11 @@ Or install natively: [Qdrant installation guide](https://qdrant.tech/documentati
 Librarian uses the Xinference backend for embeddings. By default it manages a local
 Xinference server (<http://127.0.0.1:9997>) and launches models automatically; set
 `embedding.url` if you run Xinference elsewhere.
+
+Audio and video transcription use the same local Xinference server by default via
+the OpenAI-compatible `/v1/audio/transcriptions` endpoint. In `auto` mode,
+Librarian resolves `whisper-1` for custom HTTP transcription APIs, but switches to a
+local Whisper model on Xinference and prefers the MLX variant on Apple Silicon.
 
 ## Xinference Model Registry Snapshots
 
@@ -203,7 +208,7 @@ Librarian supports audio and video file ingestion when multimodal is enabled:
 **Audio files** (`.mp3`, `.wav`, `.flac`, `.m4a`, `.ogg`, `.aac`):
 
 - Metadata extraction via ffprobe (duration, format, bitrate)
-- Automatic transcription via OpenAI Whisper-compatible API
+- Automatic transcription via local Xinference Whisper ASR by default
 - Transcript chunks stored with `modality = "audio"`
 - Text embeddings for search
 
@@ -242,7 +247,9 @@ include_video = true
 [crawl.multimodal.audio]
 max_duration_secs = 600         # Max audio file duration (10 minutes)
 transcription_enabled = true
-transcription_url = "http://localhost:8000/v1/audio/transcriptions"
+transcription_backend = "auto"  # auto -> Xinference on :9997, otherwise custom HTTP
+transcription_url = "http://127.0.0.1:9997/v1/audio/transcriptions"
+transcription_model = "auto"    # Apple Silicon -> whisper-large-v3-turbo-mlx
 allowed_mime_types = ["audio/mpeg", "audio/wav", "audio/flac", "audio/mp4", "audio/ogg"]
 
 [crawl.multimodal.video]
@@ -257,6 +264,7 @@ allowed_mime_types = ["video/mp4", "video/webm", "video/x-matroska", "video/quic
 
 - Audio/video processing uses a derived approach: transcripts → text embeddings, keyframes → image embeddings
 - All embeddings use the same dimension, so no separate vector storage is needed
+- `transcription_backend = "xinference"` forces Xinference even on a custom port; `http` keeps using any OpenAI-compatible Whisper endpoint you already run
 - Web crawl audio/video support (downloading from HTML pages) is planned for a future release
 
 ## Commands

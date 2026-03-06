@@ -1,6 +1,8 @@
 //! Init command implementation
 
-use crate::config::{check_ffmpeg_deps_available, render_config_toml, Config};
+use crate::config::{
+    check_ffmpeg_deps_available, render_config_toml, AudioTranscriptionBackend, Config,
+};
 use crate::error::{Error, Result};
 use crate::meta::MetaDb;
 use crate::models::is_multimodal_embedding_model;
@@ -661,12 +663,48 @@ fn run_init_wizard(config: &mut Config) -> Result<()> {
                     false,
                 )?;
                 if config.crawl.multimodal.audio.transcription_enabled {
+                    let transcription_backend_options = [
+                        "auto (recommended)",
+                        "xinference (managed local ASR)",
+                        "http (custom OpenAI-compatible API)",
+                    ];
+                    let transcription_backend_default =
+                        match config.crawl.multimodal.audio.transcription_backend {
+                            AudioTranscriptionBackend::Auto => 0,
+                            AudioTranscriptionBackend::Xinference => 1,
+                            AudioTranscriptionBackend::Http => 2,
+                        };
+                    let transcription_backend_selection = prompt_select(
+                        "Transcription backend",
+                        &transcription_backend_options,
+                        transcription_backend_default,
+                        false,
+                    )?;
+                    config.crawl.multimodal.audio.transcription_backend =
+                        match transcription_backend_selection {
+                            0 => AudioTranscriptionBackend::Auto,
+                            1 => AudioTranscriptionBackend::Xinference,
+                            2 => AudioTranscriptionBackend::Http,
+                            _ => AudioTranscriptionBackend::Auto,
+                        };
                     config.crawl.multimodal.audio.transcription_url = prompt_string(
-                        "Transcription API URL",
+                        "Transcription URL",
                         &config.crawl.multimodal.audio.transcription_url,
                         |value| {
                             if value.trim().is_empty() {
                                 Err("URL cannot be empty".to_string())
+                            } else {
+                                Ok(())
+                            }
+                        },
+                        false,
+                    )?;
+                    config.crawl.multimodal.audio.transcription_model = prompt_string(
+                        "Transcription model",
+                        &config.crawl.multimodal.audio.transcription_model,
+                        |value| {
+                            if value.trim().is_empty() {
+                                Err("Model cannot be empty".to_string())
                             } else {
                                 Ok(())
                             }
@@ -777,7 +815,9 @@ fn compute_irrelevant_paths(config: &Config) -> HashSet<String> {
             "crawl.multimodal.audio.max_duration_secs",
             "crawl.multimodal.audio.allowed_mime_types",
             "crawl.multimodal.audio.transcription_enabled",
+            "crawl.multimodal.audio.transcription_backend",
             "crawl.multimodal.audio.transcription_url",
+            "crawl.multimodal.audio.transcription_model",
             // Video config
             "crawl.multimodal.video.max_duration_secs",
             "crawl.multimodal.video.keyframe_interval_secs",
@@ -806,12 +846,16 @@ fn compute_irrelevant_paths(config: &Config) -> HashSet<String> {
             "crawl.multimodal.audio.max_duration_secs",
             "crawl.multimodal.audio.allowed_mime_types",
             "crawl.multimodal.audio.transcription_enabled",
+            "crawl.multimodal.audio.transcription_backend",
             "crawl.multimodal.audio.transcription_url",
+            "crawl.multimodal.audio.transcription_model",
         ] {
             irrelevant.insert(key.to_string());
         }
     } else if !config.crawl.multimodal.audio.transcription_enabled {
+        irrelevant.insert("crawl.multimodal.audio.transcription_backend".to_string());
         irrelevant.insert("crawl.multimodal.audio.transcription_url".to_string());
+        irrelevant.insert("crawl.multimodal.audio.transcription_model".to_string());
     }
 
     // Video-specific keys
