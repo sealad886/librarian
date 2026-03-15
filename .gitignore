@@ -25,3 +25,7 @@ __pycache__/
 .venv/
 .python-version
 .copilot-tracking/
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
