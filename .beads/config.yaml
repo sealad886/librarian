@@ -1,2 +1,4 @@
 issue-prefix: "librarian"
 sync-branch: "beads-sync"
+
+sync.remote: "git+ssh://git@github.com/sealad886/librarian.git"
