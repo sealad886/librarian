@@ -1038,10 +1038,8 @@ fn prompt_select(
                 KeyCode::Up => {
                     selected = selected.saturating_sub(1);
                 }
-                KeyCode::Down => {
-                    if selected + 1 < options.len() {
-                        selected += 1;
-                    }
+                KeyCode::Down if selected + 1 < options.len() => {
+                    selected += 1;
                 }
                 KeyCode::Enter => {
                     execute!(

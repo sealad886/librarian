@@ -136,19 +136,17 @@ pub fn parse_markdown(content: &str) -> Result<ParsedDocument> {
                     pulldown_cmark::CodeBlockKind::Indented => None,
                 };
             }
-            Event::End(TagEnd::CodeBlock) => {
-                if in_code_block {
-                    let code_content = current_code.join("");
-                    doc.code_blocks.push(CodeBlock {
-                        language: code_language.take(),
-                        content: code_content.clone(),
-                        position: char_position,
-                    });
-                    text_parts.push(format!("\n```\n{}\n```\n", code_content));
-                    char_position += code_content.len() + 10;
-                    current_code.clear();
-                    in_code_block = false;
-                }
+            Event::End(TagEnd::CodeBlock) if in_code_block => {
+                let code_content = current_code.join("");
+                doc.code_blocks.push(CodeBlock {
+                    language: code_language.take(),
+                    content: code_content.clone(),
+                    position: char_position,
+                });
+                text_parts.push(format!("\n```\n{}\n```\n", code_content));
+                char_position += code_content.len() + 10;
+                current_code.clear();
+                in_code_block = false;
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 current_link_url = Some(dest_url.to_string());

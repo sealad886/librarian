@@ -181,7 +181,7 @@ async fn reindex_document(
             all_embeddings.extend(batch_embeddings);
         }
 
-        for (chunk, embedding) in text_chunks.iter().zip(all_embeddings.into_iter()) {
+        for (chunk, embedding) in text_chunks.iter().zip(all_embeddings) {
             let point_id = chunk.point_uuid();
 
             let headings: Option<Vec<String>> = chunk
@@ -291,7 +291,7 @@ async fn reindex_document(
                     embeddings[0].len()
                 )));
             } else {
-                for (chunk, embedding_vec) in image_meta.iter().zip(embeddings.into_iter()) {
+                for (chunk, embedding_vec) in image_meta.iter().zip(embeddings) {
                     let point_id = chunk.point_uuid();
 
                     let mut payload = ChunkPayload::new(
