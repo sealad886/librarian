@@ -147,12 +147,12 @@ librarian sources
 
 # Check system status
 librarian status
+```
 
-# What's New
+## What's New
 
 - **Safe re-ingestion**: Chunk writes now always use the canonical document ID returned by SQLite, preventing `FOREIGN KEY constraint failed` errors during repeated ingest/update runs.
 - **Better debugging**: Run with `RUST_LOG=debug` (or `-v` if using the CLI flag) to see which document IDs are used during ingestion for easier troubleshooting.
-```
 
 ## Multimodal Indexing (Images)
 

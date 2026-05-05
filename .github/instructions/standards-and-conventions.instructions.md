@@ -5,4 +5,4 @@ applyTo: '**'
 ---
 Follow these standards and conventions for all project files.
 
-#file:/Users/andrew/zzApps/librarian/CONVENTIONS.md
+Follow repository-specific rules in `CONVENTIONS.md`.

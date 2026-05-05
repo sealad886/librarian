@@ -73,7 +73,7 @@ Default builds include PDF and JS rendering. To exclude them, use
 ## Repository-Specific Conventions
 
 ### CRITICAL: Read CONVENTIONS.md
-**Always** consult `/home/runner/work/librarian/librarian/CONVENTIONS.md` for required conventions. Key rules include:
+**Always** consult `CONVENTIONS.md` for required conventions. Key rules include:
 
 #### Ingestion Runs Must Record Operation
 - Always invoke `cmd_ingest_dir|url|sitemap` with the appropriate `RunOperation` (`Ingest`, `Update`, `Reindex`)

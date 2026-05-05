@@ -29,7 +29,7 @@ Thank you for your interest in contributing to librarian! This document provides
 ```bash
 # Clone the repository
 git clone https://github.com/sealad886/librarian.git
-cd librarian/librarian
+cd librarian
 
 # Build in development mode
 cargo build
@@ -39,7 +39,7 @@ cargo test
 
 # Run with debug logging
 RUST_LOG=debug cargo run -- status
-```text
+```
 
 `librarian init` now runs an interactive configuration wizard. For scripted
 setups, use `librarian init --non-interactive` to write defaults.
