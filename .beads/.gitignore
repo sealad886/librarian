@@ -6,7 +6,14 @@ dolt-access.lock
 bd.sock
 bd.sock.startlock
 sync-state.json
+export-state.json
 last-touched
+.env
+.beads-credential-key
+interactions.jsonl
+daemon.*
+*.lock
+*.corrupt.backup/
 
 # Local version tracking (prevents upgrade notification spam after git ops)
 .local_version
@@ -31,6 +38,8 @@ dolt-server.pid
 dolt-server.log
 dolt-server.lock
 dolt-server.port
+dolt-server.activity
+embeddeddolt/
 
 # Backup data (auto-exported JSONL, local-only)
 backup/
