@@ -49,6 +49,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      - name: Slim feature check
+        run: cargo check --workspace --no-default-features
+
       - name: Check for blocking TODOs in multimedia paths
         run: |
           if grep -rn "TODO.*\(audio\|video\|ffmpeg\|ffprobe\|transcri\)" src/ --include="*.rs" | grep -v "allow(dead_code)" | grep -v "test"; then
