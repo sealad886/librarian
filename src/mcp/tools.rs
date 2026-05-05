@@ -26,6 +26,13 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+/// Cached embedding state for MCP search calls.
+#[derive(Clone)]
+pub struct CachedEmbedder {
+    pub embedding_config: ResolvedEmbeddingConfig,
+    pub embedder: Arc<dyn Embedder>,
+}
+
 /// Get all available tool definitions
 pub fn get_tool_definitions() -> Vec<ToolDefinition> {
     vec![
@@ -218,7 +225,7 @@ pub async fn handle_tool_call(
     config: &Config,
     db: &MetaDb,
     store: &QdrantStore,
-    embedder: Option<Arc<dyn Embedder>>,
+    embedder: Option<Arc<CachedEmbedder>>,
 ) -> ToolResult {
     match name {
         "rag_search" => handle_search(arguments, config, db, store, embedder).await,
@@ -240,7 +247,7 @@ async fn handle_search(
     config: &Config,
     db: &MetaDb,
     store: &QdrantStore,
-    embedder: Option<Arc<dyn Embedder>>,
+    embedder: Option<Arc<CachedEmbedder>>,
 ) -> ToolResult {
     // Extract query parameter
     let query = match arguments.get("query") {
@@ -278,29 +285,16 @@ async fn handle_search(
         ..Default::default()
     };
 
-    // Use cached embedder if provided, otherwise create one
-    let embedding_config = match config.resolve_embedding_config().await {
-        Ok(cfg) => cfg,
-        Err(e) => return ToolResult::error(format!("Embedding config error: {}", e)),
-    };
-
-    let owned_embedder: Option<Box<dyn Embedder>>;
-    let embedder_ref: &dyn Embedder = if let Some(ref cached) = embedder {
-        cached.as_ref()
-    } else {
-        owned_embedder = match create_embedder_auto(&embedding_config, &config.paths.base_dir).await
-        {
-            Ok(e) => Some(e),
-            Err(e) => return ToolResult::error(format!("Embedding backend error: {}", e)),
-        };
-        owned_embedder.as_ref().unwrap().as_ref()
+    let (embedding_config, embedder) = match resolve_search_embedding(config, embedder).await {
+        Ok(deps) => deps,
+        Err(e) => return ToolResult::error(format!("Embedding backend error: {}", e)),
     };
 
     // Execute query
     match cmd_query(
         config,
         &embedding_config,
-        embedder_ref,
+        embedder.as_ref(),
         db,
         store,
         &query,
@@ -337,6 +331,23 @@ async fn handle_search(
         }
         Err(e) => ToolResult::error(format!("Search failed: {}", e)),
     }
+}
+
+async fn resolve_search_embedding(
+    config: &Config,
+    cached: Option<Arc<CachedEmbedder>>,
+) -> std::result::Result<(ResolvedEmbeddingConfig, Arc<dyn Embedder>), Error> {
+    if let Some(cached) = cached {
+        return Ok((
+            cached.embedding_config.clone(),
+            Arc::clone(&cached.embedder),
+        ));
+    }
+
+    let embedding_config = config.resolve_embedding_config().await?;
+    let embedder = create_embedder_auto(&embedding_config, &config.paths.base_dir).await?;
+    let embedder = Arc::from(embedder);
+    Ok((embedding_config, embedder))
 }
 
 /// Handle rag_sources tool
@@ -861,5 +872,79 @@ async fn handle_analytics(arguments: &HashMap<String, Value>, db: &MetaDb) -> To
         ToolResult::text("No query analytics available yet.")
     } else {
         ToolResult::text(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{EmbeddingDimensionSource, ResolvedEmbeddingConfig};
+    use crate::embed::MediaModality;
+    use crate::embedding_backend::{EmbeddingBackendConfig, EmbeddingBackendKind};
+    use crate::models::MultimodalStrategy;
+    use async_trait::async_trait;
+
+    struct TestEmbedder;
+
+    #[async_trait]
+    impl Embedder for TestEmbedder {
+        async fn embed(&self, texts: Vec<String>) -> crate::error::Result<Vec<Vec<f32>>> {
+            Ok(texts.into_iter().map(|_| vec![1.0, 0.0]).collect())
+        }
+
+        fn dimension(&self) -> usize {
+            2
+        }
+
+        fn model_name(&self) -> &str {
+            "cached-test-model"
+        }
+
+        fn supported_modalities(&self) -> Vec<MediaModality> {
+            vec![MediaModality::Text]
+        }
+    }
+
+    fn cached_test_config() -> ResolvedEmbeddingConfig {
+        ResolvedEmbeddingConfig {
+            model_id: "cached-test-model".to_string(),
+            family: "test".to_string(),
+            modalities: vec!["text".to_string()],
+            dimension: 2,
+            dimension_source: EmbeddingDimensionSource::Config,
+            backend: EmbeddingBackendConfig {
+                kind: EmbeddingBackendKind::Http,
+                url: "http://cached.invalid".to_string(),
+            },
+            allow_custom: true,
+            strategy: MultimodalStrategy::DualEncoder,
+            supports_text: true,
+            supports_image: false,
+            supports_audio: false,
+            supports_video: false,
+            supports_joint_inputs: false,
+            supports_multi_vector: false,
+            supports_mrl: false,
+            max_batch: 8,
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_search_embedding_skips_runtime_config_resolution() {
+        let mut config = Config::default();
+        config.embedding.model = "definitely-not-allowlisted".to_string();
+        config.embedding.allow_custom = false;
+
+        let cached = Arc::new(CachedEmbedder {
+            embedding_config: cached_test_config(),
+            embedder: Arc::new(TestEmbedder),
+        });
+
+        let (embedding_config, embedder) = resolve_search_embedding(&config, Some(cached))
+            .await
+            .expect("cached embedding should not resolve invalid runtime config");
+
+        assert_eq!(embedding_config.model_id, "cached-test-model");
+        assert_eq!(embedder.model_name(), "cached-test-model");
     }
 }

@@ -1,9 +1,9 @@
 //! MCP stdio server implementation
 
-use super::tools::{get_tool_definitions, handle_tool_call};
+use super::tools::{get_tool_definitions, handle_tool_call, CachedEmbedder};
 use super::types::{McpError, McpMessage, McpNotification, McpRequest, McpResponse};
 use crate::config::Config;
-use crate::embed::{create_embedder_auto, Embedder};
+use crate::embed::create_embedder_auto;
 use crate::meta::MetaDb;
 use crate::store::QdrantStore;
 use serde_json::{json, Value};
@@ -23,7 +23,7 @@ pub struct McpServer {
     config: Config,
     db: MetaDb,
     store: QdrantStore,
-    embedder_cache: Arc<RwLock<Option<Arc<dyn Embedder>>>>,
+    embedder_cache: Arc<RwLock<Option<Arc<CachedEmbedder>>>>,
 }
 
 impl McpServer {
@@ -38,7 +38,7 @@ impl McpServer {
     }
 
     /// Get or lazily initialize the cached embedder
-    async fn get_or_init_embedder(&self) -> crate::error::Result<Arc<dyn Embedder>> {
+    async fn get_or_init_embedder(&self) -> crate::error::Result<Arc<CachedEmbedder>> {
         // Fast path: check if already cached
         {
             let guard = self.embedder_cache.read().await;
@@ -56,9 +56,12 @@ impl McpServer {
 
         let embedding_config = self.config.resolve_embedding_config().await?;
         let embedder = create_embedder_auto(&embedding_config, &self.config.paths.base_dir).await?;
-        let arc_embedder: Arc<dyn Embedder> = Arc::from(embedder);
-        *guard = Some(Arc::clone(&arc_embedder));
-        Ok(arc_embedder)
+        let cached = Arc::new(CachedEmbedder {
+            embedding_config,
+            embedder: Arc::from(embedder),
+        });
+        *guard = Some(Arc::clone(&cached));
+        Ok(cached)
     }
 
     /// Run the MCP server loop over stdio
